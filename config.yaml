@@ -1,1 +1,11 @@
-# config.yaml - placeholder for configuration file
+ai_signatures:
+  - key: "DigitalSourceType"
+    value: "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+  - key: "Software"
+    contains: ["Midjourney", "DALL-E", "Stable Diffusion", "Flux"]
+
+aesthetic:
+  blur_radius: 20
+  thumbnail_quality: 85
+  max_width: 2048
+  formats: [".jpg", ".jpeg", ".png", ".webp"]
