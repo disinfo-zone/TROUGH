@@ -6,16 +6,6 @@ import (
 	"github.com/dsoprea/go-exif/v3"
 )
 
-type Config struct {
-	AISignatures []AISignature `yaml:"ai_signatures"`
-}
-
-type AISignature struct {
-	Key      string   `yaml:"key"`
-	Value    string   `yaml:"value,omitempty"`
-	Contains []string `yaml:"contains,omitempty"`
-}
-
 func VerifyAIImage(imagePath string, config Config) (bool, string) {
 	rawExif, err := exif.SearchFileAndExtractExif(imagePath)
 	if err != nil {

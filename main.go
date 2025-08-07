@@ -7,6 +7,11 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/yourusername/trough/db"
+	"github.com/yourusername/trough/handlers"
+	"github.com/yourusername/trough/middleware"
+	"github.com/yourusername/trough/models"
+	"github.com/yourusername/trough/services"
 )
 
 func customErrorHandler(c *fiber.Ctx, err error) error {
@@ -20,17 +25,37 @@ func customErrorHandler(c *fiber.Ctx, err error) error {
 }
 
 func main() {
+	config, err := services.LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	if err := db.Connect(); err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(); err != nil {
+		log.Fatalf("Failed to migrate database: %v", err)
+	}
+
+	userRepo := models.NewUserRepository(db.DB)
+	imageRepo := models.NewImageRepository(db.DB)
+	likeRepo := models.NewLikeRepository(db.DB)
+
+	authHandler := handlers.NewAuthHandler(userRepo)
+	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config)
+	userHandler := handlers.NewUserHandler(userRepo, imageRepo)
+
 	app := fiber.New(fiber.Config{
-		BodyLimit:    10 * 1024 * 1024, // 10MB
+		BodyLimit:    10 * 1024 * 1024,
 		ErrorHandler: customErrorHandler,
 	})
 
-	// Middleware for that premium feel
 	app.Use(logger.New())
 	app.Use(compress.New())
 	app.Use(cors.New())
 
-	// Serve static files with caching
 	app.Static("/", "./static", fiber.Static{
 		Compress:      true,
 		CacheDuration: 3600,
@@ -41,38 +66,19 @@ func main() {
 		CacheDuration: 86400,
 	})
 
-	// API routes
 	api := app.Group("/api")
 
-	// Auth
-	api.Post("/register", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Register endpoint - TODO"})
-	})
-	api.Post("/login", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Login endpoint - TODO"})
-	})
+	api.Post("/register", authHandler.Register)
+	api.Post("/login", authHandler.Login)
 
-	// Images - the heart of the app
-	api.Get("/feed", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"images": []interface{}{}})
-	}) // Main feed with infinite scroll
-	api.Get("/images/:id", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Get image endpoint - TODO"})
-	})
-	api.Post("/upload", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Upload endpoint - TODO"})
-	})
-	api.Post("/images/:id/like", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Like endpoint - TODO"})
-	})
+	api.Get("/feed", imageHandler.GetFeed)
+	api.Get("/images/:id", imageHandler.GetImage)
+	api.Post("/upload", middleware.Protected(), imageHandler.Upload)
+	api.Post("/images/:id/like", middleware.Protected(), imageHandler.LikeImage)
 
-	// Users
-	api.Get("/users/:username", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Get profile endpoint - TODO"})
-	})
-	api.Get("/users/:username/images", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"message": "Get user images endpoint - TODO"})
-	})
+	api.Get("/users/:username", userHandler.GetProfile)
+	api.Get("/users/:username/images", userHandler.GetUserImages)
 
+	log.Printf("Server starting on port 8080")
 	log.Fatal(app.Listen(":8080"))
 }

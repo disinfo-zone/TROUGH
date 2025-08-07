@@ -6,7 +6,8 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(mkdir:*)",
-      "Bash(go get:*)"
+      "Bash(go get:*)",
+      "Bash(git tag:*)"
     ],
     "deny": []
   }
