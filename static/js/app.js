@@ -1,0 +1,1 @@
+// static/js/app.js - placeholder for main JavaScript file

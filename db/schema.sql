@@ -1,0 +1,1 @@
+-- db/schema.sql - placeholder for database schema
