@@ -1,1 +1,49 @@
-<!-- static/index.html - placeholder for main HTML file -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>trough · ai imagery</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Minimal header - just the essentials -->
+    <header class="header">
+        <h1 class="logo">trough</h1>
+        <nav class="nav">
+            <button class="nav-btn" id="auth-btn">enter</button>
+        </nav>
+    </header>
+
+    <!-- The gallery - where the magic happens -->
+    <main class="gallery" id="gallery">
+        <!-- Images dynamically loaded here -->
+    </main>
+
+    <!-- Full-screen image viewer -->
+    <div class="lightbox" id="lightbox">
+        <div class="lightbox-content">
+            <img class="lightbox-image" id="lightbox-img">
+            <div class="lightbox-info">
+                <a class="lightbox-user" id="lightbox-user"></a>
+                <button class="lightbox-like" id="lightbox-like">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload zone (hidden by default) -->
+    <div class="upload-zone" id="upload-zone">
+        <div class="upload-inner">
+            <p>Drop your AI imagery</p>
+        </div>
+    </div>
+
+    <script src="/js/app.js" type="module"></script>
+</body>
+</html>
