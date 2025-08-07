@@ -1,0 +1,8 @@
+.env
+.DS_Store
+*.log
+/tmp
+/uploads
+/data
+*.exe
+trough
