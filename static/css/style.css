@@ -349,6 +349,84 @@ body {
     background: #ff4444;
 }
 
+/* Auth Modal Styles */
+.auth-tab {
+    flex: 1;
+    padding: 0.75rem;
+    background: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.2s var(--transition);
+    border-bottom: 2px solid transparent;
+}
+
+.auth-tab.active {
+    color: var(--white);
+    border-bottom-color: var(--accent);
+}
+
+.auth-tab:hover {
+    color: var(--white);
+}
+
+/* Animation Keyframes */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(30px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Like Button Styles */
+.lightbox-like.liked {
+    color: #ff4757 !important;
+}
+
+.lightbox-like svg {
+    transition: all 0.2s var(--transition);
+}
+
+.lightbox-like:hover svg {
+    transform: scale(1.1);
+}
+
+/* Input Focus Styles */
+input:focus {
+    outline: none;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2);
+}
+
+/* Button Hover Effects */
+button:hover {
+    transform: translateY(-1px);
+}
+
+button:active {
+    transform: translateY(0);
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .header {
