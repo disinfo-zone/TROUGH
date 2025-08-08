@@ -10,11 +10,11 @@ import (
 )
 
 type AuthHandler struct {
-	userRepo  *models.UserRepository
+	userRepo  models.UserRepositoryInterface
 	validator *validator.Validate
 }
 
-func NewAuthHandler(userRepo *models.UserRepository) *AuthHandler {
+func NewAuthHandler(userRepo models.UserRepositoryInterface) *AuthHandler {
 	return &AuthHandler{
 		userRepo:  userRepo,
 		validator: validator.New(),

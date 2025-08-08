@@ -1,9 +1,9 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -18,9 +18,20 @@ func Connect() error {
 	}
 
 	var err error
-	DB, err = sqlx.Connect("postgres", databaseURL)
+	
+	// Retry connection logic for Docker container startup
+	for i := 0; i < 30; i++ {
+		DB, err = sqlx.Connect("postgres", databaseURL)
+		if err == nil {
+			break
+		}
+		
+		fmt.Printf("Database connection attempt %d failed: %v\n", i+1, err)
+		time.Sleep(1 * time.Second)
+	}
+	
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to connect to database after retries: %w", err)
 	}
 
 	DB.SetMaxOpenConns(25)

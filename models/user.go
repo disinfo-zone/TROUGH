@@ -1,8 +1,6 @@
 package models
 
 import (
-	"database/sql/driver"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,32 +62,3 @@ func (u *User) ToResponse() UserResponse {
 	}
 }
 
-func (u uuid.UUID) Value() (driver.Value, error) {
-	return u.String(), nil
-}
-
-func (u *uuid.UUID) Scan(value interface{}) error {
-	if value == nil {
-		*u = uuid.Nil
-		return nil
-	}
-	
-	switch v := value.(type) {
-	case string:
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			return err
-		}
-		*u = parsed
-		return nil
-	case []byte:
-		parsed, err := uuid.Parse(string(v))
-		if err != nil {
-			return err
-		}
-		*u = parsed
-		return nil
-	default:
-		return fmt.Errorf("cannot scan %T into UUID", value)
-	}
-}

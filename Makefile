@@ -14,8 +14,11 @@ run:
 	go run .
 
 clean:
-	rm -f trough coverage.out coverage.html
-	rm -rf uploads/*
+	go clean
+	if exist trough.exe del trough.exe
+	if exist trough del trough
+	if exist coverage.out del coverage.out
+	if exist coverage.html del coverage.html
 
 docker-up:
 	docker-compose up -d

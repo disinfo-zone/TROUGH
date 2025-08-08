@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"github.com/yourusername/trough/db"
 	"github.com/yourusername/trough/handlers"

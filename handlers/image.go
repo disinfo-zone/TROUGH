@@ -17,13 +17,13 @@ import (
 )
 
 type ImageHandler struct {
-	imageRepo *models.ImageRepository
-	likeRepo  *models.LikeRepository
-	userRepo  *models.UserRepository
+	imageRepo models.ImageRepositoryInterface
+	likeRepo  models.LikeRepositoryInterface
+	userRepo  models.UserRepositoryInterface
 	config    services.Config
 }
 
-func NewImageHandler(imageRepo *models.ImageRepository, likeRepo *models.LikeRepository, userRepo *models.UserRepository, config services.Config) *ImageHandler {
+func NewImageHandler(imageRepo models.ImageRepositoryInterface, likeRepo models.LikeRepositoryInterface, userRepo models.UserRepositoryInterface, config services.Config) *ImageHandler {
 	return &ImageHandler{
 		imageRepo: imageRepo,
 		likeRepo:  likeRepo,

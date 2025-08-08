@@ -8,11 +8,11 @@ import (
 )
 
 type UserHandler struct {
-	userRepo  *models.UserRepository
-	imageRepo *models.ImageRepository
+	userRepo  models.UserRepositoryInterface
+	imageRepo models.ImageRepositoryInterface
 }
 
-func NewUserHandler(userRepo *models.UserRepository, imageRepo *models.ImageRepository) *UserHandler {
+func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *UserHandler {
 	return &UserHandler{
 		userRepo:  userRepo,
 		imageRepo: imageRepo,

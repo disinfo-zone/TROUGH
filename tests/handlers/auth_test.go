@@ -19,6 +19,8 @@ type MockUserRepository struct {
 	mock.Mock
 }
 
+var _ models.UserRepositoryInterface = (*MockUserRepository)(nil)
+
 func (m *MockUserRepository) Create(user *models.User) error {
 	args := m.Called(user)
 	user.ID = uuid.New()
