@@ -3,47 +3,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>trough · ai imagery</title>
-    <link rel="stylesheet" href="/css/style.css">
+    <title>TROUGH · AI IMAGERY</title>
+    <link rel="stylesheet" href="/css/style.css?v=v2">
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;400;500&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <meta name="description" content="Curated AI-generated imagery gallery">
 </head>
 <body>
-    <!-- Minimal header - just the essentials -->
-    <header class="header">
-        <h1 class="logo">trough</h1>
-        <nav class="nav">
-            <button class="nav-btn" id="auth-btn">enter</button>
-        </nav>
-    </header>
+    <!-- NAVIGATION -->
+    <nav class="nav" id="nav">
+        <div class="nav-content">
+            <h1 class="logo" onclick="window.location.href='/'">TROUGH</h1>
+            <button class="nav-btn" id="auth-btn" aria-label="Auth"></button>
+        </div>
+    </nav>
 
-    <!-- The gallery - where the magic happens -->
-    <main class="gallery" id="gallery">
-        <!-- Images dynamically loaded here -->
-    </main>
+    <!-- PROFILE TOP (header/upload/bio) -->
+    <div id="profile-top"></div>
 
-    <!-- Full-screen image viewer -->
+    <!-- GALLERY -->
+    <main class="gallery" id="gallery"></main>
+
+    <!-- LIGHTBOX -->
     <div class="lightbox" id="lightbox">
-        <div class="lightbox-content">
-            <img class="lightbox-image" id="lightbox-img">
-            <div class="lightbox-info">
-                <a class="lightbox-user" id="lightbox-user"></a>
-                <button class="lightbox-like" id="lightbox-like">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                    </svg>
-                </button>
+        <div class="lightbox-backdrop" onclick="window.app?.closeLightbox()"></div>
+        <div class="lightbox-container">
+            <button class="lightbox-close" onclick="window.app?.closeLightbox()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <div class="lightbox-content">
+                <img class="lightbox-image" id="lightbox-img" alt="">
+                <div class="lightbox-info">
+                    <div class="lightbox-metadata">
+                        <h3 class="image-title" id="lightbox-title"></h3>
+                        <p class="image-author" id="lightbox-author"></p>
+                    </div>
+                    <button class="like-btn" id="lightbox-like">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="m12 21-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.18L12 21z"/>
+                        </svg>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Upload zone (hidden by default) -->
-    <div class="upload-zone" id="upload-zone">
-        <div class="upload-inner">
-            <p>Drop your AI imagery</p>
+    <!-- AUTH MODAL -->
+    <div class="auth-modal" id="auth-modal">
+        <div class="auth-backdrop" onclick="window.app?.closeAuthModal()"></div>
+        <div class="auth-container">
+            <button class="auth-close" onclick="window.app?.closeAuthModal()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <div class="auth-content">
+                <h2 class="auth-title">ACCESS GALLERY</h2>
+                <div class="auth-tabs">
+                    <button class="auth-tab active" data-tab="login">Sign In</button>
+                    <button class="auth-tab" data-tab="register">Create Account</button>
+                </div>
+                <form class="auth-form" id="auth-form" novalidate>
+                    <div class="form-group" id="login-form">
+                        <input type="email" id="login-email" placeholder="Email address">
+                        <input type="password" id="login-password" placeholder="Password">
+                        <button type="button" class="password-toggle" data-for="login-password">Show password</button>
+                    </div>
+                    <div class="form-group" id="register-form" style="display: none;">
+                        <input type="text" id="register-username" placeholder="Username">
+                        <input type="email" id="register-email" placeholder="Email address">
+                        <input type="password" id="register-password" placeholder="Password">
+                        <div id="password-strength" aria-live="polite"></div>
+                        <input type="password" id="register-password-confirm" placeholder="Confirm password">
+                        <button type="button" class="password-toggle" data-for="register-password">Show password</button>
+                        <button type="button" class="password-toggle" data-for="register-password-confirm">Show confirm password</button>
+                    </div>
+                    <button type="submit" class="auth-submit" id="auth-submit">Sign In</button>
+                    <div class="auth-error" id="auth-error"></div>
+                </form>
+            </div>
         </div>
     </div>
 
-    <script src="/js/app.js" type="module"></script>
+    <!-- UPLOAD ZONE -->
+    <div class="upload-zone" id="upload-zone">
+        <div class="upload-backdrop"></div>
+        <div class="upload-container">
+            <div class="upload-content">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17,8 12,3 7,8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <h3>Drop images here</h3>
+                <p>JPG, PNG, WebP up to 10MB</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/app.js?v=v2"></script>
 </body>
 </html>

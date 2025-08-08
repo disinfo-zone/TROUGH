@@ -1,978 +1,296 @@
 # Agent Instructions: Building trough
 
 ## Vision
-Build "trough" - an impossibly slick, minimalist web app for AI-generated images. Every pixel matters. Every interaction should feel butter-smooth. This isn't just an image gallery - it's a piece of digital art itself.
+Build "trough" — an impossibly slick, minimalist web app for AI‑generated images. Every pixel matters. Every interaction should feel butter‑smooth. This is not just an image gallery; it’s an object of design. The interface gets out of the way and frames the art with ruthless restraint.
 
-## Core Stack
-- **Backend**: Go with Fiber (fast, minimal)
-- **Database**: PostgreSQL
-- **Frontend**: Vanilla JS with cutting-edge CSS
-- **Container**: Single Docker container with embedded static files
+Trough only allows AI images to be uploaded (verified via EXIF data; we preserve and display key fields). The front page is a continuous river of uploads. Users have profile pages at https://url.com/@profile. When a user is logged in, the top of their page exposes an upload field followed by their feed. NSFW images are hidden to non‑logged‑in users (uploaders can flag; anyone can report).
 
-## Aesthetic Requirements
-**CRITICAL**: This app must look absolutely stunning. Think:
-- Apple-level attention to detail
-- Subtle animations that delight
-- Typography that makes designers weep
-- Interactions that feel like magic
-- Dark mode that's actually beautiful
-- Loading states that are art
+Everything is minimal with a brutal and exquisite focus on the art — but never at the expense of usability.
 
-## Project Setup
+## Product Overview
+- **What it is**: A zero‑friction, high‑taste image river for AI artwork. Upload, browse, savor.
+- **Who it’s for**: Artists, model‑tinkerers, curators, and anyone who enjoys visually immersive streams.
+- **Why it exists**: To showcase AI visuals in a space that elevates the work and disappears as UI.
+- **Core constraints**:
+  - AI‑only uploads (EXIF signals verified). No manual photos.
+  - Art‑first layout. Chrome is quiet; content is loud.
+  - Performance is a feature. Motion is felt, not noticed.
+- **Brand voice**: Effortlessly cool. Minimalist. Precise. Confident. Humane.
 
-### Initialize Git Repository
-```bash
-mkdir trough && cd trough
-git init
-git branch -M main
+## Experience Architecture
+- **Landing / River**: Infinite masonry-like stream, soft‑start skeletons, blurhash reveal, zero layout shift.
+- **Lightbox**: Edge‑to‑edge image; subtle chrome overlays; likes; EXIF highlights; keyboard nav.
+- **Profile (`/@handle`)**: Header with avatar/handle/bio; user stream; when logged-in owner: upload control pinned.
+- **Upload**: Drag‑and‑drop + click; EXIF scan; NSFW flag; progress; helpful errors.
+- **Auth modal**: Login/register in one panel; client validation; crisp error messaging.
+- **Reporting / NSFW gating**: Clear affordance; hidden for guests; opt‑in preferences for users.
+- **404 / Empty states**: Purposefully minimal, fast paths back to river.
 
-# Create .gitignore
-cat > .gitignore << 'EOF'
-.env
-.DS_Store
-*.log
-/tmp
-/uploads
-/data
-*.exe
-trough
-EOF
+## Current Status (Repo Snapshot)
+- Backend (Go + Fiber): Implemented
+  - Routes: `/api/register`, `/api/login`, `/api/me`, `/api/feed`, `/api/images/:id`, `/api/upload` (auth), `/api/images/:id/like` (auth), `/api/users/:username`, `/api/users/:username/images`
+  - JWT auth with password hashing (bcrypt)
+  - Image upload with processing (blurhash, dominant color), EXIF scan for AI signatures
+  - NSFW gating via user preference
+  - Auto-migrations on startup
+- Database (PostgreSQL): Implemented
+  - Tables: `users`, `images`, `likes` with indexes
+- Frontend (Vanilla JS/CSS/HTML): Implemented
+  - Masonry-like gallery, lightbox, drag & drop upload
+  - Auth modal (login/register) wired to API; token/user persisted to `localStorage`
+  - Session validation via `/api/me`; sign out; simple profile menu; disabled submit + show/hide password controls
+  - Loader/toast UI, infinite scroll
+- Ops:
+  - Docker (multi-stage) + docker-compose with DB healthcheck; `Makefile` provided
+  - Config via `config.yaml` and `.env.example`
+- Tests: Unit + integration tests present (handlers, services)
 
-git add .gitignore
-git commit -m "Initial commit with .gitignore"
-```
+Note: Code examples here are intentionally minimal; see repo files for implementation details.
 
-## Phase 1: Minimal Structure
+## Theme v2: Vital Minimalism
+A complete theme rewrite that is new, vital, and unmistakable — yet ruthlessly usable. Think: surgical typography, sharp geometry, generous negative space, and subtle kinetic detail. Effortlessly cool without theatrics.
 
-### Create Project Structure
-```bash
-# Create directories
-mkdir -p {static/{css,js,assets},handlers,models,services,db}
+### Goals
+- **Typographic authority**: crisp hierarchy; no generic feel.
+- **Better vertical rhythm**: consistent scales; breathing room.
+- **Denser card information**: without visual noise.
+- **Richer lightbox**: cinematic focus; unobtrusive metadata.
+- **Refined motion**: natural, responsive, GPU‑friendly.
+- **Accessibility**: contrast, focus, keyboard, reduced motion.
+- **Performance**: no layout shifts; image-first paint; transform/opacity animations.
 
-# Create initial files
-touch main.go go.mod config.yaml docker-compose.yml Dockerfile
-touch static/index.html static/css/style.css static/js/app.js
-touch db/schema.sql README.md
+### Visual Tenets
+- **Art first**: backgrounds recede to near‑black/near‑paper; true blacks allowed.
+- **Brutal forms, humane details**: sharp edges with soft micro‑interactions.
+- **One accent**: sparingly used for state, focus, progress.
+- **Texture by restraint**: thin rules, hairlines, subtle grain optional (CSS only).
 
-git add .
-git commit -m "Add project structure"
-```
+### Deliverables
+- Design tokens in `:root` inside `static/css/style.css` (no preprocessor required)
+- Updated layout/components: nav, cards, lightbox, auth modal, upload, toasts
+- Motion + focus system; reduced motion handling
+- Accessibility pass (contrast ≥ 4.5:1 body; ≥ 3:1 large text/icons)
 
-### Docker Setup (Minimal)
-```yaml
-# docker-compose.yml
-version: '3.8'
+### Design Tokens (authoritative)
+Place at top of `static/css/style.css` under a `:root` block.
 
-services:
-  app:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - DATABASE_URL=postgres://trough:trough@db:5432/trough?sslmode=disable
-    volumes:
-      - ./uploads:/app/uploads
-      - ./config.yaml:/app/config.yaml:ro
-    depends_on:
-      - db
-
-  db:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_USER=trough
-      - POSTGRES_PASSWORD=trough
-      - POSTGRES_DB=trough
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
-```
-
-```dockerfile
-# Dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /build
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN go build -o trough .
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /app
-COPY --from=builder /build/trough .
-COPY --from=builder /build/static ./static
-COPY --from=builder /build/db ./db
-EXPOSE 8080
-CMD ["./trough"]
-```
-
-```bash
-git add docker-compose.yml Dockerfile
-git commit -m "Add Docker configuration"
-```
-
-## Phase 2: Database & Models
-
-### Schema
-```sql
--- db/schema.sql
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    username VARCHAR(30) UNIQUE NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    bio TEXT,
-    avatar_url VARCHAR(500),
-    is_admin BOOLEAN DEFAULT FALSE,
-    show_nsfw BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE images (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    filename VARCHAR(255) NOT NULL,
-    original_name VARCHAR(255),
-    file_size INTEGER,
-    width INTEGER,
-    height INTEGER,
-    blurhash VARCHAR(100), -- For beautiful loading states
-    dominant_color VARCHAR(7), -- For placeholder backgrounds
-    is_nsfw BOOLEAN DEFAULT FALSE,
-    ai_signature VARCHAR(500),
-    exif_data JSONB,
-    likes_count INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE likes (
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    image_id UUID REFERENCES images(id) ON DELETE CASCADE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (user_id, image_id)
-);
-
--- Indexes for performance
-CREATE INDEX idx_images_created ON images(created_at DESC);
-CREATE INDEX idx_images_user ON images(user_id, created_at DESC);
-CREATE INDEX idx_likes_image ON likes(image_id);
-```
-
-```bash
-git add db/schema.sql
-git commit -m "Add database schema with aesthetic fields"
-```
-
-## Phase 3: Go Backend with Fiber
-
-### Initialize Go Module
-```bash
-go mod init github.com/yourusername/trough
-go get github.com/gofiber/fiber/v2
-go get github.com/gofiber/jwt/v3
-go get github.com/lib/pq
-go get github.com/jmoiron/sqlx
-go get github.com/dsoprea/go-exif/v3
-go get github.com/bbrks/go-blurhash
-go get golang.org/x/crypto/bcrypt
-go get github.com/google/uuid
-go get gopkg.in/yaml.v3
-
-git add go.mod go.sum
-git commit -m "Initialize Go dependencies"
-```
-
-### Main Application
-```go
-// main.go
-package main
-
-import (
-    "log"
-    "github.com/gofiber/fiber/v2"
-    "github.com/gofiber/fiber/v2/middleware/cors"
-    "github.com/gofiber/fiber/v2/middleware/logger"
-    "github.com/gofiber/fiber/v2/middleware/compress"
-)
-
-func main() {
-    app := fiber.New(fiber.Config{
-        BodyLimit: 10 * 1024 * 1024, // 10MB
-        ErrorHandler: customErrorHandler,
-    })
-
-    // Middleware for that premium feel
-    app.Use(logger.New())
-    app.Use(compress.New())
-    app.Use(cors.New())
-
-    // Serve static files with caching
-    app.Static("/", "./static", fiber.Static{
-        Compress: true,
-        CacheDuration: 3600,
-    })
-    
-    app.Static("/uploads", "./uploads", fiber.Static{
-        Compress: true,
-        CacheDuration: 86400,
-    })
-
-    // API routes
-    api := app.Group("/api")
-    
-    // Auth
-    api.Post("/register", handlers.Register)
-    api.Post("/login", handlers.Login)
-    
-    // Images - the heart of the app
-    api.Get("/feed", handlers.GetFeed) // Main feed with infinite scroll
-    api.Get("/images/:id", handlers.GetImage)
-    api.Post("/upload", middleware.Protected(), handlers.Upload)
-    api.Post("/images/:id/like", middleware.Protected(), handlers.LikeImage)
-    
-    // Users
-    api.Get("/users/:username", handlers.GetProfile)
-    api.Get("/users/:username/images", handlers.GetUserImages)
-    
-    log.Fatal(app.Listen(":8080"))
-}
-```
-
-```bash
-git add main.go
-git commit -m "Add Fiber server setup"
-```
-
-### Configuration
-```yaml
-# config.yaml
-ai_signatures:
-  - key: "DigitalSourceType"
-    value: "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
-  - key: "Software"
-    contains: ["Midjourney", "DALL-E", "Stable Diffusion", "Flux"]
-
-aesthetic:
-  blur_radius: 20
-  thumbnail_quality: 85
-  max_width: 2048
-  formats: [".jpg", ".jpeg", ".png", ".webp"]
-```
-
-## Phase 4: The Frontend - Make It Gorgeous
-
-### HTML - Minimal, Semantic, Beautiful
-```html
-<!-- static/index.html -->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>trough · ai imagery</title>
-    <link rel="stylesheet" href="/css/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;400;500&display=swap" rel="stylesheet">
-</head>
-<body>
-    <!-- Minimal header - just the essentials -->
-    <header class="header">
-        <h1 class="logo">trough</h1>
-        <nav class="nav">
-            <button class="nav-btn" id="auth-btn">enter</button>
-        </nav>
-    </header>
-
-    <!-- The gallery - where the magic happens -->
-    <main class="gallery" id="gallery">
-        <!-- Images dynamically loaded here -->
-    </main>
-
-    <!-- Full-screen image viewer -->
-    <div class="lightbox" id="lightbox">
-        <div class="lightbox-content">
-            <img class="lightbox-image" id="lightbox-img">
-            <div class="lightbox-info">
-                <a class="lightbox-user" id="lightbox-user"></a>
-                <button class="lightbox-like" id="lightbox-like">
-                    <svg><!-- Heart icon --></svg>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Upload zone (hidden by default) -->
-    <div class="upload-zone" id="upload-zone">
-        <div class="upload-inner">
-            <p>Drop your AI imagery</p>
-        </div>
-    </div>
-
-    <script src="/js/app.js" type="module"></script>
-</body>
-</html>
-```
-
-### CSS - The Soul of the Design
 ```css
-/* static/css/style.css */
-
-/* Design System */
 :root {
-    --black: #000000;
-    --white: #ffffff;
-    --gray-900: #0a0a0a;
-    --gray-800: #1a1a1a;
-    --gray-700: #2a2a2a;
-    --gray-300: #a0a0a0;
-    --gray-100: #f0f0f0;
-    
-    --accent: #00ff88;
-    --accent-dim: #00ff8820;
-    
-    --font-sans: 'Inter', -apple-system, system-ui, sans-serif;
-    --transition: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Color */
+  --color-bg:        #0a0a0a;
+  --color-bg-elev:   #111213;
+  --color-surface:   #161718;
+  --color-fg:        #e7e7e7;
+  --color-fg-muted:  #a8a8a8;
+  --color-fg-subtle: #7a7a7a;
+  --color-accent:    #7af0ff;   /* cyan mint */
+  --color-accent-2:  #b9ff7a;   /* alt lime */
+  --color-danger:    #ff5c5c;
+  --color-warn:      #f2c94c;
+  --color-ok:        #59e38f;
+  --color-hairline:  #2a2a2a;
+
+  /* Elevation & borders */
+  --radius-none: 0px;
+  --radius-s:    6px;
+  --radius-m:    10px;
+  --radius-l:    14px;
+  --border-hair: 1px;
+
+  /* Shadow (subtle, low-luminance) */
+  --shadow-1: 0 1px 0 rgba(0,0,0,0.6);
+  --shadow-2: 0 8px 24px rgba(0,0,0,0.35);
+  --shadow-3: 0 24px 48px rgba(0,0,0,0.45);
+
+  /* Spacing scale (8px base, with fine steps) */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+  --space-9: 64px;
+
+  /* Typography */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, Noto Sans, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --text-xxs: 10px; /* micro labels */
+  --text-xs:  12px; /* metadata */
+  --text-s:   14px; /* secondary */
+  --text-m:   16px; /* body */
+  --text-l:   20px; /* h5 */
+  --text-xl:  24px; /* h4 */
+  --text-2xl: 32px; /* h3 */
+  --text-3xl: 40px; /* h2 */
+  --text-4xl: 56px; /* hero */
+
+  --weight-regular:  450;
+  --weight-medium:   550;
+  --weight-semibold: 650;
+
+  --leading-tight: 1.1;
+  --leading-snug:  1.25;
+  --leading-normal:1.45;
+
+  /* Motion */
+  --motion-fast: 120ms;
+  --motion-base: 220ms;
+  --motion-slow: 360ms;
+  --ease-emph:   cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-smooth: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Focus */
+  --focus-ring: 0 0 0 2px var(--color-accent), 0 0 0 6px rgba(122,240,255,0.2);
+
+  /* Layout */
+  --container-max: 1280px;
+  --gutter:        var(--space-6);
+  --grid-gap:      var(--space-6);
 }
 
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg:       #f7f7f7;
+    --color-bg-elev:  #ffffff;
+    --color-surface:  #ffffff;
+    --color-fg:       #0a0a0a;
+    --color-fg-muted: #4a4a4a;
+    --color-fg-subtle:#6b6b6b;
+    --color-hairline: #e8e8e8;
+  }
 }
 
-html {
-    background: var(--black);
-    color: var(--white);
-    font-family: var(--font-sans);
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-    min-height: 100vh;
-    overscroll-behavior: none;
-}
-
-/* Header - Floating, Minimal */
-.header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    padding: 2rem 3rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: linear-gradient(180deg, 
-        rgba(0,0,0,0.8) 0%, 
-        rgba(0,0,0,0) 100%);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-}
-
-.logo {
-    font-size: 1.25rem;
-    font-weight: 200;
-    letter-spacing: 0.05em;
-    cursor: pointer;
-    transition: opacity 0.3s var(--transition);
-}
-
-.logo:hover {
-    opacity: 0.7;
-}
-
-/* Navigation Button */
-.nav-btn {
-    background: transparent;
-    border: 1px solid rgba(255,255,255,0.2);
-    color: var(--white);
-    padding: 0.5rem 1.5rem;
-    border-radius: 100px;
-    font-size: 0.875rem;
-    font-weight: 400;
-    cursor: pointer;
-    transition: all 0.3s var(--transition);
-    backdrop-filter: blur(10px);
-}
-
-.nav-btn:hover {
-    background: rgba(255,255,255,0.1);
-    border-color: rgba(255,255,255,0.3);
-    transform: translateY(-1px);
-}
-
-/* Gallery - Masonry Magic */
-.gallery {
-    padding: 8rem 2rem 4rem;
-    columns: 5;
-    column-gap: 1rem;
-}
-
-@media (max-width: 1400px) { .gallery { columns: 4; } }
-@media (max-width: 1000px) { .gallery { columns: 3; } }
-@media (max-width: 700px) { .gallery { columns: 2; } }
-@media (max-width: 400px) { .gallery { columns: 1; } }
-
-/* Image Cards - The Stars of the Show */
-.image-card {
-    position: relative;
-    margin-bottom: 1rem;
-    break-inside: avoid;
-    cursor: zoom-in;
-    overflow: hidden;
-    border-radius: 0.5rem;
-    animation: fadeIn 0.6s var(--transition) both;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(20px) scale(0.95);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
-}
-
-.image-card img {
-    width: 100%;
-    height: auto;
-    display: block;
-    transition: transform 0.6s var(--transition);
-}
-
-.image-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(180deg, 
-        transparent 0%, 
-        transparent 70%, 
-        rgba(0,0,0,0.4) 100%);
-    opacity: 0;
-    transition: opacity 0.3s var(--transition);
-    pointer-events: none;
-}
-
-.image-card:hover img {
-    transform: scale(1.05);
-}
-
-.image-card:hover::before {
-    opacity: 1;
-}
-
-/* Image Loading State - Beautiful Skeletons */
-.image-skeleton {
-    aspect-ratio: 1;
-    background: linear-gradient(
-        90deg,
-        var(--gray-900) 0%,
-        var(--gray-800) 50%,
-        var(--gray-900) 100%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-    border-radius: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-@keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-}
-
-/* Lightbox - Full Screen Beauty */
-.lightbox {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    background: rgba(0,0,0,0.95);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.3s var(--transition);
-}
-
-.lightbox.active {
-    opacity: 1;
-    pointer-events: all;
-}
-
-.lightbox-content {
-    position: relative;
-    max-width: 90vw;
-    max-height: 90vh;
-}
-
-.lightbox-image {
-    max-width: 100%;
-    max-height: 90vh;
-    object-fit: contain;
-    border-radius: 0.5rem;
-    animation: zoomIn 0.3s var(--transition);
-}
-
-@keyframes zoomIn {
-    from {
-        transform: scale(0.9);
-        opacity: 0;
-    }
-    to {
-        transform: scale(1);
-        opacity: 1;
-    }
-}
-
-/* Upload Zone - Drag & Drop Delight */
-.upload-zone {
-    position: fixed;
-    inset: 0;
-    z-index: 2000;
-    background: rgba(0,0,0,0.98);
-    display: none;
-    align-items: center;
-    justify-content: center;
-}
-
-.upload-zone.active {
-    display: flex;
-}
-
-.upload-inner {
-    width: 60%;
-    height: 60%;
-    border: 2px dashed var(--accent);
-    border-radius: 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--accent-dim);
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 0.5; }
-    50% { opacity: 1; }
-}
-
-/* Loading Indicator - Smooth as Butter */
-.loader {
-    position: fixed;
-    bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 40px;
-    height: 40px;
-    border: 2px solid var(--gray-700);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: translateX(-50%) rotate(360deg); }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
 }
 ```
 
-### JavaScript - Smooth Interactions
-```javascript
-// static/js/app.js
-class Trough {
-    constructor() {
-        this.images = [];
-        this.page = 1;
-        this.loading = false;
-        this.hasMore = true;
-        this.gallery = document.getElementById('gallery');
-        this.lightbox = document.getElementById('lightbox');
-        this.uploadZone = document.getElementById('upload-zone');
-    }
+### Components (key specs)
+- **Navigation**
+  - Left: wordmark; Center: nothing (negative space); Right: auth/profile.
+  - Sticky; 56–64px tall; hairline bottom rule; backdrop blur only on scroll.
+  - Hover/focus are color‑only; no heavy shadows.
 
-    async init() {
-        await this.loadImages();
-        this.setupInfiniteScroll();
-        this.setupLightbox();
-        this.setupUpload();
-        this.animateOnScroll();
-    }
+- **Gallery Cards**
+  - Aspect‑ratio preserved; no reflow on load.
+  - Use blurhash + dominant color background; fade image in over 180–220ms.
+  - Card chrome: like button (tap‑target ≥ 40px), like count, subtle metadata on hover.
+  - Hairline border on hover; accent focus ring on keyboard focus.
 
-    async loadImages() {
-        if (this.loading || !this.hasMore) return;
-        
-        this.loading = true;
-        this.showLoader();
-        
-        try {
-            const res = await fetch(`/api/feed?page=${this.page}`);
-            const data = await res.json();
-            
-            if (data.images.length === 0) {
-                this.hasMore = false;
-                return;
-            }
-            
-            this.renderImages(data.images);
-            this.page++;
-        } finally {
-            this.loading = false;
-            this.hideLoader();
-        }
-    }
+- **Lightbox**
+  - Full‑bleed image; background uses sampled dominant color at 6–8% with subtle radial.
+  - Controls (top/bottom overlays): like, share, exif, close, prev/next (← / → keys).
+  - Image enters with scale(0.985)→1 and 12px upward translate; overlay fades in after 50ms.
 
-    renderImages(images) {
-        images.forEach((image, index) => {
-            const card = document.createElement('div');
-            card.className = 'image-card';
-            card.style.animationDelay = `${index * 0.05}s`;
-            
-            // Use blurhash for beautiful loading
-            if (image.blurhash) {
-                card.style.backgroundColor = image.dominant_color;
-            }
-            
-            const img = new Image();
-            img.onload = () => {
-                card.appendChild(img);
-                // Trigger reflow for smooth animation
-                card.offsetHeight;
-            };
-            img.src = `/uploads/${image.filename}`;
-            img.alt = image.original_name;
-            
-            card.addEventListener('click', () => this.openLightbox(image));
-            
-            this.gallery.appendChild(card);
-        });
-    }
+- **Upload**
+  - Dropzone with dashed hairline; accent glow on drag‑over; progress bar using accent.
+  - Clear validations: size/type; EXIF AI check; NSFW toggle; error toasts mapped to fields.
 
-    openLightbox(image) {
-        const img = document.getElementById('lightbox-img');
-        img.src = `/uploads/${image.filename}`;
-        
-        const user = document.getElementById('lightbox-user');
-        user.textContent = `@${image.username}`;
-        user.href = `/@${image.username}`;
-        
-        this.lightbox.classList.add('active');
-        document.body.style.overflow = 'hidden';
-        
-        // ESC to close
-        const closeHandler = (e) => {
-            if (e.key === 'Escape') {
-                this.closeLightbox();
-                document.removeEventListener('keydown', closeHandler);
-            }
-        };
-        document.addEventListener('keydown', closeHandler);
-        
-        // Click outside to close
-        this.lightbox.onclick = (e) => {
-            if (e.target === this.lightbox) {
-                this.closeLightbox();
-            }
-        };
-    }
+- **Auth Modal**
+  - One panel with tabs (Login/Register); real‑time validation; submit disabled until valid.
+  - Success clears form and closes; failure shows exact cause; rate‑limit hints generic.
 
-    closeLightbox() {
-        this.lightbox.classList.remove('active');
-        document.body.style.overflow = '';
-    }
+- **Toasts**
+  - Bottom center; stacked; 3–4 seconds; progress bar; swipe to dismiss on touch.
 
-    setupInfiniteScroll() {
-        let ticking = false;
-        
-        const handleScroll = () => {
-            if (!ticking) {
-                requestAnimationFrame(() => {
-                    const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
-                    
-                    if (scrollTop + clientHeight >= scrollHeight - 1000) {
-                        this.loadImages();
-                    }
-                    
-                    ticking = false;
-                });
-                
-                ticking = true;
-            }
-        };
-        
-        window.addEventListener('scroll', handleScroll, { passive: true });
-    }
+- **Skeletons**
+  - Use blurhash tiles; avoid shimmer; maintain aspect ratio; subtle scale‑y micro‑jitter removed (no CLS).
 
-    setupUpload() {
-        // Only for logged-in users on their profile
-        if (!window.location.pathname.startsWith('/@')) return;
-        
-        let dragCounter = 0;
-        
-        document.addEventListener('dragenter', (e) => {
-            e.preventDefault();
-            dragCounter++;
-            if (dragCounter === 1) {
-                this.uploadZone.classList.add('active');
-            }
-        });
-        
-        document.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            dragCounter--;
-            if (dragCounter === 0) {
-                this.uploadZone.classList.remove('active');
-            }
-        });
-        
-        document.addEventListener('dragover', (e) => {
-            e.preventDefault();
-        });
-        
-        document.addEventListener('drop', async (e) => {
-            e.preventDefault();
-            dragCounter = 0;
-            this.uploadZone.classList.remove('active');
-            
-            const files = Array.from(e.dataTransfer.files);
-            for (const file of files) {
-                if (file.type.startsWith('image/')) {
-                    await this.uploadImage(file);
-                }
-            }
-        });
-    }
+### Motion & Interaction
+- Only animate opacity/transform; avoid layout-affecting props.
+- Default duration 220ms; ease `--ease-smooth`; emphasis actions use `--ease-emph`.
+- Tap/press affordances scale to 0.98 with 60ms return.
+- Focus is always visible (custom ring); do not remove outlines.
+- Reduced motion: disable non‑essential motion; keep clarity.
 
-    async uploadImage(file) {
-        const formData = new FormData();
-        formData.append('image', file);
-        
-        // Show upload progress with style
-        const progressBar = this.createProgressBar();
-        document.body.appendChild(progressBar);
-        
-        try {
-            const res = await fetch('/api/upload', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
-                },
-                body: formData
-            });
-            
-            if (res.ok) {
-                const image = await res.json();
-                // Prepend to gallery with animation
-                this.renderImages([image]);
-                progressBar.classList.add('complete');
-            } else {
-                progressBar.classList.add('error');
-            }
-        } finally {
-            setTimeout(() => progressBar.remove(), 1000);
-        }
-    }
+### Accessibility
+- Body text contrast ≥ 4.5:1; large text/icons ≥ 3:1; test both themes.
+- Keyboard: tab order logical; skip‑to‑content link; trap focus in modals; ESC closes.
+- Focus ring visible against both light/dark; minimum 2px.
+- Hit areas ≥ 40px; touch targets separated by ≥ 8px.
+- All images have `alt`; decorative elements `aria-hidden="true"`.
 
-    createProgressBar() {
-        const bar = document.createElement('div');
-        bar.className = 'upload-progress';
-        bar.innerHTML = '<div class="upload-progress-bar"></div>';
-        return bar;
-    }
+### Performance
+- No layout shift: reserve sizes with `aspect-ratio` and fixed placeholders.
+- Image loading: `loading="lazy"`, `decoding="async"`, prioritize first row.
+- Use `content-visibility: auto` for off‑screen sections where appropriate.
+- Avoid heavy filters; prefer precomputed blurhash and transforms.
 
-    showLoader() {
-        if (!document.querySelector('.loader')) {
-            const loader = document.createElement('div');
-            loader.className = 'loader';
-            document.body.appendChild(loader);
-        }
-    }
+## Implementation Plan (simple, no scaffolding)
+1) **Introduce tokens** at the top of `static/css/style.css`. Replace ad‑hoc colors/sizing with variables.
+2) **Reset + Base**: normalize element defaults; set typography scale, background/foreground, links, focus ring.
+3) **Layout**: header/nav, container/gutters, responsive grid with consistent gaps.
+4) **Components**: cards, lightbox, upload, auth modal, toasts. Keep HTML mostly as‑is; refine classes.
+5) **States**: hover/active/focus, disabled/loading, error/success.
+6) **Motion**: enter/exit transitions; micro‑press; reduced motion rules.
+7) **A11y/Perf pass**: contrast audit, keyboard flow, CLS/LCP checks.
 
-    hideLoader() {
-        const loader = document.querySelector('.loader');
-        if (loader) loader.remove();
-    }
+### Concrete Deliverables
+- `static/css/style.css` updated with tokens, base, components, and states
+- Minimal HTML class updates where necessary to hook styles
+- No new dependencies; vanilla JS/CSS only
 
-    animateOnScroll() {
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('visible');
-                }
-            });
-        }, { threshold: 0.1 });
-        
-        document.querySelectorAll('.image-card').forEach(card => {
-            observer.observe(card);
-        });
-    }
-}
+## Authentication UX (end‑to‑end polish)
+- Client‑side validation with inline errors; disable submit during request
+- Show/hide password; Enter submits; clear on success; focus management
+- Persisted auth state in nav; sign out; token expiry detection and reset
 
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    const app = new Trough();
-    app.init();
-});
-```
+## Recent UX Updates
+- Unified upload flow across file picker and drag-and-drop: images upload first, then open a centered preview edit modal showing the image with Title/Caption/NSFW controls. Save before feed refresh.
+- Edit modal improved: tall images are constrained (`max-height: 60vh`), and metadata controls live in a sticky footer area so fields are always visible.
+- Image card actions: Edit/Delete controls are inline with title/author, right-aligned, using high-contrast SVG icons. Titles truncate with ellipsis to ensure actions never hide.
+- Loader: centered and stable; no drift.
 
-```bash
-git add static/
-git commit -m "Add gorgeous frontend with smooth interactions"
-```
+## EXIF
+- Backend writes uploads as high-quality JPEG while preserving XMP and extracting full EXIF into `images.exif_data`.
+- Lightbox EXIF viewer now opens immediately with a loading state, parses both object and JSON-string formats, and falls back to basic metadata if EXIF is missing.
+- Pending: Validate that all `/api/images/:id` responses include the expected `exif_data` structure across all file types; expand displayed fields with human-friendly labels if desired.
 
-## Phase 5: EXIF Verification Service
+## Known Gaps / Quick Fixes
+- WebP decode: we accept `image/webp` uploads; decoder registered. Confirm with sample file end‑to‑end.
+- Frontend polish:
+  - Profile view and settings UI are minimal; implement real profile header/edit modal
+  - Like count: display + optimistic updates in gallery/lightbox
+  - Better skeletons/blurhash placeholders on initial load
+- Security/Hardening:
+  - Use strong `JWT_SECRET` in production
+  - Consider rate limiting for auth endpoints
+  - Validate image metadata and file type more defensively
+- Ops:
+  - Ensure `.env` is used locally; confirm CORS origins for prod
 
-```go
-// services/exif.go
-package services
-
-import (
-    "github.com/dsoprea/go-exif/v3"
-    "strings"
-)
-
-func VerifyAIImage(imagePath string, config Config) (bool, string) {
-    rawExif, err := exif.SearchFileAndExtractExif(imagePath)
-    if err != nil {
-        return false, ""
-    }
-    
-    entries, _, err := exif.GetFlatExifData(rawExif, nil)
-    if err != nil {
-        return false, ""
-    }
-    
-    for _, entry := range entries {
-        for _, sig := range config.AISignatures {
-            if entry.TagName == sig.Key {
-                if sig.Contains != "" {
-                    for _, substr := range sig.Contains {
-                        if strings.Contains(entry.Formatted, substr) {
-                            return true, entry.Formatted
-                        }
-                    }
-                } else if entry.Formatted == sig.Value {
-                    return true, entry.Formatted
-                }
-            }
-        }
-    }
-    
-    return false, ""
-}
-```
-
-```bash
-git add services/
-git commit -m "Add EXIF verification for AI images"
-```
-
-## Phase 6: Image Processing for Beauty
-
-```go
-// services/image.go
-package services
-
-import (
-    "github.com/bbrks/go-blurhash"
-    "image"
-    _ "image/jpeg"
-    _ "image/png"
-)
-
-func ProcessImage(file multipart.File) (ImageMeta, error) {
-    // Decode image
-    img, format, err := image.Decode(file)
-    if err != nil {
-        return ImageMeta{}, err
-    }
-    
-    bounds := img.Bounds()
-    meta := ImageMeta{
-        Width:  bounds.Dx(),
-        Height: bounds.Dy(),
-        Format: format,
-    }
-    
-    // Generate blurhash for beautiful loading
-    hash, err := blurhash.Encode(4, 3, img)
-    if err == nil {
-        meta.Blurhash = hash
-    }
-    
-    // Extract dominant color
-    meta.DominantColor = extractDominantColor(img)
-    
-    return meta, nil
-}
-```
-
-```bash
-git add services/image.go
-git commit -m "Add image processing with blurhash"
-```
-
-## Phase 7: Run & Deploy
-
-```bash
-# Build and run
-docker-compose up --build -d
-
-# Check logs
-docker-compose logs -f app
-
-# Initialize database
-docker-compose exec app psql $DATABASE_URL -f /app/db/schema.sql
-
-git add -A
-git commit -m "Complete trough v1.0 - impossibly slick AI image gallery"
-git tag v1.0.0
-git push origin main --tags
-```
+## Notable Implementation Details
+- Dockerfile: Go 1.23‑alpine (multi‑stage)
+- docker‑compose: DB healthcheck and `restart: unless-stopped`
+- DB migrations: executed automatically on app start in `db/connection.go`
+- Testing: `tests/handlers` and `tests/services` present; `Makefile` includes coverage target
 
 ## Critical Success Metrics
 
 ### Performance
-- [ ] Images load in <100ms
-- [ ] Infinite scroll is buttery smooth
-- [ ] No layout shift during loading
-- [ ] Animations run at 60fps
+- [ ] Images visually ready within 100–200ms after container paint (cached) / <1s cold
+- [ ] Infinite scroll stays jitter‑free
+- [ ] Zero measurable layout shift (CLS ≈ 0)
+- [ ] Animations at 60fps (no long main‑thread tasks)
 
 ### Aesthetics
-- [ ] Typography is crisp and beautiful
-- [ ] Spacing is perfect - not too tight, not too loose
-- [ ] Animations feel natural and delightful
-- [ ] Dark theme is actually dark (true black)
-- [ ] Loading states are works of art
-- [ ] Every interaction has feedback
+- [ ] Typography reads crisp at all sizes/densities
+- [ ] Spacing grid is consistent and calm
+- [ ] Motion feels intentional and minimal
+- [ ] Dark theme is truly dark without crushing detail
+- [ ] Loading states feel designed, not default
 
 ### User Experience
-- [ ] Upload is drag-and-drop simple
-- [ ] Navigation is intuitive
-- [ ] Errors are helpful, not scary
-- [ ] Mobile experience is flawless
+- [ ] Upload is drag‑and‑drop simple; errors are helpful
+- [ ] Navigation is intuitive; keyboard workflows are first‑class
+- [ ] Guests are safe from NSFW by default; reporting is obvious and low‑friction
+- [ ] Mobile experience is flawless across common viewports
 
-## Design Philosophy
-
-**Less is More**: Every element must earn its place. If it doesn't make the experience better, remove it.
-
-**Performance is Aesthetic**: A slow site can never be beautiful. Optimize everything.
-
-**Delight in Details**: The difference between good and incredible is in the micro-interactions, the perfect easings, the thoughtful shadows.
-
-**Dark by Default**: This is 2025. Dark mode isn't an option, it's the default. Make it gorgeous.
-
-## Remember
-
-This isn't just a gallery. It's a showcase for AI art that should feel as premium as the images it displays. Every pixel, every animation, every interaction should whisper "quality."
-
-The goal: When someone opens trough, they should immediately think "whoever built this really cared."
+## Nice‑to‑Have (Future)
+- Image color theming: derive subtle UI accents from dominant image color
+- Offline‑first caching for last N images
+- Minimal comments or “reactions” without clutter
+- Theming toggle (system default, light/dark swap)

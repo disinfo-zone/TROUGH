@@ -20,6 +20,7 @@ type Image struct {
 	IsNSFW        bool            `json:"is_nsfw" db:"is_nsfw"`
 	AISignature   *string         `json:"ai_signature" db:"ai_signature"`
 	ExifData      json.RawMessage `json:"exif_data,omitempty" db:"exif_data"`
+	Caption       *string         `json:"caption" db:"caption"`
 	LikesCount    int             `json:"likes_count" db:"likes_count"`
 	CreatedAt     time.Time       `json:"created_at" db:"created_at"`
 }
@@ -45,6 +46,7 @@ type UploadResponse struct {
 	Blurhash      *string   `json:"blurhash"`
 	DominantColor *string   `json:"dominant_color"`
 	FileSize      *int      `json:"file_size"`
+	Caption       *string   `json:"caption"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -58,6 +60,7 @@ func (i *Image) ToUploadResponse() UploadResponse {
 		Blurhash:      i.Blurhash,
 		DominantColor: i.DominantColor,
 		FileSize:      i.FileSize,
+		Caption:       i.Caption,
 		CreatedAt:     i.CreatedAt,
 	}
 }

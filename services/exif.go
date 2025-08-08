@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/dsoprea/go-exif/v3"
@@ -34,4 +35,30 @@ func VerifyAIImage(imagePath string, config Config) (bool, string) {
 	}
 
 	return false, ""
+}
+
+// ExtractExifJSON returns a JSON object with all EXIF tags and values for display/preservation.
+func ExtractExifJSON(imagePath string) json.RawMessage {
+	rawExif, err := exif.SearchFileAndExtractExif(imagePath)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	entries, _, err := exif.GetFlatExifData(rawExif, nil)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	m := map[string]interface{}{}
+	for _, e := range entries {
+		// TagName might repeat; accumulate with suffix index if needed
+		key := e.TagName
+		if _, exists := m[key]; exists {
+			key = key + "_dup"
+		}
+		m[key] = e.Formatted
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return json.RawMessage(b)
 }

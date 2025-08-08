@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -24,6 +25,33 @@ func customErrorHandler(c *fiber.Ctx, err error) error {
 	})
 }
 
+func maybeSeedAdmin(userRepo models.UserRepositoryInterface) {
+	adminEmail := os.Getenv("ADMIN_EMAIL")
+	adminUser := os.Getenv("ADMIN_USERNAME")
+	adminPass := os.Getenv("ADMIN_PASSWORD")
+	if adminEmail == "" || adminUser == "" || adminPass == "" {
+		return
+	}
+	if _, err := userRepo.GetByEmail(adminEmail); err == nil {
+		log.Printf("Admin seed: user %s already exists", adminEmail)
+		return
+	}
+	u := &models.User{Username: adminUser, Email: adminEmail}
+	if err := u.HashPassword(adminPass); err != nil {
+		log.Printf("Admin seed: failed to hash password: %v", err)
+		return
+	}
+	if err := userRepo.Create(u); err != nil {
+		log.Printf("Admin seed: create failed: %v", err)
+		return
+	}
+	if err := userRepo.SetAdmin(u.ID, true); err != nil {
+		log.Printf("Admin seed: set admin failed: %v", err)
+		return
+	}
+	log.Printf("Admin seed: created admin %s (@%s)", adminEmail, adminUser)
+}
+
 func main() {
 	config, err := services.LoadConfig("config.yaml")
 	if err != nil {
@@ -42,6 +70,9 @@ func main() {
 	userRepo := models.NewUserRepository(db.DB)
 	imageRepo := models.NewImageRepository(db.DB)
 	likeRepo := models.NewLikeRepository(db.DB)
+
+	// First-time admin seed (optional)
+	maybeSeedAdmin(userRepo)
 
 	authHandler := handlers.NewAuthHandler(userRepo)
 	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config)
@@ -66,18 +97,43 @@ func main() {
 		CacheDuration: 86400,
 	})
 
+	// Serve profile and settings URLs client-side
+	app.Get("/@:username", func(c *fiber.Ctx) error {
+		return c.SendFile("./static/index.html")
+	})
+	app.Get("/settings", func(c *fiber.Ctx) error {
+		return c.SendFile("./static/index.html")
+	})
+
 	api := app.Group("/api")
 
 	api.Post("/register", authHandler.Register)
 	api.Post("/login", authHandler.Login)
+	api.Get("/me", middleware.Protected(), authHandler.Me)
 
 	api.Get("/feed", imageHandler.GetFeed)
 	api.Get("/images/:id", imageHandler.GetImage)
 	api.Post("/upload", middleware.Protected(), imageHandler.Upload)
 	api.Post("/images/:id/like", middleware.Protected(), imageHandler.LikeImage)
+	api.Patch("/images/:id", middleware.Protected(), imageHandler.UpdateImage)
+	api.Delete("/images/:id", middleware.Protected(), imageHandler.DeleteImage)
 
+	// Users
 	api.Get("/users/:username", userHandler.GetProfile)
 	api.Get("/users/:username/images", userHandler.GetUserImages)
+	api.Get("/me/profile", middleware.Protected(), userHandler.GetMyProfile)
+	api.Patch("/me/profile", middleware.Protected(), userHandler.UpdateMyProfile)
+	api.Get("/me/account", middleware.Protected(), userHandler.GetMyAccount)
+	api.Patch("/me/email", middleware.Protected(), userHandler.UpdateEmail)
+	api.Patch("/me/password", middleware.Protected(), userHandler.UpdatePassword)
+	api.Delete("/me", middleware.Protected(), userHandler.DeleteMyAccount)
+	api.Post("/me/avatar", middleware.Protected(), userHandler.UploadAvatar)
+
+	// Admin (guarded in handler)
+	api.Get("/admin/users", middleware.Protected(), userHandler.AdminListUsers)
+	api.Patch("/admin/users/:id", middleware.Protected(), userHandler.AdminSetUserFlags)
+	api.Delete("/admin/images/:id", middleware.Protected(), userHandler.AdminDeleteImage)
+	api.Patch("/admin/images/:id/nsfw", middleware.Protected(), userHandler.AdminSetImageNSFW)
 
 	log.Printf("Server starting on port 8080")
 	log.Fatal(app.Listen(":8080"))

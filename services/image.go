@@ -9,8 +9,10 @@ import (
 	"mime/multipart"
 
 	"github.com/bbrks/go-blurhash"
+	_ "golang.org/x/image/webp"
 )
 
+// ImageMeta contains derived properties used for UI and aesthetics.
 type ImageMeta struct {
 	Width         int    `json:"width"`
 	Height        int    `json:"height"`
@@ -19,6 +21,9 @@ type ImageMeta struct {
 	DominantColor string `json:"dominant_color"`
 }
 
+// ProcessImage decodes and computes blurhash/dominant color. The upload handler
+// may re-encode to a different container (e.g. PNG -> WebP) for size; format here
+// reflects the decoded input.
 func ProcessImage(file multipart.File) (ImageMeta, error) {
 	// Decode image
 	img, format, err := image.Decode(file)
@@ -54,8 +59,8 @@ func extractDominantColor(img image.Image) string {
 	sampleCount := 0
 
 	// Sample every 10th pixel to avoid processing the entire image
-	for y := bounds.Min.Y; y < bounds.Max.Y; y += height / 10 {
-		for x := bounds.Min.X; x < bounds.Max.X; x += width / 10 {
+	for y := bounds.Min.Y; y < bounds.Max.Y; y += max(1, height/10) {
+		for x := bounds.Min.X; x < bounds.Max.X; x += max(1, width/10) {
 			pixel := color.RGBAModel.Convert(img.At(x, y)).(color.RGBA)
 			r += uint32(pixel.R)
 			g += uint32(pixel.G)
@@ -79,4 +84,11 @@ func extractDominantColor(img image.Image) string {
 	avgB = avgB * 70 / 100
 
 	return fmt.Sprintf("#%02x%02x%02x", avgR, avgG, avgB)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

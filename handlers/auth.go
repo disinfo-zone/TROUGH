@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/yourusername/trough/middleware"
 	"github.com/yourusername/trough/models"
 )
@@ -31,7 +32,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Validation failed",
+			"error":   "Validation failed",
 			"details": err.Error(),
 		})
 	}
@@ -90,7 +91,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Validation failed",
+			"error":   "Validation failed",
 			"details": err.Error(),
 		})
 	}
@@ -105,6 +106,10 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Database error",
 		})
+	}
+
+	if user.IsDisabled {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}
 
 	if !user.CheckPassword(req.Password) {
@@ -124,4 +129,18 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		"user":  user.ToResponse(),
 		"token": token,
 	})
+}
+
+func (h *AuthHandler) Me(c *fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	if userID == uuid.Nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	return c.JSON(fiber.Map{"user": user.ToResponse()})
 }

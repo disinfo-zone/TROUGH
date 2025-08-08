@@ -51,10 +51,56 @@ func (m *MockUserRepository) GetByID(id uuid.UUID) (*models.User, error) {
 	return args.Get(0).(*models.User), args.Error(1)
 }
 
+func (m *MockUserRepository) UpdateProfile(id uuid.UUID, updates models.UpdateUserRequest) (*models.User, error) {
+	args := m.Called(id, updates)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.User), args.Error(1)
+}
+
+func (m *MockUserRepository) UpdateEmail(id uuid.UUID, email string) error {
+	args := m.Called(id, email)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdatePassword(id uuid.UUID, passwordHash string) error {
+	args := m.Called(id, passwordHash)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) DeleteUser(id uuid.UUID) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) SetAdmin(id uuid.UUID, isAdmin bool) error {
+	args := m.Called(id, isAdmin)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) SetDisabled(id uuid.UUID, disabled bool) error {
+	args := m.Called(id, disabled)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) ListUsers(page, limit int) ([]models.User, int, error) {
+	args := m.Called(page, limit)
+	var users []models.User
+	if u := args.Get(0); u != nil {
+		users = u.([]models.User)
+	}
+	total := 0
+	if t := args.Get(1); t != nil {
+		total = t.(int)
+	}
+	return users, total, args.Error(2)
+}
+
 func TestRegisterSuccess(t *testing.T) {
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
-	
+
 	app := fiber.New()
 	app.Post("/register", handler.Register)
 
@@ -67,7 +113,7 @@ func TestRegisterSuccess(t *testing.T) {
 		"email":    "test@example.com",
 		"password": "password123",
 	}
-	
+
 	body, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -82,7 +128,7 @@ func TestRegisterSuccess(t *testing.T) {
 func TestRegisterEmailExists(t *testing.T) {
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
-	
+
 	app := fiber.New()
 	app.Post("/register", handler.Register)
 
@@ -94,7 +140,7 @@ func TestRegisterEmailExists(t *testing.T) {
 		"email":    "test@example.com",
 		"password": "password123",
 	}
-	
+
 	body, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -109,7 +155,7 @@ func TestRegisterEmailExists(t *testing.T) {
 func TestLoginSuccess(t *testing.T) {
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
-	
+
 	app := fiber.New()
 	app.Post("/login", handler.Login)
 
@@ -119,14 +165,14 @@ func TestLoginSuccess(t *testing.T) {
 		Email:    "test@example.com",
 	}
 	user.HashPassword("password123")
-	
+
 	mockRepo.On("GetByEmail", "test@example.com").Return(user, nil)
 
 	reqBody := map[string]string{
 		"email":    "test@example.com",
 		"password": "password123",
 	}
-	
+
 	body, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

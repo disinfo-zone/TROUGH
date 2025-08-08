@@ -18,18 +18,18 @@ func Connect() error {
 	}
 
 	var err error
-	
+
 	// Retry connection logic for Docker container startup
 	for i := 0; i < 30; i++ {
 		DB, err = sqlx.Connect("postgres", databaseURL)
 		if err == nil {
 			break
 		}
-		
+
 		fmt.Printf("Database connection attempt %d failed: %v\n", i+1, err)
 		time.Sleep(1 * time.Second)
 	}
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to connect to database after retries: %w", err)
 	}
@@ -56,6 +56,9 @@ func Migrate() error {
 			created_at TIMESTAMP DEFAULT NOW()
 		);
 
+		-- New admin moderation field
+		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_disabled BOOLEAN DEFAULT FALSE;
+
 		CREATE TABLE IF NOT EXISTS images (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -69,9 +72,13 @@ func Migrate() error {
 			is_nsfw BOOLEAN DEFAULT FALSE,
 			ai_signature VARCHAR(500),
 			exif_data JSONB,
+			caption TEXT,
 			likes_count INTEGER DEFAULT 0,
 			created_at TIMESTAMP DEFAULT NOW()
 		);
+
+		-- Ensure new columns exist on already-created tables
+		ALTER TABLE images ADD COLUMN IF NOT EXISTS caption TEXT;
 
 		CREATE TABLE IF NOT EXISTS likes (
 			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
