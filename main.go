@@ -1,14 +1,17 @@
 package main
 
 import (
+	"html"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/google/uuid"
 	"github.com/yourusername/trough/db"
 	"github.com/yourusername/trough/handlers"
 	"github.com/yourusername/trough/middleware"
@@ -53,6 +56,140 @@ func maybeSeedAdmin(userRepo models.UserRepositoryInterface) {
 	log.Printf("Admin seed: created admin %s (@%s)", adminEmail, adminUser)
 }
 
+// indexWithMetaHandler serves index.html with server-side SEO/OG meta tags injected from site settings
+// and, for /i/:id routes, from the specific image.
+func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, imageRepo models.ImageRepositoryInterface) fiber.Handler {
+	// Precompile regexes once
+	titleRe := regexp.MustCompile(`(?is)<title>.*?</title>`)
+	descRe := regexp.MustCompile(`(?is)<meta\s+name=["']description["'][^>]*>`)
+	return func(c *fiber.Ctx) error {
+		b, err := os.ReadFile("./static/index.html")
+		if err != nil {
+			// Fallback to static file if read fails
+			return c.SendFile("./static/index.html")
+		}
+		htmlStr := string(b)
+
+		set, _ := siteRepo.Get()
+
+		// Defaults from site settings
+		title := strings.TrimSpace(set.SEOTitle)
+		if title == "" {
+			if strings.TrimSpace(set.SiteName) != "" {
+				title = set.SiteName + " · AI IMAGERY"
+			} else {
+				title = "TROUGH · AI IMAGERY"
+			}
+		}
+		description := strings.TrimSpace(set.SEODescription)
+		baseURL := strings.TrimSpace(set.SiteURL)
+		if baseURL != "" {
+			baseURL = strings.TrimRight(baseURL, "/")
+		}
+		path := c.OriginalURL()
+		fullURL := baseURL
+		if fullURL == "" {
+			proto := c.Protocol()
+			if proto == "" {
+				proto = "https"
+			}
+			fullURL = proto + "://" + c.Hostname() + path
+		} else {
+			fullURL = baseURL + path
+		}
+		imageURL := strings.TrimSpace(set.SocialImageURL)
+
+		// If this is an image page, override meta using the image
+		if strings.HasPrefix(c.Path(), "/i/") {
+			if idStr := c.Params("id"); idStr != "" {
+				if imgID, err := uuid.Parse(idStr); err == nil {
+					if img, err := imageRepo.GetByID(imgID); err == nil && img != nil {
+						// Compute site title for format "IMAGE TITLE - SITE TITLE"
+						siteTitle := strings.TrimSpace(set.SiteName)
+						if siteTitle == "" {
+							siteTitle = "TROUGH"
+						}
+						// Title from image (original_name acts as title)
+						imgTitle := "Untitled"
+						if img.OriginalName != nil && strings.TrimSpace(*img.OriginalName) != "" {
+							imgTitle = strings.TrimSpace(*img.OriginalName)
+						}
+						title = imgTitle + " - " + siteTitle
+						// Description from user and caption
+						author := strings.TrimSpace(img.Username)
+						cap := ""
+						if img.Caption != nil {
+							cap = strings.TrimSpace(*img.Caption)
+						}
+						if author != "" && cap != "" {
+							description = "by @" + author + " — " + cap
+						} else if author != "" {
+							description = "by @" + author
+						} else if cap != "" {
+							description = cap
+						}
+						if len(description) > 280 {
+							description = description[:280]
+						}
+						if img.Filename != "" {
+							// Prefer absolute URL when baseURL is configured
+							if baseURL != "" {
+								imageURL = baseURL + "/uploads/" + img.Filename
+							} else {
+								imageURL = "/uploads/" + img.Filename
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Replace title/meta description
+		htmlStr = titleRe.ReplaceAllString(htmlStr, "<title>"+html.EscapeString(title)+"</title>")
+		if description != "" {
+			htmlStr = descRe.ReplaceAllString(htmlStr, `<meta name="description" content="`+html.EscapeString(description)+`">`)
+		}
+
+		// Inject OG/Twitter tags just before </head>
+		var ogTags strings.Builder
+		ogTags.WriteString("\n    <!-- Server-side social/OG tags -->\n")
+		ogTags.WriteString(`    <meta property="og:site_name" content="` + html.EscapeString(set.SiteName) + `">\n`)
+		ogTags.WriteString(`    <meta property="og:title" content="` + html.EscapeString(title) + `">\n`)
+		if description != "" {
+			ogTags.WriteString(`    <meta property="og:description" content="` + html.EscapeString(description) + `">\n`)
+		}
+		ogTags.WriteString(`    <meta property="og:type" content="website">\n`)
+		ogTags.WriteString(`    <meta property="og:url" content="` + html.EscapeString(fullURL) + `">\n`)
+		if imageURL != "" {
+			ogTags.WriteString(`    <meta property="og:image" content="` + html.EscapeString(imageURL) + `">\n`)
+		}
+		// Twitter
+		card := "summary"
+		if imageURL != "" {
+			card = "summary_large_image"
+		}
+		ogTags.WriteString(`    <meta name="twitter:card" content="` + card + `">\n`)
+		ogTags.WriteString(`    <meta name="twitter:title" content="` + html.EscapeString(title) + `">\n`)
+		if description != "" {
+			ogTags.WriteString(`    <meta name="twitter:description" content="` + html.EscapeString(description) + `">\n`)
+		}
+		if imageURL != "" {
+			ogTags.WriteString(`    <meta name="twitter:image" content="` + html.EscapeString(imageURL) + `">\n`)
+		}
+
+		insertion := ogTags.String()
+		lower := strings.ToLower(htmlStr)
+		if idx := strings.Index(lower, "</head>"); idx != -1 {
+			htmlStr = htmlStr[:idx] + insertion + htmlStr[idx:]
+		} else {
+			htmlStr += insertion
+		}
+
+		c.Set("Content-Type", "text/html; charset=utf-8")
+		return c.SendString(htmlStr)
+	}
+}
+
 func main() {
 	config, err := services.LoadConfig("config.yaml")
 	if err != nil {
@@ -86,12 +223,17 @@ func main() {
 	app.Use(compress.New())
 	app.Use(cors.New())
 
+	// Serve SPA entry with server-side meta tags for key routes
+	index := indexWithMetaHandler(siteRepo, imageRepo)
+	app.Get("/", index)
+	app.Get("/@:username", index)
+	app.Get("/settings", index)
+	app.Get("/admin", index)
+	app.Get("/i/:id", index)
+
+	// Static assets
 	app.Static("/", "./static", fiber.Static{Compress: true, CacheDuration: 3600})
 	app.Static("/uploads", "./uploads", fiber.Static{Compress: true, CacheDuration: 86400})
-
-	app.Get("/@:username", func(c *fiber.Ctx) error { return c.SendFile("./static/index.html") })
-	app.Get("/settings", func(c *fiber.Ctx) error { return c.SendFile("./static/index.html") })
-	app.Get("/admin", func(c *fiber.Ctx) error { return c.SendFile("./static/index.html") })
 
 	api := app.Group("/api")
 

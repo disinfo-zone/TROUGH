@@ -31,6 +31,7 @@ class TroughApp {
             try { this.currentUser = JSON.parse(cachedUser); } catch {}
             if (this.currentUser?.username) {
                 this.authBtn.textContent = `@${this.currentUser.username}`;
+                this.authBtn.style.fontFamily = 'var(--font-mono)';
             }
         }
         
@@ -55,6 +56,11 @@ class TroughApp {
         }
         if (location.pathname === '/admin') {
             await this.renderAdminPage();
+            return;
+        }
+        if (location.pathname.startsWith('/i/')) {
+            const id = location.pathname.split('/')[2];
+            await this.renderImagePage(id);
             return;
         }
         // Not a profile/settings page, clear profileTop
@@ -112,8 +118,10 @@ class TroughApp {
     updateAuthButton() {
         if (this.currentUser) {
             this.authBtn.textContent = `@${this.currentUser.username}`;
+            this.authBtn.style.fontFamily = 'var(--font-mono)';
         } else {
             this.authBtn.textContent = 'ENTER';
+            this.authBtn.style.fontFamily = '';
         }
     }
 
@@ -406,7 +414,7 @@ class TroughApp {
         header.innerHTML = `
           <div style="display:flex;gap:12px;align-items:center">
             ${avatar}
-            <div style="font-weight:700;font-size:1.1rem">@${user.username}</div>
+            <div style="font-weight:700;font-size:1.1rem;font-family:var(--font-mono)">@${user.username}</div>
           </div>
           ${isOwner ? `
           <div class="profile-actions" style="display:flex;gap:8px;align-items:center">
@@ -636,13 +644,21 @@ class TroughApp {
             meta.innerHTML = `
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                   <div style="min-width:0">
-                    <div class="image-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(image.title || image.original_name || 'Untitled').trim()}</div>
-                    <div class="image-author"><a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${username}</a></div>
+                    <div class="image-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${(image.title || image.original_name || 'Untitled').trim()}</a></div>
+                    <div class="image-author" style="font-family:var(--font-mono)"><a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${username}</a></div>
                   </div>
                   ${actions}
                 </div>
                 ${captionHtml}`;
             meta.addEventListener('click', async (e) => {
+                const a = e.target.closest('a.image-link');
+                if (a) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    history.pushState({}, '', a.getAttribute('href'));
+                    await this.renderImagePage(image.id);
+                    return;
+                }
                 const btn = e.target.closest('button');
                 if (!btn) return;
                 const act = btn.dataset.act;
@@ -745,8 +761,20 @@ class TroughApp {
             lightboxImg.alt = image.original_name || image.title || '';
         }
         const username = image.username || image.author || 'Unknown';
-        lightboxTitle.textContent = image.title || image.original_name || 'Untitled';
+        const titleText = image.title || image.original_name || 'Untitled';
+        // Title becomes a link to the single-image page
+        lightboxTitle.innerHTML = `<a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${titleText}</a>`;
+        const link = lightboxTitle.querySelector('a.image-link');
+        if (link) {
+            link.addEventListener('click', async (e) => {
+                e.preventDefault();
+                history.pushState({}, '', link.getAttribute('href'));
+                this.closeLightbox();
+                await this.renderImagePage(image.id);
+            });
+        }
         lightboxAuthor.innerHTML = `<a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${username}</a>`;
+        lightboxAuthor.style.fontFamily = 'var(--font-mono)';
         lightboxLike.classList.remove('liked');
         lightboxLike.onclick = () => this.toggleLike(image.id);
         // Render caption (sanitized markdown) in lightbox
@@ -1204,6 +1232,13 @@ class TroughApp {
           <div class="settings-label">User management</div>
           <input id="user-search" class="settings-input" placeholder="Search users by name or email"/>
           <div id="user-results" style="display:grid;gap:8px"></div>
+          <div id="user-pagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <button id="user-prev" class="nav-btn" disabled>Prev</button>
+              <button id="user-next" class="nav-btn" disabled>Next</button>
+            </div>
+            <div id="user-page-info" class="meta" style="opacity:.8"></div>
+          </div>
         `;
 
         wrap.appendChild(siteSection);
@@ -1294,12 +1329,32 @@ class TroughApp {
                 row.appendChild(left); row.appendChild(right); results.appendChild(row);
             });
         };
-        const doSearch = async (q) => {
-            if (!q) { results.innerHTML = ''; return; }
-            const r = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
-            if (r.ok) { const d = await r.json(); renderRows(d.users||[]); }
+        // Pagination state
+        const prevBtn = document.getElementById('user-prev');
+        const nextBtn = document.getElementById('user-next');
+        const pageInfo = document.getElementById('user-page-info');
+        let currentPage = 1;
+        const pageSize = 50;
+
+        const updatePager = (page, totalPages, total) => {
+            currentPage = page;
+            prevBtn.disabled = page <= 1;
+            nextBtn.disabled = totalPages <= 1 || page >= totalPages;
+            pageInfo.textContent = totalPages ? `Page ${page} of ${totalPages} • ${total} users` : '';
         };
-        searchInput.addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => doSearch(e.target.value.trim()), 250); });
+
+        const doSearch = async (q, page = 1) => {
+            if (!q) { results.innerHTML = ''; updatePager(1, 0, 0); return; }
+            const r = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}&page=${page}&limit=${pageSize}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+            if (r.ok) {
+                const d = await r.json();
+                renderRows(d.users||[]);
+                updatePager(d.page||1, d.total_pages||0, d.total||0);
+            }
+        };
+        searchInput.addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => doSearch(e.target.value.trim(), 1), 250); });
+        prevBtn?.addEventListener('click', () => { const q = searchInput.value.trim(); if (!q) return; doSearch(q, Math.max(1, currentPage - 1)); });
+        nextBtn?.addEventListener('click', () => { const q = searchInput.value.trim(); if (!q) return; doSearch(q, currentPage + 1); });
     }
 
     async renderResetPage() {
@@ -1336,6 +1391,130 @@ class TroughApp {
         overlay.appendChild(panel); document.body.appendChild(overlay);
         overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
         panel.querySelector('#fp-send').onclick = async () => { const email = panel.querySelector('#fp-email').value.trim(); if(!email){ this.showNotification('Enter your email','error'); return; } const r = await fetch('/api/forgot-password',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) }); if (r.status===204){ this.showNotification('Check your email'); overlay.remove(); } else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } };
+    }
+
+    async renderImagePage(id) {
+        if (this.profileTop) this.profileTop.innerHTML = '';
+        this.gallery.innerHTML = '';
+        this.gallery.classList.add('settings-mode');
+        let data = null;
+        try {
+            const r = await fetch(`/api/images/${encodeURIComponent(id)}`);
+            if (!r.ok) throw new Error('not found');
+            data = await r.json();
+        } catch {
+            const wrap = document.createElement('section');
+            wrap.className = 'mono-col';
+            wrap.style.cssText = 'margin:0 auto 16px;max-width:720px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-elevated);color:var(--text-primary)';
+            wrap.innerHTML = `<div style="font-weight:800;letter-spacing:-0.02em;margin-bottom:6px">Image not found</div><div style="color:var(--text-secondary);font-family:var(--font-mono)">The image may have been removed.</div>`;
+            this.gallery.appendChild(wrap);
+            return;
+        }
+        const wrap = document.createElement('section');
+        wrap.className = 'mono-col';
+        wrap.style.cssText = 'margin:0 auto 16px;max-width:980px;padding:16px;color:var(--text-primary)';
+        const title = (data.original_name || 'Untitled');
+        const username = data.username || 'unknown';
+        const captionHtml = data.caption ? `<div class="image-caption" id="single-caption" style="margin-top:8px;color:var(--text-secondary);position:relative">${this.sanitizeAndRenderMarkdown(data.caption)}</div>` : '';
+        wrap.innerHTML = `
+          <div style="display:grid;gap:12px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+              <h1 style="font-size:1.25rem;margin:0;letter-spacing:-0.01em">${title}</h1>
+              <a href="/@${encodeURIComponent(username)}" class="link-btn" style="text-decoration:none">@${username}</a>
+            </div>
+            <div style="display:flex;justify-content:center"><img src="/uploads/${data.filename}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>
+            ${captionHtml}
+          </div>`;
+        this.gallery.appendChild(wrap);
+
+        // Collapsible caption: clamp long captions and toggle on click
+        const cap = wrap.querySelector('#single-caption');
+        if (cap) {
+            const clampPx = 280; // ~14-16 lines depending on line-height
+            cap.style.position = 'relative';
+            cap.style.transition = 'max-height 240ms var(--ease-smooth)';
+            cap.style.cursor = 'default';
+
+            const fade = document.createElement('div');
+            fade.style.cssText = 'position:absolute;left:0;right:0;bottom:0;height:48px;background:linear-gradient(180deg, rgba(0,0,0,0), var(--surface));pointer-events:none;display:none';
+            cap.appendChild(fade);
+
+            // Toggle row BELOW the caption (collapsed state)
+            const toggleRow = document.createElement('div');
+            toggleRow.id = 'cap-toggle-row';
+            toggleRow.style.cssText = 'display:none;text-align:center;margin-top:6px;';
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button'; toggleBtn.className = 'link-btn';
+            toggleBtn.setAttribute('aria-label', 'Expand caption');
+            toggleBtn.setAttribute('aria-controls', 'single-caption');
+            toggleBtn.innerHTML = 'Show more <svg id="cap-toggle-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px;transition:transform 200ms var(--ease-smooth)"><polyline points="6 9 12 15 18 9"/></svg>';
+            toggleRow.appendChild(toggleBtn);
+            cap.parentNode.insertBefore(toggleRow, cap.nextSibling);
+
+            // Toggle INSIDE the caption at the bottom (expanded state)
+            const toggleInside = document.createElement('div');
+            toggleInside.id = 'cap-toggle-inside';
+            toggleInside.style.cssText = 'display:none;margin-top:8px;text-align:center;';
+            const toggleInsideBtn = document.createElement('button');
+            toggleInsideBtn.type = 'button'; toggleInsideBtn.className = 'link-btn';
+            toggleInsideBtn.setAttribute('aria-label', 'Collapse caption');
+            toggleInsideBtn.setAttribute('aria-controls', 'single-caption');
+            toggleInsideBtn.innerHTML = 'Show less <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px;transform:rotate(180deg)"><polyline points="6 9 12 15 18 9"/></svg>';
+            toggleInside.appendChild(toggleInsideBtn);
+            cap.appendChild(toggleInside);
+
+            let collapsed = true;
+            const apply = () => {
+                const overflows = cap.scrollHeight > clampPx + 1; // +1 buffer
+                if (collapsed) {
+                    cap.style.maxHeight = clampPx + 'px';
+                    cap.style.overflow = 'hidden';
+                    cap.style.paddingBottom = '0px';
+                    fade.style.display = overflows ? 'block' : 'none';
+                    toggleRow.style.display = overflows ? 'block' : 'none';
+                    toggleBtn.setAttribute('aria-expanded', 'false');
+                    toggleInside.style.display = 'none';
+                } else {
+                    // Ensure inside toggle is visible before measuring full height
+                    toggleInside.style.display = 'block';
+                    toggleRow.style.display = 'none';
+                    cap.style.overflow = 'visible';
+                    cap.style.paddingBottom = '16px';
+                    fade.style.display = 'none';
+                    // Expand to full content height smoothly
+                    const full = cap.scrollHeight;
+                    cap.style.maxHeight = full + 'px';
+                    toggleBtn.setAttribute('aria-expanded', 'true');
+                }
+            };
+
+            // Initial layout apply after rendering to get accurate scrollHeight
+            requestAnimationFrame(apply);
+
+            const doToggle = () => { collapsed = !collapsed; apply(); };
+
+            // Only toggle via explicit controls
+            toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); doToggle(); });
+            toggleInsideBtn.addEventListener('click', (e) => { e.stopPropagation(); doToggle(); });
+        }
+
+        // Back/forward support
+        window.onpopstate = () => {
+            if (location.pathname.startsWith('/i/')) {
+                const id2 = location.pathname.split('/')[2];
+                this.renderImagePage(id2);
+            } else if (location.pathname.startsWith('/@')) {
+                const u = decodeURIComponent(location.pathname.slice(2));
+                this.renderProfilePage(u);
+            } else if (location.pathname === '/settings') {
+                this.renderSettingsPage();
+            } else if (location.pathname === '/admin') {
+                this.renderAdminPage();
+            } else {
+                this.gallery.classList.remove('settings-mode');
+                this.gallery.innerHTML = ''; if (this.profileTop) this.profileTop.innerHTML=''; this.page=1; this.hasMore=true; this.loadImages();
+            }
+        };
     }
 }
 

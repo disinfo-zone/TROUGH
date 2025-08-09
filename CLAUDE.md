@@ -28,21 +28,27 @@ Everything is minimal with a brutal and exquisite focus on the art — but never
 
 ## Current Status (Repo Snapshot)
 - Backend (Go + Fiber): Implemented
-  - Routes: `/api/register`, `/api/login`, `/api/me`, `/api/feed`, `/api/images/:id`, `/api/upload` (auth), `/api/images/:id/like` (auth), `/api/users/:username`, `/api/users/:username/images`
+  - Routes: `/api/register`, `/api/login`, `/api/me`, `/api/feed`, `/api/images/:id`, `/api/upload` (auth), `/api/images/:id/like` (auth), `/api/users/:username`, `/api/users/:username/images`, `/api/site`
+  - Admin: `/api/admin/users` (GET supports `q`, `page`, `limit`; returns `total_pages`), create/update/delete users, flags, password, SMTP tests, favicon/social image upload
   - JWT auth with password hashing (bcrypt)
   - Image upload with processing (blurhash, dominant color), EXIF scan for AI signatures
   - NSFW gating via user preference
   - Auto-migrations on startup
   - Account (auth): `/api/me/profile` (GET/PATCH), `/api/me/account` (GET), `/api/me/email` (PATCH), `/api/me/password` (PATCH), `/api/me` (DELETE), `/api/me/avatar` (POST)
 - Database (PostgreSQL): Implemented
-  - Tables: `users`, `images`, `likes` with indexes
+  - Tables: `users`, `images`, `likes`, `site_settings` (single row) with indexes
 - Frontend (Vanilla JS/CSS/HTML): Implemented
+  - Routes: SPA handles `/`, `/@:username`, `/settings`, `/admin`, `/i/:id` (single image page)
   - Masonry-like gallery, lightbox, drag & drop upload
+  - Image title links to `/i/:id`; lightbox title links to the same; author names monospace across app
   - Auth modal (login/register) wired to API; token/user persisted to `localStorage`
   - Session validation via `/api/me`; sign out; simple profile menu; disabled submit + show/hide password controls
-  - Loader/toast UI, infinite scroll
+  - Loader/toast UI, infinite scroll; admin user search with pagination controls
+- SEO
+  - Server-side OG/Twitter tags injection per page in `main.go`
+  - Single image pages (`/i/:id`): title `IMAGE TITLE - SITE TITLE`; description `by @username — caption` (truncated); card image uses the image URL; canonical URL injected
 - Ops:
-  - Docker (multi-stage) + docker-compose with DB healthcheck; `Makefile` provided
+  - Docker (multi-stage) + docker-compose with DB healthcheck; `Makefile`
   - Config via `config.yaml` and `.env.example`
 - Tests: Unit + integration tests present (handlers, services)
 
@@ -255,14 +261,11 @@ Place at top of `static/css/style.css` under a `:root` block.
 - Username changes enforce reserved list + uniqueness; clear error messaging.
 
 ## Recent UX Updates
-- Unified upload flow across file picker and drag-and-drop: images upload first, then open a centered preview edit modal showing the image with Title/Caption/NSFW controls. Save before feed refresh.
-- Edit modal improved: tall images are constrained (`max-height: 60vh`), and metadata controls live in a sticky footer area so fields are always visible.
-- Image card actions: Edit/Delete controls are inline with title/author, right-aligned, using high-contrast SVG icons. Titles truncate with ellipsis to ensure actions never hide.
-- Loader: centered and stable; no drift.
-- Settings page introduced (stacked single column) with Username/Avatar/Email/Password/Delete flows.
-- Nav is always a transparent blurred glass; no bottom hairline; sits tighter above content.
-- Fields and body copy use mono; headers/buttons remain sans for hierarchy.
-- Profile upload row no longer shows inline Title/Caption/NSFW; these live in the post‑upload edit modal.
+- Single image page (`/i/:id`) with image, title, creator, and expandable caption ("Show more/less").
+- Image title is a deep link; clicking title skips lightbox; lightbox title links to single image page.
+- Admin user search pagination with Prev/Next and server-side `page`/`limit`.
+- Mobile: `#profile-top` padding tightened; usernames render in monospace in nav, cards, lightbox, and profile header.
+- Settings layout margin: reduced top/bottom to 33px.
 
 ## EXIF
 - Backend writes uploads as high-quality JPEG while preserving XMP and extracting full EXIF into `images.exif_data`.
@@ -270,18 +273,9 @@ Place at top of `static/css/style.css` under a `:root` block.
 - Pending: Validate that all `/api/images/:id` responses include the expected `exif_data` structure across all file types; expand displayed fields with human-friendly labels if desired.
 
 ## Known Gaps / Quick Fixes
-- WebP decode: we accept `image/webp` uploads; decoder registered. Confirm with sample file end‑to‑end.
-- Frontend polish:
-  - Profile view and settings UI are minimal; implement real profile header/edit modal
-  - Like count: display + optimistic updates in gallery/lightbox
-  - Better skeletons/blurhash placeholders on initial load
-- Security/Hardening:
-  - Use strong `JWT_SECRET` in production
-  - Consider rate limiting for auth endpoints
-  - Validate image metadata and file type more defensively
-  - Enforce reserved usernames and uniqueness on user rename (done)
-- Ops:
-  - Ensure `.env` is used locally; confirm CORS origins for prod
+- Add like counts rendering and optimistic updates.
+- Improve skeletons/blurhash placeholders on initial load.
+- Confirm WebP decode end-to-end.
 
 ## Notable Implementation Details
 - Dockerfile: Go 1.23‑alpine (multi‑stage)

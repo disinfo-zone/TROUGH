@@ -1,8 +1,57 @@
+# Environment and secrets
 .env
+.env.*
+/config.yaml
+
+# OS / Editor
 .DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# AI/LLM assistant artifacts
+CLAUDE.md
+claude.md
+.cursorrules
+.cursor/
+.anthropic/
+.openai/
+*.prompt
+*.prompt.md
+*.llm
+*.llm.*
+
+# Logs
 *.log
+logs/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.out
+/dist/
+/bin/
+trough
+
+# Temp/cache
 /tmp
+.cache/
+
+# Data/media (generated/uploads)
 /uploads
 /data
-*.exe
-trough
+
+# Test/coverage profiles
+coverage/
+coverage.out
+*.coverprofile
+*.lcov
+.nyc_output/
+*.pprof
+
+# Node/Yarn (if any future tooling)
+node_modules/
+yarn.lock
+package-lock.json

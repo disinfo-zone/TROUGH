@@ -776,12 +776,13 @@ input, button {
 /* Align profile header/upload/bio with gallery */
 #profile-top { max-width: 1800px; margin: 0 auto; padding: calc(80px + var(--space-2xl)) var(--space-xl) 0; }
 @media (max-width: 1400px) { #profile-top { padding-left: var(--space-lg); padding-right: var(--space-lg); } }
-@media (max-width: 600px)  { #profile-top { padding-left: var(--space-md); padding-right: var(--space-md); } }
+/* Mobile-only: tighter top padding */
+@media (max-width: 600px)  { #profile-top { padding: calc(20px + var(--space-2xl)) var(--space-xl) 0; } }
 /* Monolithic row spans gallery width */
 .mono-col { width: 100%; max-width: none; column-span: all; break-inside: avoid; }
 
 /* Settings layout centered single column */
-.settings-wrap { max-width: 720px; margin: 96px auto; padding: 0 16px; display: grid; gap: 24px; width: 100%; }
+.settings-wrap { max-width: 720px; margin: 33px auto; padding: 0 16px; display: grid; gap: 24px; width: 100%; }
 
 /* Group card aesthetic for clarity on dark background */
 .settings-group { display: grid; gap: 10px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-2xl); padding: var(--space-lg); box-shadow: var(--shadow-md); }

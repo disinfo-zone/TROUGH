@@ -344,7 +344,13 @@ func (h *UserHandler) AdminListUsers(c *fiber.Ctx) error {
 	if page < 1 {
 		page = 1
 	}
-	limit := 50
+	// Allow configurable page size with sane bounds
+	limit, _ := strconv.Atoi(c.Query("limit", "50"))
+	if limit < 1 {
+		limit = 1
+	} else if limit > 200 {
+		limit = 200
+	}
 	q := strings.TrimSpace(c.Query("q", ""))
 	var (
 		users []models.User
@@ -363,7 +369,8 @@ func (h *UserHandler) AdminListUsers(c *fiber.Ctx) error {
 	for i := range users {
 		resp[i] = users[i].ToResponse()
 	}
-	return c.JSON(fiber.Map{"users": resp, "page": page, "total": total})
+	totalPages := (total + limit - 1) / limit
+	return c.JSON(fiber.Map{"users": resp, "page": page, "limit": limit, "total": total, "total_pages": totalPages})
 }
 
 func (h *UserHandler) AdminSetUserFlags(c *fiber.Ctx) error {
