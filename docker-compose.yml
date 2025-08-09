@@ -5,8 +5,14 @@ services:
     build: .
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgres://trough:trough@db:5432/trough?sslmode=disable
+      - JWT_SECRET=${JWT_SECRET:-trough-default-secret-change-in-production}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     volumes:
       - ./uploads:/app/uploads
       - ./config.yaml:/app/config.yaml:ro

@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"database/sql"
+	"errors"
 	"image"
 	"image/draw"
 	_ "image/jpeg"
 	_ "image/png"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -254,6 +256,12 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	if err := os.MkdirAll(avatarDir, 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create avatar directory"})
 	}
+	// Fetch current user to know old avatar URL
+	u, _ := h.userRepo.GetByID(userID)
+	oldAvatar := ""
+	if u != nil && u.AvatarURL != nil {
+		oldAvatar = *u.AvatarURL
+	}
 	// Attempt to decode and center-crop 95%
 	src, err := file.Open()
 	if err != nil {
@@ -280,12 +288,10 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 		}); ok {
 			cropped = s.SubImage(rect)
 		} else {
-			// Fallback copy
 			dst := image.NewRGBA(image.Rect(0, 0, cw, ch))
 			draw.Draw(dst, dst.Bounds(), img, rect.Min, draw.Src)
 			cropped = dst
 		}
-		// Save as JPEG
 		out, err := os.Create(path)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save avatar"})
@@ -300,11 +306,18 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 		if err := c.SaveFile(file, path); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save avatar"})
 		}
-		// Normalize URL to this saved path
 	}
 	url := "/uploads/avatars/" + filepath.Base(path)
 	if _, err := h.userRepo.UpdateProfile(userID, models.UpdateUserRequest{AvatarURL: &url}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update profile"})
+	}
+	// Best-effort delete of previous avatar file if it was under /uploads/avatars/
+	if oldAvatar != "" && strings.HasPrefix(oldAvatar, "/uploads/avatars/") {
+		oldPath := filepath.Join(".", oldAvatar) // oldAvatar begins with "/uploads/avatars/"
+		if remErr := os.Remove(oldPath[1:]); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
+			// Log but do not fail the response
+			log.Printf("avatar cleanup failed for %s: %v", oldAvatar, remErr)
+		}
 	}
 	return c.JSON(fiber.Map{"avatar_url": url})
 }

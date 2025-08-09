@@ -17,6 +17,7 @@ type User struct {
 	IsAdmin      bool      `json:"is_admin" db:"is_admin"`
 	ShowNSFW     bool      `json:"show_nsfw" db:"show_nsfw"`
 	IsDisabled   bool      `json:"is_disabled" db:"is_disabled"`
+	NsfwPref     string    `json:"nsfw_pref" db:"nsfw_pref"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
@@ -37,6 +38,7 @@ type UpdateUserRequest struct {
 	AvatarURL *string `json:"avatar_url" validate:"omitempty,url"`
 	ShowNSFW  *bool   `json:"show_nsfw"`
 	Password  *string `json:"password" validate:"omitempty,min=6"`
+	NsfwPref  *string `json:"nsfw_pref" validate:"omitempty,oneof=hide show blur"`
 }
 
 type UserResponse struct {
@@ -46,6 +48,7 @@ type UserResponse struct {
 	AvatarURL *string   `json:"avatar_url"`
 	IsAdmin   bool      `json:"is_admin"`
 	ShowNSFW  bool      `json:"show_nsfw"`
+	NsfwPref  string    `json:"nsfw_pref"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -71,6 +74,7 @@ func (u *User) ToResponse() UserResponse {
 		AvatarURL: u.AvatarURL,
 		IsAdmin:   u.IsAdmin,
 		ShowNSFW:  u.ShowNSFW,
+		NsfwPref:  u.NsfwPref,
 		CreatedAt: u.CreatedAt,
 	}
 }

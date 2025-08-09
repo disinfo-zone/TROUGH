@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 · TROUGH</title>
+  <link rel="stylesheet" href="/css/style.css?v=v2" />
+  <style>
+    :root { color-scheme: dark; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: var(--surface); color: var(--text-primary); overflow: hidden; }
+    .grid { position: fixed; inset: -20vh -20vw; pointer-events: none; opacity: .08; background-image: linear-gradient(to right, currentColor 1px, transparent 1px), linear-gradient(to bottom, currentColor 1px, transparent 1px); background-size: 28px 28px; filter: blur(.4px); }
+    .shell { position: relative; width: min(980px, calc(100% - 40px)); padding: clamp(28px, 6vw, 54px); border: 1px solid var(--border); border-radius: var(--radius-2xl); background: var(--surface-elevated); box-shadow: var(--shadow-2xl); overflow: hidden; }
+    .halo { position:absolute; inset:-20%; background: radial-gradient(600px 420px at 20% 10%, rgba(255,255,255,.06), transparent 60%), radial-gradient(800px 600px at 120% 120%, rgba(255,255,255,.05), transparent 60%); filter: blur(30px); opacity:.35; pointer-events:none; }
+    .mast { display:flex; align-items:baseline; justify-content:space-between; margin-bottom: 18px; letter-spacing:-0.03em; }
+    .brand { font-weight: 800; }
+    .code { font-family: var(--font-mono); font-size: clamp(64px, 12vw, 164px); line-height:.86; font-weight: 700; letter-spacing: 0.02em; }
+    .sub { font-family: var(--font-mono); color: var(--text-secondary); margin-top: 10px; }
+    .line { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); margin: 14px 0 18px; }
+    .glyphs { position: absolute; right: 18px; bottom: 18px; opacity: .25; font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; }
+    .action { margin-top: 18px; }
+    .nav-btn-like { padding: var(--space-sm) var(--space-lg); font-size: 0.9rem; font-weight: 600; color: var(--surface); background: var(--text-primary); border: 1px solid var(--text-primary); border-radius: var(--radius-full); box-shadow: var(--shadow-sm); text-decoration:none; transition: all var(--duration-normal) var(--ease-out); }
+    .nav-btn-like:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+  </style>
+</head>
+<body>
+  <div class="grid"></div>
+  <div class="shell">
+    <div class="halo"></div>
+    <div class="mast">
+      <div class="brand">TROUGH</div>
+      <div style="opacity:.6;font-family:var(--font-mono);font-size:12px">error: not_found</div>
+    </div>
+    <div class="code">404</div>
+    <div class="line"></div>
+    <div class="sub">The path dissolves into noise. Return to the river.</div>
+    <div class="action"><a class="nav-btn-like" href="/">Back to river</a></div>
+    <div class="glyphs">// 0x00 0x14 0x2F 0x7A</div>
+  </div>
+</body>
+</html> 

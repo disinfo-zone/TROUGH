@@ -75,6 +75,26 @@ func Protected() fiber.Handler {
 	}
 }
 
+func OptionalUserID(c *fiber.Ctx) uuid.UUID {
+	tokenString := c.Get("Authorization")
+	if tokenString == "" {
+		return uuid.Nil
+	}
+	if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
+		tokenString = tokenString[7:]
+	}
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(getJWTSecret()), nil
+	})
+	if err != nil || !token.Valid {
+		return uuid.Nil
+	}
+	if claims, ok := token.Claims.(*Claims); ok {
+		return claims.UserID
+	}
+	return uuid.Nil
+}
+
 func GetUserID(c *fiber.Ctx) uuid.UUID {
 	userID, ok := c.Locals("user_id").(uuid.UUID)
 	if !ok {

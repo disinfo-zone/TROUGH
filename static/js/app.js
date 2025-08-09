@@ -106,6 +106,14 @@ class TroughApp {
         });
     }
 
+    // Sign out clears auth and updates UI
+    signOut() {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        this.currentUser = null;
+        this.updateAuthButton();
+    }
+
     setupAuthModal() {
         const tabs = document.querySelectorAll('.auth-tab');
         const form = document.getElementById('auth-form');
@@ -377,10 +385,30 @@ class TroughApp {
             user = await u.json();
             imgs = i.ok ? await i.json() : { images: [] };
         } catch (e) {
-            this.showNotification('Profile not found', 'error');
+            // Styled in-app error view
+            this.gallery.innerHTML = '';
+            if (this.profileTop) this.profileTop.innerHTML = '';
+            const wrap = document.createElement('section');
+            wrap.className = 'mono-col';
+            wrap.style.cssText = 'margin:120px auto 0;max-width:720px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-elevated);color:var(--text-primary)';
+            wrap.innerHTML = `
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="font-weight:800;letter-spacing:-0.02em">User not found</div>
+                <span style="opacity:.6;font-family:var(--font-mono);font-size:12px">error: profile_missing</span>
+              </div>
+              <div style="color:var(--text-secondary);font-family:var(--font-mono);line-height:1.6">The profile <strong>@${username}</strong> does not exist.</div>
+              <div style="margin-top:12px"><a href="/" class="nav-btn" style="text-decoration:none">Back to river</a></div>
+            `;
+            this.gallery.appendChild(wrap);
             return;
         }
         const isOwner = this.currentUser && (this.currentUser.username === user.username);
+
+        // Normalize image objects (ensure caption field exists as string)
+        imgs.images = (imgs.images || []).map(img => ({
+            ...img,
+            caption: typeof img.caption === 'string' ? img.caption : (img.caption || '')
+        }));
 
         // Header (no backdrop)
         const header = document.createElement('section');
@@ -392,11 +420,12 @@ class TroughApp {
             ${avatar}
             <div style="font-weight:700;font-size:1.1rem">@${user.username}</div>
           </div>
-          ${isOwner ? '<button id="profile-settings" class="link-btn">Settings</button>' : ''}
+          ${isOwner ? '<div style="display:flex;gap:8px;align-items:center"><button id="profile-logout" class="nav-btn">Sign out</button><button id="profile-settings" class="link-btn">Settings</button></div>' : ''}
         `;
         this.profileTop.appendChild(header);
         if (isOwner) {
             document.getElementById('profile-settings').onclick = () => { history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
+            document.getElementById('profile-logout').onclick = () => { this.signOut(); window.location.href = '/'; };
         }
 
         // Upload panel (owner only) unchanged styling minimal
@@ -416,10 +445,12 @@ class TroughApp {
             const fileBtn = uploadPanel.querySelector('#profile-file');
             const pick = document.createElement('input'); pick.type = 'file'; pick.accept = 'image/*'; pick.multiple = true; pick.style.display = 'none'; uploadPanel.appendChild(pick);
             const handleFiles = async (files) => {
-                for (const f of files) { await this.uploadImage(f, {}); }
-                const resp = await fetch(`/api/users/${encodeURIComponent(username)}/images?page=1`);
-                const data = await resp.json().catch(()=>({images:[]}));
-                this.gallery.innerHTML = ''; (data.images || []).forEach((img) => this.createImageCard(img));
+                for (const f of files) {
+                    const uploaded = await this.uploadImage(f, {});
+                    if (uploaded) {
+                        this.openEditModal({ id: uploaded.id, original_name: uploaded.original_name, caption: uploaded.caption || '', is_nsfw: false, filename: uploaded.filename }, null);
+                    }
+                }
             };
             fileBtn.addEventListener('click', () => pick.click());
             pick.addEventListener('change', (e) => handleFiles(Array.from(e.target.files || [])));
@@ -479,7 +510,10 @@ class TroughApp {
         this.loading = true;
         this.showLoader();
         try {
-            const resp = await fetch(`/api/feed?page=${this.page}`);
+            const token = localStorage.getItem('token');
+            const resp = await fetch(`/api/feed?page=${this.page}`, {
+                headers: token ? { 'Authorization': `Bearer ${token}` } : undefined
+            });
             if (resp.ok) {
                 const data = await resp.json();
                 if (data.images && data.images.length > 0) {
@@ -549,12 +583,27 @@ class TroughApp {
             img.src = `/uploads/${image.filename}`;
             img.alt = image.original_name || image.title || '';
             img.loading = 'lazy';
+            // NSFW blur logic based on current user preference
+            const nsfwPref = (this.currentUser?.nsfw_pref || (this.currentUser?.show_nsfw ? 'show' : 'hide'));
+            const shouldBlur = image.is_nsfw && nsfwPref === 'blur';
+            const shouldHide = image.is_nsfw && (!this.currentUser || nsfwPref === 'hide');
+            if (shouldHide) { return; }
+            if (shouldBlur) {
+                card.classList.add('nsfw-blur');
+                const mask = document.createElement('div');
+                mask.className = 'nsfw-mask';
+                mask.innerHTML = '<span>NSFW · Click to reveal</span>';
+                card.appendChild(mask);
+                const reveal = (e) => { e.stopPropagation(); card.classList.remove('nsfw-blur'); mask.remove(); img.removeEventListener('click', reveal); };
+                img.addEventListener('click', reveal, { once: true });
+                mask.addEventListener('click', reveal, { once: true });
+            }
             card.appendChild(img);
 
             const meta = document.createElement('div');
             meta.className = 'image-meta';
             const username = image.username || image.author || 'Unknown';
-            const captionHtml = image.caption ? `<div class="image-caption" style="margin-top:4px;color:var(--text-secondary);font-size:0.8rem">${(image.caption || '').slice(0, 2000)}</div>` : '';
+            const captionHtml = image.caption ? `<div class="image-caption" style="margin-top:4px;color:var(--text-secondary);font-size:0.8rem">${this.sanitizeAndRenderMarkdown(image.caption)}</div>` : '';
             const actions = canEdit ? `
                 <div class="image-actions" style="display:flex;gap:8px;align-items:center;flex-shrink:0">
                   <button title="Edit" class="like-btn" data-act="edit" data-id="${image.id}" style="width:28px;height:28px;color:var(--text-secondary)">
@@ -580,7 +629,7 @@ class TroughApp {
                 const id = btn.dataset.id;
                 e.stopPropagation();
                 if (act === 'delete') {
-                    const ok = confirm('Delete image?');
+                    const ok = await this.showConfirm('Delete image?');
                     if (ok) {
                         const resp = await fetch(`/api/images/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
                         if (resp.status === 204) { card.remove(); this.showNotification('Image deleted'); } else { this.showNotification('Delete failed', 'error'); }
@@ -590,6 +639,42 @@ class TroughApp {
                 }
             });
             card.appendChild(meta);
+
+            // Hover effect classes to drive keyframed filter flash
+            const restartAnim = () => { img.style.animation = 'none'; void img.offsetWidth; img.style.animation = ''; };
+            card.addEventListener('mouseenter', () => {
+                restartAnim();
+                card.classList.remove('leaving');
+                card.classList.add('hovering');
+            });
+            card.addEventListener('mouseleave', () => {
+                restartAnim();
+                card.classList.remove('hovering');
+                card.classList.add('leaving');
+                // Clean up class after animation ends
+                img.addEventListener('animationend', function onEnd() {
+                    card.classList.remove('leaving');
+                    img.removeEventListener('animationend', onEnd);
+                });
+            });
+
+            // Toggle caption expansion on first image click (default view clamps)
+            if (image.caption) {
+                let captionExpanded = false;
+                const toggleCaption = (ev) => {
+                    ev.stopPropagation();
+                    const cap = meta.querySelector('.image-caption');
+                    if (!cap) return;
+                    cap.classList.toggle('expanded');
+                    captionExpanded = cap.classList.contains('expanded');
+                };
+                img.addEventListener('click', (ev) => { if (!captionExpanded) toggleCaption(ev); });
+                // Also allow toggling by clicking the caption itself
+                meta.addEventListener('click', (ev) => {
+                    const capEl = ev.target.closest('.image-caption');
+                    if (capEl) { toggleCaption(ev); }
+                });
+            }
         }
 
         card.addEventListener('click', () => this.openLightbox(image));
@@ -632,6 +717,7 @@ class TroughApp {
         const lightboxTitle = document.getElementById('lightbox-title');
         const lightboxAuthor = document.getElementById('lightbox-author');
         const lightboxLike = document.getElementById('lightbox-like');
+        const lightboxCaption = document.getElementById('lightbox-caption');
         if (!lightboxImg) return;
 
         if (image.filename) {
@@ -643,6 +729,10 @@ class TroughApp {
         lightboxAuthor.innerHTML = `<a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${username}</a>`;
         lightboxLike.classList.remove('liked');
         lightboxLike.onclick = () => this.toggleLike(image.id);
+        // Render caption (sanitized markdown) in lightbox
+        if (lightboxCaption) {
+            lightboxCaption.innerHTML = image.caption ? this.sanitizeAndRenderMarkdown(image.caption) : '';
+        }
         this.lightbox.classList.add('active');
         document.body.style.overflow = 'hidden';
     }
@@ -764,6 +854,16 @@ class TroughApp {
             <div class="form-error" id="err-password" style="color:#ff5c5c;font-size:0.8rem"></div>
           </section>
           <section class="settings-group">
+            <div class="settings-label">NSFW content</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="nsfw-pref" value="hide"> Hide</label>
+              <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="nsfw-pref" value="show"> Show</label>
+              <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="nsfw-pref" value="blur"> Blur until clicked</label>
+            </div>
+            <div class="settings-actions"><button id="btn-nsfw" class="nav-btn">Save NSFW preference</button></div>
+            <div class="form-error" id="err-nsfw" style="color:#ff5c5c;font-size:0.8rem"></div>
+          </section>
+          <section class="settings-group">
             <div class="settings-label" style="color:#ff5c5c">Delete</div>
             <div class="settings-actions" style="gap:8px;align-items:center">
               <input type="text" id="delete-confirm" placeholder="Type 'DELETE' to confirm" class="settings-input" style="flex:1"/>
@@ -797,6 +897,13 @@ class TroughApp {
 
         // Handlers
         const authHeader = { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}`, 'Content-Type': 'application/json' };
+        // Initialize NSFW radio from user
+        const pref = (this.currentUser?.nsfw_pref || ((this.currentUser?.show_nsfw) ? 'show' : 'hide'));
+        (document.querySelector(`input[name='nsfw-pref'][value='${pref}']`)||document.querySelector(`input[name='nsfw-pref'][value='hide']`)).checked = true;
+        document.getElementById('btn-nsfw').onclick = async () => {
+            const sel = document.querySelector("input[name='nsfw-pref']:checked")?.value || 'hide';
+            try { const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ nsfw_pref: sel }) }); if (!resp.ok) throw await resp.json(); const u = await resp.json(); this.currentUser = u; localStorage.setItem('user', JSON.stringify(u)); this.showNotification('NSFW preference saved'); } catch (e) { document.getElementById('err-nsfw').textContent = e.error || 'Failed'; }
+        };
         document.getElementById('btn-username').onclick = async () => {
             const username = document.getElementById('settings-username').value.trim();
             try { const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ username }) }); if (!resp.ok) throw await resp.json(); const userResp = await resp.json(); this.currentUser=userResp; localStorage.setItem('user', JSON.stringify(userResp)); this.updateAuthButton(); this.showNotification('Username changed'); } catch (e) { document.getElementById('err-username').textContent = e.error || 'Failed'; }
@@ -904,6 +1011,30 @@ class TroughApp {
     hideLoader() {
         const loader = document.querySelector('.loader');
         if (loader) loader.remove();
+    }
+
+    // Minimal in-app confirm modal
+    showConfirm(message) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2800;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px;';
+            const panel = document.createElement('div');
+            panel.style.cssText = 'max-width:460px;width:100%;background:var(--surface-elevated);border:1px solid var(--border);border-radius:12px;padding:16px;color:var(--text-primary)';
+            panel.innerHTML = `
+                <div style="font-weight:700;margin-bottom:8px">Confirm</div>
+                <div style="color:var(--text-secondary);font-family:var(--font-mono);margin-bottom:12px">${message}</div>
+                <div style="display:flex;gap:8px;justify-content:flex-end">
+                  <button id="cf-cancel" class="nav-btn">Cancel</button>
+                  <button id="cf-ok" class="nav-btn nav-btn-danger">Delete</button>
+                </div>`;
+            overlay.appendChild(panel);
+            const done = (val) => { overlay.remove(); resolve(val); };
+            panel.querySelector('#cf-cancel').onclick = () => done(false);
+            panel.querySelector('#cf-ok').onclick = () => done(true);
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+            document.addEventListener('keydown', function onKey(e){ if(e.key==='Escape'){ done(false); document.removeEventListener('keydown', onKey);} });
+            document.body.appendChild(overlay);
+        });
     }
 
     showNotification(message, type = 'info') {

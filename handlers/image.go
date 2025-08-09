@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
@@ -160,30 +161,22 @@ func (h *ImageHandler) GetFeed(c *fiber.Ctx) error {
 	if page < 1 {
 		page = 1
 	}
-
 	limit := 20
-	showNSFW := false
 
-	userID := middleware.GetUserID(c)
-	if userID != uuid.Nil {
-		user, err := h.userRepo.GetByID(userID)
-		if err == nil {
-			showNSFW = user.ShowNSFW
+	// Determine NSFW visibility based on user pref
+	showNSFW := false
+	uid := middleware.OptionalUserID(c)
+	if uid != uuid.Nil {
+		if user, err := h.userRepo.GetByID(uid); err == nil {
+			showNSFW = user.ShowNSFW || strings.ToLower(strings.TrimSpace(user.NsfwPref)) != "hide"
 		}
 	}
 
 	images, total, err := h.imageRepo.GetFeed(page, limit, showNSFW)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to fetch images",
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images"})
 	}
-
-	return c.JSON(models.FeedResponse{
-		Images: images,
-		Page:   page,
-		Total:  total,
-	})
+	return c.JSON(models.FeedResponse{Images: images, Page: page, Total: total})
 }
 
 func (h *ImageHandler) GetImage(c *fiber.Ctx) error {
@@ -319,6 +312,13 @@ func (h *ImageHandler) DeleteImage(c *fiber.Ctx) error {
 	}
 	if !isOwner && !isAdmin {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	// Remove file from disk first; if it's already gone, continue
+	if img.Filename != "" {
+		path := filepath.Join("uploads", img.Filename)
+		if remErr := os.Remove(path); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to remove image file"})
+		}
 	}
 	if err := h.imageRepo.Delete(imgID); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete image"})

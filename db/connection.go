@@ -58,6 +58,8 @@ func Migrate() error {
 
 		-- New admin moderation field
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_disabled BOOLEAN DEFAULT FALSE;
+		-- NSFW preference tri-state: hide|show|blur (default hide)
+		ALTER TABLE users ADD COLUMN IF NOT EXISTS nsfw_pref VARCHAR(10) DEFAULT 'hide';
 
 		CREATE TABLE IF NOT EXISTS images (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

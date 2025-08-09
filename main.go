@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -134,6 +135,17 @@ func main() {
 	api.Patch("/admin/users/:id", middleware.Protected(), userHandler.AdminSetUserFlags)
 	api.Delete("/admin/images/:id", middleware.Protected(), userHandler.AdminDeleteImage)
 	api.Patch("/admin/images/:id/nsfw", middleware.Protected(), userHandler.AdminSetImageNSFW)
+
+	// Fallback: pretty 404 for non-API GETs, JSON for API
+	app.Use(func(c *fiber.Ctx) error {
+		if strings.HasPrefix(c.Path(), "/api") {
+			return fiber.ErrNotFound
+		}
+		if c.Method() == fiber.MethodGet {
+			return c.Status(fiber.StatusNotFound).SendFile("./static/404.html")
+		}
+		return c.SendStatus(fiber.StatusNotFound)
+	})
 
 	log.Printf("Server starting on port 8080")
 	log.Fatal(app.Listen(":8080"))

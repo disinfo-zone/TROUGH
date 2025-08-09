@@ -80,6 +80,11 @@ func (r *UserRepository) UpdateProfile(id uuid.UUID, updates UpdateUserRequest) 
 		args = append(args, *updates.ShowNSFW)
 		argPos++
 	}
+	if updates.NsfwPref != nil {
+		setClauses = append(setClauses, fmt.Sprintf("nsfw_pref = $%d", argPos))
+		args = append(args, *updates.NsfwPref)
+		argPos++
+	}
 	if len(setClauses) == 0 {
 		return r.GetByID(id)
 	}

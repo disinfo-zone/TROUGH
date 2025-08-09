@@ -33,6 +33,7 @@ Everything is minimal with a brutal and exquisite focus on the art — but never
   - Image upload with processing (blurhash, dominant color), EXIF scan for AI signatures
   - NSFW gating via user preference
   - Auto-migrations on startup
+  - Account (auth): `/api/me/profile` (GET/PATCH), `/api/me/account` (GET), `/api/me/email` (PATCH), `/api/me/password` (PATCH), `/api/me` (DELETE), `/api/me/avatar` (POST)
 - Database (PostgreSQL): Implemented
   - Tables: `users`, `images`, `likes` with indexes
 - Frontend (Vanilla JS/CSS/HTML): Implemented
@@ -170,8 +171,8 @@ Place at top of `static/css/style.css` under a `:root` block.
 
 ### Components (key specs)
 - **Navigation**
-  - Left: wordmark; Center: nothing (negative space); Right: auth/profile.
-  - Sticky; 56–64px tall; hairline bottom rule; backdrop blur only on scroll.
+  - Left: wordmark; Center: negative space; Right: auth/profile.
+  - Sticky; 56–64px; backdrop blur is always on (transparent glass). No bottom hairline border.
   - Hover/focus are color‑only; no heavy shadows.
 
 - **Gallery Cards**
@@ -187,7 +188,19 @@ Place at top of `static/css/style.css` under a `:root` block.
 
 - **Upload**
   - Dropzone with dashed hairline; accent glow on drag‑over; progress bar using accent.
-  - Clear validations: size/type; EXIF AI check; NSFW toggle; error toasts mapped to fields.
+  - After upload, an edit modal presents Title, Caption, NSFW toggles (not inline on profile).
+  - Clear validations: size/type; EXIF AI check; error toasts mapped to fields.
+
+- **Profile**
+  - Header with avatar/handle/bio; user stream; when owner: upload control (dropzone only) pinned.
+  - Bio appears inline under header, left‑aligned, sanitized Markdown (links/bold/italic), 500 char max, inline editor with live count for owner.
+  - Avatar uploads crop ~5% inwards (center) on save to remove edge/border artifacts.
+
+- **Settings**
+  - Single centered column (stacked): Username → Avatar → Email → Password → Delete.
+  - Username change validates uniqueness (case‑insensitive) and blocks reserved names (`admin`, `root`, `system`, `support`, `moderator`, `owner`, `undefined`, `null`, etc.).
+  - Password change requires Current, New, Confirm; strength meter must indicate sufficiently strong.
+  - Delete account: explicit confirm field requiring `DELETE`.
 
 - **Auth Modal**
   - One panel with tabs (Login/Register); real‑time validation; submit disabled until valid.
@@ -218,6 +231,7 @@ Place at top of `static/css/style.css` under a `:root` block.
 - Image loading: `loading="lazy"`, `decoding="async"`, prioritize first row.
 - Use `content-visibility: auto` for off‑screen sections where appropriate.
 - Avoid heavy filters; prefer precomputed blurhash and transforms.
+- Keep page chrome light: nav uses GPU‑friendly blur (transparent background) with no extra rules/borders.
 
 ## Implementation Plan (simple, no scaffolding)
 1) **Introduce tokens** at the top of `static/css/style.css`. Replace ad‑hoc colors/sizing with variables.
@@ -237,12 +251,18 @@ Place at top of `static/css/style.css` under a `:root` block.
 - Client‑side validation with inline errors; disable submit during request
 - Show/hide password; Enter submits; clear on success; focus management
 - Persisted auth state in nav; sign out; token expiry detection and reset
+- Settings password change mirrors registration: Current/New/Confirm + strength meter; block weak or mismatched values.
+- Username changes enforce reserved list + uniqueness; clear error messaging.
 
 ## Recent UX Updates
 - Unified upload flow across file picker and drag-and-drop: images upload first, then open a centered preview edit modal showing the image with Title/Caption/NSFW controls. Save before feed refresh.
 - Edit modal improved: tall images are constrained (`max-height: 60vh`), and metadata controls live in a sticky footer area so fields are always visible.
 - Image card actions: Edit/Delete controls are inline with title/author, right-aligned, using high-contrast SVG icons. Titles truncate with ellipsis to ensure actions never hide.
 - Loader: centered and stable; no drift.
+- Settings page introduced (stacked single column) with Username/Avatar/Email/Password/Delete flows.
+- Nav is always a transparent blurred glass; no bottom hairline; sits tighter above content.
+- Fields and body copy use mono; headers/buttons remain sans for hierarchy.
+- Profile upload row no longer shows inline Title/Caption/NSFW; these live in the post‑upload edit modal.
 
 ## EXIF
 - Backend writes uploads as high-quality JPEG while preserving XMP and extracting full EXIF into `images.exif_data`.
@@ -259,6 +279,7 @@ Place at top of `static/css/style.css` under a `:root` block.
   - Use strong `JWT_SECRET` in production
   - Consider rate limiting for auth endpoints
   - Validate image metadata and file type more defensively
+  - Enforce reserved usernames and uniqueness on user rename (done)
 - Ops:
   - Ensure `.env` is used locally; confirm CORS origins for prod
 
