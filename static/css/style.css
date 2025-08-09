@@ -78,6 +78,11 @@
   --ease-spring: cubic-bezier(0.68, -0.55, 0.265, 1.55);
 }
 
+/* Hide number input arrows for a cleaner look */
+.settings-input.no-spinner::-webkit-outer-spin-button,
+.settings-input.no-spinner::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.settings-input.no-spinner { -moz-appearance: textfield; }
+
 @media (prefers-color-scheme: light) {
   :root {
     --color-bg:       #f7f7f7;
@@ -255,7 +260,9 @@ input, button {
 }
 
 /* Settings page: single centered column (override gallery columns) */
-.gallery.settings-mode { columns: 1; max-width: 720px; margin: 0 auto; }
+.gallery.settings-mode { columns: 1; max-width: 720px; margin: 0 auto; column-gap: 0; padding: 0 var(--space-lg) var(--space-3xl); }
+@media (max-width: 768px) { .gallery.settings-mode { padding-left: var(--space-md); padding-right: var(--space-md); } }
+@media (max-width: 480px) { .gallery.settings-mode { padding-left: var(--space-sm); padding-right: var(--space-sm); } }
 
 /* Monolithic row spans gallery width */
 .mono-col { width: 100%; max-width: none; column-span: all; break-inside: avoid; }
@@ -774,85 +781,47 @@ input, button {
 .mono-col { width: 100%; max-width: none; column-span: all; break-inside: avoid; }
 
 /* Settings layout centered single column */
-.settings-wrap { max-width: 720px; margin: 96px auto; padding: 0 16px; display: grid; gap: 24px; }
-.settings-group { display: grid; gap: 10px; }
+.settings-wrap { max-width: 720px; margin: 96px auto; padding: 0 16px; display: grid; gap: 24px; width: 100%; }
+
+/* Group card aesthetic for clarity on dark background */
+.settings-group { display: grid; gap: 10px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-2xl); padding: var(--space-lg); box-shadow: var(--shadow-md); }
 .settings-label { color: var(--text-secondary); font-size: 0.9rem; }
-.settings-input { background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
-.settings-actions { display:flex; gap: 12px; }
 
-/* Buttons matching auth modal */
-.settings-primary { padding: var(--space-lg); font-size: 1rem; font-weight: 600; color: var(--surface); background: var(--text-primary); border-radius: var(--radius-lg); transition: all var(--duration-fast) var(--ease-out); width: max-content; border: none; }
-.settings-primary:hover { background: #cfcfcf; transform: translateY(-1px); box-shadow: var(--shadow-lg); }
-.settings-primary:active { transform: translateY(0); box-shadow: var(--shadow-md); }
-
-.settings-danger { padding: var(--space-lg); font-size: 1rem; font-weight: 700; color: #fff; background: var(--color-danger); border-radius: var(--radius-lg); border: 1px solid var(--color-danger); width: max-content; }
-.settings-danger:hover { filter: brightness(1.05); }
-
-/* Simple link-like button */
-.link-btn { background: none; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 10px; }
-.link-btn:hover { text-decoration: underline; }
-
-/* Avatar preview */
-.avatar-row { display:flex; align-items:center; gap:12px; }
-.avatar-preview { width: 64px; height: 64px; border-radius: 50%; background: var(--border); background-size: cover; background-position: center; }
-
-/* Settings Page */
-.settings {
-  max-width: var(--container-max);
-  margin: 80px auto 40px auto;
-  padding: 0 var(--gutter);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--grid-gap);
-}
-.settings-card {
-  background: var(--color-surface);
-  border: var(--border-hair) solid var(--color-hairline);
-  border-radius: var(--radius-m);
-  padding: var(--space-6);
-  box-shadow: var(--shadow-1);
-}
-.settings-card h2 {
-  font-size: var(--text-l);
-  margin: 0 0 var(--space-4) 0;
-  color: var(--color-fg);
-}
-.settings-card .form {
-  display: grid;
-  gap: var(--space-3);
-}
-.settings-card .form.inline {
-  grid-template-columns: 1fr auto;
-  align-items: center;
-}
-.settings-card label {
-  font-size: var(--text-s);
-  color: var(--color-fg-muted);
-}
-.settings-card input {
-  background: var(--color-bg-elev);
-  color: var(--color-fg);
-  border: var(--border-hair) solid var(--color-hairline);
-  border-radius: var(--radius-s);
+/* Inputs: strong contrast + fluid width */
+.settings-group .settings-input,
+.settings-group input[type="text"],
+.settings-group input[type="email"],
+.settings-group input[type="password"],
+.settings-group input[type="number"],
+.settings-group textarea,
+.settings-group select {
+  width: 100%;
+  max-width: 100%;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
 }
-.settings-card button {
-  justify-self: start;
-  background: var(--color-accent);
-  color: #0a0a0a;
-  border: none;
-  border-radius: var(--radius-s);
-  padding: 10px 14px;
-  font-weight: var(--weight-medium);
-  cursor: pointer;
-}
-.settings-card button.danger {
-  background: var(--color-danger);
-  color: #fff;
-}
-.form-error {
-  color: var(--color-danger);
-  font-size: var(--text-xs);
+.settings-group input::placeholder,
+.settings-group textarea::placeholder { color: var(--text-tertiary); }
+
+/* Actions: wrap on small screens; avoid overflow */
+.settings-actions { display:flex; gap: 12px; flex-wrap: wrap; }
+
+/* File inputs harmony */
+.settings-group input[type="file"] { color: var(--text-secondary); font-family: var(--font-mono); }
+.settings-group input[type="file"]::file-selector-button { background: var(--surface-elevated); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius-lg); padding: 8px 12px; cursor: pointer; }
+.settings-group input[type="file"]::file-selector-button:hover { background: var(--surface); }
+
+/* Focus ring consistent on dark UI */
+.settings-input:focus,
+.settings-group input:focus,
+.settings-group textarea:focus,
+.settings-group select:focus {
+  outline: none;
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 2px rgba(122,240,255,0.12);
 }
 
 /* Typeface unification: use mono for text and fields; keep headers/buttons Inter */
@@ -886,3 +855,37 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 .nsfw-mask span { background: rgba(0,0,0,0.5); border: 1px solid var(--border); padding: 6px 10px; border-radius: 999px; }
 /* disable hover flash when blurred */
 .nsfw-blur.hovering img, .nsfw-blur.leaving img { animation: none !important; }
+
+/* Ensure consistent focus across inputs and textarea */
+.settings-input:focus { outline: none; border-color: var(--text-primary); box-shadow: 0 0 0 2px rgba(122,240,255,0.12); }
+
+/* Mobile profile actions: show compact Options menu, hide inline buttons */
+@media (max-width: 600px) {
+  .profile-actions-inline { display: none !important; }
+  .profile-actions-menu { display: block !important; }
+  .profile-actions { gap: 4px; }
+}
+
+/* Simple link-like button (restore readable color) */
+.link-btn { background: none; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 10px; }
+.link-btn:hover { text-decoration: underline; }
+
+/* Admin user search result rows */
+.user-row { display:flex; gap:8px; align-items:center; justify-content:space-between; border:1px solid var(--border); border-radius:8px; padding:8px; background: var(--surface-elevated); max-width:100%; overflow:hidden; }
+.user-row .actions { display:flex; gap:8px; flex-wrap:wrap; }
+.user-row .left { min-width:0; }
+.user-row .left .id { font-size:12px; color: var(--text-secondary); word-break: break-all; }
+@media (max-width: 600px) { .user-row { flex-direction: column; align-items: stretch; gap:6px; } }
+
+/* Avatar preview */
+.avatar-row { display:flex; align-items:center; gap:12px; }
+.avatar-preview { width: 64px; height: 64px; border-radius: 50%; background: var(--border); background-size: cover; background-position: center; display:block; border: none; }
+@media (min-width: 601px) {
+  .settings-group .avatar-row { display: grid; grid-template-columns: 80px 1fr; align-items: start; column-gap: 16px; }
+  .settings-group .avatar-preview { width: 80px; height: 80px; }
+}
+
+/* Password input eye toggle */
+.pw-wrap input[type="password"], .pw-wrap input[type="text"] { padding-right: 40px; }
+.pw-eye { color: var(--text-tertiary); transition: opacity var(--duration-fast) var(--ease-out); }
+.pw-eye:hover { opacity: 1; }

@@ -2,16 +2,23 @@ package models
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 )
+
+var globalDB *sqlx.DB
+
+func DB() *sqlx.DB { return globalDB }
 
 type UserRepository struct {
 	db *sqlx.DB
 }
 
 func NewUserRepository(db *sqlx.DB) *UserRepository {
+	globalDB = db
 	return &UserRepository{db: db}
 }
 
@@ -121,6 +128,25 @@ func (r *UserRepository) ListUsers(page, limit int) ([]User, int, error) {
 		return nil, 0, err
 	}
 	if err := r.db.Select(&users, `SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset); err != nil {
+		return nil, 0, err
+	}
+	return users, total, nil
+}
+
+func (r *UserRepository) SetModerator(id uuid.UUID, isModerator bool) error {
+	_, err := r.db.Exec(`UPDATE users SET is_moderator = $1 WHERE id = $2`, isModerator, id)
+	return err
+}
+
+func (r *UserRepository) SearchUsers(q string, page, limit int) ([]User, int, error) {
+	offset := (page - 1) * limit
+	qLike := "%" + strings.ToLower(q) + "%"
+	var users []User
+	var total int
+	if err := r.db.Get(&total, `SELECT COUNT(*) FROM users WHERE LOWER(username) LIKE $1 OR LOWER(email) LIKE $1`, qLike); err != nil {
+		return nil, 0, err
+	}
+	if err := r.db.Select(&users, `SELECT * FROM users WHERE LOWER(username) LIKE $1 OR LOWER(email) LIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, qLike, limit, offset); err != nil {
 		return nil, 0, err
 	}
 	return users, total, nil
@@ -363,4 +389,48 @@ func (r *UserRepository) UpdatePassword(id uuid.UUID, passwordHash string) error
 func (r *UserRepository) DeleteUser(id uuid.UUID) error {
 	_, err := r.db.Exec(`DELETE FROM users WHERE id = $1`, id)
 	return err
+}
+
+// SMTP-related helpers (not part of interface to keep external mocks stable)
+func (r *UserRepository) CreatePasswordReset(userID uuid.UUID, token string, expires time.Time) error {
+	_, err := r.db.Exec(`INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1,$2,$3)`, userID, token, expires)
+	return err
+}
+func (r *UserRepository) GetPasswordReset(token string) (uuid.UUID, time.Time, error) {
+	var uid uuid.UUID
+	var exp time.Time
+	err := r.db.QueryRowx(`SELECT user_id, expires_at FROM password_resets WHERE token=$1`, token).Scan(&uid, &exp)
+	return uid, exp, err
+}
+func (r *UserRepository) DeletePasswordReset(token string) error {
+	_, err := r.db.Exec(`DELETE FROM password_resets WHERE token=$1`, token)
+	return err
+}
+func (r *UserRepository) CreateEmailVerification(userID uuid.UUID, token string, expires time.Time) error {
+	_, err := r.db.Exec(`INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1,$2,$3)`, userID, token, expires)
+	return err
+}
+func (r *UserRepository) GetEmailVerification(token string) (uuid.UUID, time.Time, error) {
+	var uid uuid.UUID
+	var exp time.Time
+	err := r.db.QueryRowx(`SELECT user_id, expires_at FROM email_verifications WHERE token=$1`, token).Scan(&uid, &exp)
+	return uid, exp, err
+}
+func (r *UserRepository) DeleteEmailVerification(token string) error {
+	_, err := r.db.Exec(`DELETE FROM email_verifications WHERE token=$1`, token)
+	return err
+}
+func (r *UserRepository) SetEmailVerified(id uuid.UUID, v bool) error {
+	_, err := r.db.Exec(`UPDATE users SET email_verified=$1 WHERE id=$2`, v, id)
+	return err
+}
+func (r *UserRepository) LastPasswordResetSentAt(userID uuid.UUID) (time.Time, error) {
+	var t time.Time
+	err := r.db.Get(&t, `SELECT COALESCE(MAX(created_at), to_timestamp(0)) FROM password_resets WHERE user_id=$1`, userID)
+	return t, err
+}
+func (r *UserRepository) LastVerificationSentAt(userID uuid.UUID) (time.Time, error) {
+	var t time.Time
+	err := r.db.Get(&t, `SELECT COALESCE(MAX(created_at), to_timestamp(0)) FROM email_verifications WHERE user_id=$1`, userID)
+	return t, err
 }

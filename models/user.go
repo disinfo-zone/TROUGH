@@ -8,17 +8,19 @@ import (
 )
 
 type User struct {
-	ID           uuid.UUID `json:"id" db:"id"`
-	Username     string    `json:"username" db:"username"`
-	Email        string    `json:"email" db:"email"`
-	PasswordHash string    `json:"-" db:"password_hash"`
-	Bio          *string   `json:"bio" db:"bio"`
-	AvatarURL    *string   `json:"avatar_url" db:"avatar_url"`
-	IsAdmin      bool      `json:"is_admin" db:"is_admin"`
-	ShowNSFW     bool      `json:"show_nsfw" db:"show_nsfw"`
-	IsDisabled   bool      `json:"is_disabled" db:"is_disabled"`
-	NsfwPref     string    `json:"nsfw_pref" db:"nsfw_pref"`
-	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	ID            uuid.UUID `json:"id" db:"id"`
+	Username      string    `json:"username" db:"username"`
+	Email         string    `json:"email" db:"email"`
+	PasswordHash  string    `json:"-" db:"password_hash"`
+	Bio           *string   `json:"bio" db:"bio"`
+	AvatarURL     *string   `json:"avatar_url" db:"avatar_url"`
+	IsAdmin       bool      `json:"is_admin" db:"is_admin"`
+	IsModerator   bool      `json:"is_moderator" db:"is_moderator"`
+	ShowNSFW      bool      `json:"show_nsfw" db:"show_nsfw"`
+	IsDisabled    bool      `json:"is_disabled" db:"is_disabled"`
+	NsfwPref      string    `json:"nsfw_pref" db:"nsfw_pref"`
+	EmailVerified bool      `json:"email_verified" db:"email_verified"`
+	CreatedAt     time.Time `json:"created_at" db:"created_at"`
 }
 
 type CreateUserRequest struct {
@@ -42,14 +44,16 @@ type UpdateUserRequest struct {
 }
 
 type UserResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Username  string    `json:"username"`
-	Bio       *string   `json:"bio"`
-	AvatarURL *string   `json:"avatar_url"`
-	IsAdmin   bool      `json:"is_admin"`
-	ShowNSFW  bool      `json:"show_nsfw"`
-	NsfwPref  string    `json:"nsfw_pref"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            uuid.UUID `json:"id"`
+	Username      string    `json:"username"`
+	Bio           *string   `json:"bio"`
+	AvatarURL     *string   `json:"avatar_url"`
+	IsAdmin       bool      `json:"is_admin"`
+	IsModerator   bool      `json:"is_moderator"`
+	ShowNSFW      bool      `json:"show_nsfw"`
+	NsfwPref      string    `json:"nsfw_pref"`
+	EmailVerified bool      `json:"email_verified"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func (u *User) HashPassword(password string) error {
@@ -68,13 +72,15 @@ func (u *User) CheckPassword(password string) bool {
 
 func (u *User) ToResponse() UserResponse {
 	return UserResponse{
-		ID:        u.ID,
-		Username:  u.Username,
-		Bio:       u.Bio,
-		AvatarURL: u.AvatarURL,
-		IsAdmin:   u.IsAdmin,
-		ShowNSFW:  u.ShowNSFW,
-		NsfwPref:  u.NsfwPref,
-		CreatedAt: u.CreatedAt,
+		ID:            u.ID,
+		Username:      u.Username,
+		Bio:           u.Bio,
+		AvatarURL:     u.AvatarURL,
+		IsAdmin:       u.IsAdmin,
+		IsModerator:   u.IsModerator,
+		ShowNSFW:      u.ShowNSFW,
+		NsfwPref:      u.NsfwPref,
+		EmailVerified: u.EmailVerified,
+		CreatedAt:     u.CreatedAt,
 	}
 }

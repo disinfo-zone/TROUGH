@@ -60,6 +60,10 @@ func Migrate() error {
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_disabled BOOLEAN DEFAULT FALSE;
 		-- NSFW preference tri-state: hide|show|blur (default hide)
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS nsfw_pref VARCHAR(10) DEFAULT 'hide';
+		-- Moderator role
+		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_moderator BOOLEAN DEFAULT FALSE;
+		-- Email verified (default true for legacy users)
+		ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT TRUE;
 
 		CREATE TABLE IF NOT EXISTS images (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -92,6 +96,46 @@ func Migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_images_user ON images(user_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_likes_image ON likes(image_id);
+
+		-- Site settings (single row, id=1)
+		CREATE TABLE IF NOT EXISTS site_settings (
+			id SMALLINT PRIMARY KEY DEFAULT 1,
+			site_name TEXT DEFAULT 'TROUGH',
+			site_url TEXT DEFAULT '',
+			seo_title TEXT DEFAULT '',
+			seo_description TEXT DEFAULT '',
+			social_image_url TEXT DEFAULT '',
+			smtp_host TEXT DEFAULT '',
+			smtp_port INTEGER DEFAULT 0,
+			smtp_username TEXT DEFAULT '',
+			smtp_password TEXT DEFAULT '',
+			smtp_tls BOOLEAN DEFAULT FALSE,
+			favicon_path TEXT DEFAULT '',
+			require_email_verification BOOLEAN DEFAULT FALSE,
+			updated_at TIMESTAMP DEFAULT NOW()
+		);
+
+		INSERT INTO site_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+		-- Password reset tokens
+		CREATE TABLE IF NOT EXISTS password_resets (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+			token VARCHAR(255) UNIQUE NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT NOW()
+		);
+		ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+
+		-- Email verification tokens
+		CREATE TABLE IF NOT EXISTS email_verifications (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+			token VARCHAR(255) UNIQUE NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT NOW()
+		);
+		ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
 	`
 
 	_, err := DB.Exec(schema)

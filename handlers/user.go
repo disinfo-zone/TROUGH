@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"image/jpeg"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yourusername/trough/middleware"
 	"github.com/yourusername/trough/models"
+	"github.com/yourusername/trough/services"
 )
 
 type UserHandler struct {
@@ -335,7 +337,7 @@ func isValidAvatarType(contentType string) bool {
 // Admin endpoints (minimal, but complete)
 func (h *UserHandler) AdminListUsers(c *fiber.Ctx) error {
 	// Authorization check
-	if !isAdmin(c, h.userRepo) {
+	if !(isAdmin(c, h.userRepo) || isModerator(c, h.userRepo)) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -343,11 +345,20 @@ func (h *UserHandler) AdminListUsers(c *fiber.Ctx) error {
 		page = 1
 	}
 	limit := 50
-	users, total, err := h.userRepo.ListUsers(page, limit)
+	q := strings.TrimSpace(c.Query("q", ""))
+	var (
+		users []models.User
+		total int
+		err   error
+	)
+	if q != "" {
+		users, total, err = h.userRepo.SearchUsers(q, page, limit)
+	} else {
+		users, total, err = h.userRepo.ListUsers(page, limit)
+	}
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to list users"})
 	}
-	// Map to responses
 	resp := make([]models.UserResponse, len(users))
 	for i := range users {
 		resp[i] = users[i].ToResponse()
@@ -356,7 +367,9 @@ func (h *UserHandler) AdminListUsers(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) AdminSetUserFlags(c *fiber.Ctx) error {
-	if !isAdmin(c, h.userRepo) {
+	isAdminUser := isAdmin(c, h.userRepo)
+	isModUser := isModerator(c, h.userRepo)
+	if !isAdminUser && !isModUser {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
 	userIDParam := c.Params("id")
@@ -364,26 +377,133 @@ func (h *UserHandler) AdminSetUserFlags(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user id"})
 	}
+	target, err := h.userRepo.GetByID(uid)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
 	type body struct {
-		IsAdmin    *bool `json:"is_admin"`
-		IsDisabled *bool `json:"is_disabled"`
+		IsAdmin     *bool `json:"is_admin"`
+		IsDisabled  *bool `json:"is_disabled"`
+		IsModerator *bool `json:"is_moderator"`
 	}
 	var b body
 	if err := c.BodyParser(&b); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
 	}
+	// Protect default admin from being demoted
+	if b.IsAdmin != nil && !*b.IsAdmin {
+		if target.Email != "" && strings.EqualFold(target.Email, os.Getenv("ADMIN_EMAIL")) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Default admin cannot be demoted"})
+		}
+	}
+	// Mods may only toggle moderator status
+	if isModUser && !isAdminUser {
+		if b.IsModerator == nil || b.IsAdmin != nil || b.IsDisabled != nil {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Moderators can only toggle moderator status"})
+		}
+	}
 	if b.IsAdmin != nil {
+		if !isAdminUser {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admins can change admin flag"})
+		}
 		if err := h.userRepo.SetAdmin(uid, *b.IsAdmin); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to set admin"})
 		}
 	}
 	if b.IsDisabled != nil {
+		if !isAdminUser {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admins can disable users"})
+		}
 		if err := h.userRepo.SetDisabled(uid, *b.IsDisabled); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to set disabled"})
 		}
 	}
+	if b.IsModerator != nil {
+		if err := h.userRepo.SetModerator(uid, *b.IsModerator); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to set moderator"})
+		}
+	}
 	u, _ := h.userRepo.GetByID(uid)
 	return c.JSON(fiber.Map{"user": u.ToResponse()})
+}
+
+// AdminCreateUser: admin only
+func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
+	if !isAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	var req struct {
+		Username    string `json:"username"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		IsModerator bool   `json:"is_moderator"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.Username == "" || req.Email == "" || len(req.Password) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
+	}
+	if _, err := h.userRepo.GetByEmail(req.Email); err == nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already in use"})
+	}
+	u := &models.User{Username: strings.ToLower(req.Username), Email: strings.ToLower(req.Email)}
+	if err := u.HashPassword(req.Password); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+	if err := h.userRepo.Create(u); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
+	}
+	_ = h.userRepo.SetModerator(u.ID, req.IsModerator)
+	u2, _ := h.userRepo.GetByID(u.ID)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": u2.ToResponse()})
+}
+
+// AdminDeleteUser: admin only
+func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
+	if !isAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	uid, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user id"})
+	}
+	target, err := h.userRepo.GetByID(uid)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+	if target.Email != "" && strings.EqualFold(target.Email, os.Getenv("ADMIN_EMAIL")) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Default admin cannot be deleted"})
+	}
+	if err := h.userRepo.DeleteUser(uid); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete user"})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// AdminSetUserPassword: admin only
+func (h *UserHandler) AdminSetUserPassword(c *fiber.Ctx) error {
+	if !isAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	uid, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user id"})
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := c.BodyParser(&body); err != nil || len(body.Password) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid password"})
+	}
+	u, err := h.userRepo.GetByID(uid)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+	if err := u.HashPassword(body.Password); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+	if err := h.userRepo.UpdatePassword(uid, u.PasswordHash); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update password"})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *UserHandler) AdminDeleteImage(c *fiber.Ctx) error {
@@ -421,6 +541,38 @@ func (h *UserHandler) AdminSetImageNSFW(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
+func (h *UserHandler) AdminSendVerification(c *fiber.Ctx) error {
+	if !isAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid id"})
+	}
+	u, err := h.userRepo.GetByID(id)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+	setRepo := models.NewSiteSettingsRepository(models.DB())
+	set, _ := setRepo.Get()
+	if !(set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != "") {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP not configured"})
+	}
+	last, _ := models.LastVerificationSentAt(id)
+	if time.Since(last) < 5*time.Minute {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{"error": "Please wait before sending again"})
+	}
+	token := uuid.New().String()
+	exp := time.Now().Add(24 * time.Hour)
+	if err := models.CreateEmailVerification(id, token, exp); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
+	}
+	sender := services.NewMailSender(set)
+	link := set.SiteURL + "/verify?token=" + token
+	_ = sender.Send(u.Email, "Verify your email", "Click to verify: "+link)
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 func isAdmin(c *fiber.Ctx, repo models.UserRepositoryInterface) bool {
 	uid := middleware.GetUserID(c)
 	if uid == uuid.Nil {
@@ -431,4 +583,16 @@ func isAdmin(c *fiber.Ctx, repo models.UserRepositoryInterface) bool {
 		return false
 	}
 	return u.IsAdmin && !u.IsDisabled
+}
+
+func isModerator(c *fiber.Ctx, repo models.UserRepositoryInterface) bool {
+	uid := middleware.GetUserID(c)
+	if uid == uuid.Nil {
+		return false
+	}
+	u, err := repo.GetByID(uid)
+	if err != nil {
+		return false
+	}
+	return (u.IsModerator || u.IsAdmin) && !u.IsDisabled
 }

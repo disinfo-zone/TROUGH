@@ -248,16 +248,16 @@ func (h *ImageHandler) UpdateImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Image not found"})
 	}
-	// Owner or admin only
+	// Owner, admin, or moderator
 	isOwner := img.UserID == userID
-	isAdmin := false
+	isPrivileged := false
 	if !isOwner {
 		u, err := h.userRepo.GetByID(userID)
 		if err == nil {
-			isAdmin = u.IsAdmin && !u.IsDisabled
+			isPrivileged = (u.IsAdmin || u.IsModerator) && !u.IsDisabled
 		}
 	}
-	if !isOwner && !isAdmin {
+	if !isOwner && !isPrivileged {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
 	type body struct {
@@ -305,12 +305,12 @@ func (h *ImageHandler) DeleteImage(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Image not found"})
 	}
 	isOwner := img.UserID == userID
-	isAdmin := false
+	isPrivileged := false
 	u, err := h.userRepo.GetByID(userID)
 	if err == nil {
-		isAdmin = u.IsAdmin && !u.IsDisabled
+		isPrivileged = (u.IsAdmin || u.IsModerator) && !u.IsDisabled
 	}
-	if !isOwner && !isAdmin {
+	if !isOwner && !isPrivileged {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
 	// Remove file from disk first; if it's already gone, continue

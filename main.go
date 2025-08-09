@@ -71,45 +71,36 @@ func main() {
 	userRepo := models.NewUserRepository(db.DB)
 	imageRepo := models.NewImageRepository(db.DB)
 	likeRepo := models.NewLikeRepository(db.DB)
+	siteRepo := models.NewSiteSettingsRepository(db.DB)
 
-	// First-time admin seed (optional)
 	maybeSeedAdmin(userRepo)
 
-	authHandler := handlers.NewAuthHandler(userRepo)
+	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo)
 	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config)
 	userHandler := handlers.NewUserHandler(userRepo, imageRepo)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo)
 
-	app := fiber.New(fiber.Config{
-		BodyLimit:    10 * 1024 * 1024,
-		ErrorHandler: customErrorHandler,
-	})
+	app := fiber.New(fiber.Config{BodyLimit: 10 * 1024 * 1024, ErrorHandler: customErrorHandler})
 
 	app.Use(logger.New())
 	app.Use(compress.New())
 	app.Use(cors.New())
 
-	app.Static("/", "./static", fiber.Static{
-		Compress:      true,
-		CacheDuration: 3600,
-	})
+	app.Static("/", "./static", fiber.Static{Compress: true, CacheDuration: 3600})
+	app.Static("/uploads", "./uploads", fiber.Static{Compress: true, CacheDuration: 86400})
 
-	app.Static("/uploads", "./uploads", fiber.Static{
-		Compress:      true,
-		CacheDuration: 86400,
-	})
-
-	// Serve profile and settings URLs client-side
-	app.Get("/@:username", func(c *fiber.Ctx) error {
-		return c.SendFile("./static/index.html")
-	})
-	app.Get("/settings", func(c *fiber.Ctx) error {
-		return c.SendFile("./static/index.html")
-	})
+	app.Get("/@:username", func(c *fiber.Ctx) error { return c.SendFile("./static/index.html") })
+	app.Get("/settings", func(c *fiber.Ctx) error { return c.SendFile("./static/index.html") })
+	app.Get("/admin", func(c *fiber.Ctx) error { return c.SendFile("./static/index.html") })
 
 	api := app.Group("/api")
 
 	api.Post("/register", authHandler.Register)
 	api.Post("/login", authHandler.Login)
+	api.Post("/forgot-password", authHandler.ForgotPassword)
+	api.Post("/reset-password", authHandler.ResetPassword)
+	api.Post("/verify-email", authHandler.VerifyEmail)
+	api.Post("/me/resend-verification", middleware.Protected(), authHandler.ResendVerification)
 	api.Get("/me", middleware.Protected(), authHandler.Me)
 
 	api.Get("/feed", imageHandler.GetFeed)
@@ -119,7 +110,6 @@ func main() {
 	api.Patch("/images/:id", middleware.Protected(), imageHandler.UpdateImage)
 	api.Delete("/images/:id", middleware.Protected(), imageHandler.DeleteImage)
 
-	// Users
 	api.Get("/users/:username", userHandler.GetProfile)
 	api.Get("/users/:username/images", userHandler.GetUserImages)
 	api.Get("/me/profile", middleware.Protected(), userHandler.GetMyProfile)
@@ -130,13 +120,23 @@ func main() {
 	api.Delete("/me", middleware.Protected(), userHandler.DeleteMyAccount)
 	api.Post("/me/avatar", middleware.Protected(), userHandler.UploadAvatar)
 
-	// Admin (guarded in handler)
+	api.Get("/site", adminHandler.GetPublicSite)
+
 	api.Get("/admin/users", middleware.Protected(), userHandler.AdminListUsers)
+	api.Post("/admin/users", middleware.Protected(), userHandler.AdminCreateUser)
 	api.Patch("/admin/users/:id", middleware.Protected(), userHandler.AdminSetUserFlags)
+	api.Patch("/admin/users/:id/password", middleware.Protected(), userHandler.AdminSetUserPassword)
+	api.Post("/admin/users/:id/send-verification", middleware.Protected(), userHandler.AdminSendVerification)
+	api.Delete("/admin/users/:id", middleware.Protected(), userHandler.AdminDeleteUser)
 	api.Delete("/admin/images/:id", middleware.Protected(), userHandler.AdminDeleteImage)
 	api.Patch("/admin/images/:id/nsfw", middleware.Protected(), userHandler.AdminSetImageNSFW)
 
-	// Fallback: pretty 404 for non-API GETs, JSON for API
+	api.Get("/admin/site", middleware.Protected(), adminHandler.GetSiteSettings)
+	api.Put("/admin/site", middleware.Protected(), adminHandler.UpdateSiteSettings)
+	api.Post("/admin/site/favicon", middleware.Protected(), adminHandler.UploadFavicon)
+	api.Post("/admin/site/social-image", middleware.Protected(), adminHandler.UploadSocialImage)
+	api.Post("/admin/site/test-smtp", middleware.Protected(), adminHandler.TestSMTP)
+
 	app.Use(func(c *fiber.Ctx) error {
 		if strings.HasPrefix(c.Path(), "/api") {
 			return fiber.ErrNotFound

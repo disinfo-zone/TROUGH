@@ -1,6 +1,8 @@
 package models
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 type UserRepositoryInterface interface {
 	Create(user *User) error
@@ -13,7 +15,9 @@ type UserRepositoryInterface interface {
 	DeleteUser(id uuid.UUID) error
 	SetAdmin(id uuid.UUID, isAdmin bool) error
 	SetDisabled(id uuid.UUID, disabled bool) error
+	SetModerator(id uuid.UUID, isModerator bool) error
 	ListUsers(page, limit int) ([]User, int, error)
+	SearchUsers(q string, page, limit int) ([]User, int, error)
 }
 
 type ImageRepositoryInterface interface {
