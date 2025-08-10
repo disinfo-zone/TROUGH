@@ -291,6 +291,22 @@ func (r *ImageRepository) UpdateMeta(id uuid.UUID, title *string, caption *strin
 	return err
 }
 
+func (r *ImageRepository) UpdateFilename(id uuid.UUID, newFilename string) error {
+	_, err := r.db.Exec(`UPDATE images SET filename = $1 WHERE id = $2`, newFilename, id)
+	return err
+}
+
+func (r *ImageRepository) GetImagesByFilename(filename string) ([]ImageWithUser, error) {
+	var images []ImageWithUser
+	query := `
+		SELECT i.*, u.username, u.avatar_url
+		FROM images i
+		JOIN users u ON i.user_id = u.id
+		WHERE i.filename = $1`
+	err := r.db.Select(&images, query, filename)
+	return images, err
+}
+
 // small helper
 func stringJoin(parts []string, sep string) string {
 	if len(parts) == 0 {

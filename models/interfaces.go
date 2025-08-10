@@ -29,6 +29,8 @@ type ImageRepositoryInterface interface {
 	SetNSFW(id uuid.UUID, isNSFW bool) error
 	CountByUser(userID uuid.UUID) (int, error)
 	UpdateMeta(id uuid.UUID, title *string, caption *string, isNSFW *bool) error
+	UpdateFilename(id uuid.UUID, newFilename string) error
+	GetImagesByFilename(filename string) ([]ImageWithUser, error)
 }
 
 type LikeRepositoryInterface interface {

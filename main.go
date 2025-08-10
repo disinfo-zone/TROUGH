@@ -222,7 +222,7 @@ func main() {
 	services.SetCurrentStorage(storage)
 	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage)
 	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage)
-	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo).WithStorage(storage)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage)
 
 	app := fiber.New(fiber.Config{BodyLimit: 10 * 1024 * 1024, ErrorHandler: customErrorHandler})
 

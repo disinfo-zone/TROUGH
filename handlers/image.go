@@ -7,7 +7,6 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"

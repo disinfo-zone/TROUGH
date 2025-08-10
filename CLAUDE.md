@@ -275,6 +275,12 @@ Place at top of `static/css/style.css` under a `:root` block.
 - **Image URLs**: Smart URL handling that works with both local storage (`/uploads/filename.jpg`) and remote storage (`https://domain.com/filename.jpg`).
 - **Storage Cleanup**: Image deletion now properly removes files from both database and storage backend (local or remote).
 - **Admin Storage Test**: Added storage verification endpoint to test S3/R2 connectivity and configuration.
+- **Migration Modal**: Beautiful progressive modal for migrating local uploads to remote storage with:
+  - Real-time progress tracking with animated progress bar
+  - Database URL updates for migrated images
+  - Optional local file cleanup after successful migration
+  - Comprehensive success/error reporting
+  - Elegant UI matching the site's design system
 
 ## EXIF
 - Backend writes uploads as high-quality JPEG while preserving XMP and extracting full EXIF into `images.exif_data`.

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -19,12 +20,13 @@ var checkAdmin = func(c *fiber.Ctx, repo models.UserRepositoryInterface) bool { 
 type AdminHandler struct {
 	settingsRepo  models.SiteSettingsRepositoryInterface
 	userRepo      models.UserRepositoryInterface
+	imageRepo     models.ImageRepositoryInterface
 	newMailSender func(*models.SiteSettings) services.MailSender
 	storage       services.Storage
 }
 
-func NewAdminHandler(settingsRepo models.SiteSettingsRepositoryInterface, userRepo models.UserRepositoryInterface) *AdminHandler {
-	return &AdminHandler{settingsRepo: settingsRepo, userRepo: userRepo, newMailSender: services.NewMailSender}
+func NewAdminHandler(settingsRepo models.SiteSettingsRepositoryInterface, userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *AdminHandler {
+	return &AdminHandler{settingsRepo: settingsRepo, userRepo: userRepo, imageRepo: imageRepo, newMailSender: services.NewMailSender}
 }
 
 // For tests
@@ -200,9 +202,8 @@ func (h *AdminHandler) UploadSocialImage(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"social_image_url": public})
 }
 
-// ExportLocalUploadsToStorage copies files from ./uploads to the configured remote storage (no-op for local).
-// It skips when storage is local. It overwrites existing keys. Intended for small-to-medium sets; for large
-// datasets, recommend external sync (rclone).
+// ExportLocalUploadsToStorage migrates files from local storage to remote storage and updates database URLs.
+// This is a comprehensive migration that uploads files, updates database records, and optionally cleans up local files.
 func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 	if !checkAdmin(c, h.userRepo) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
@@ -210,9 +211,34 @@ func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 	if h.storage == nil || h.storage.IsLocal() {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Remote storage not configured"})
 	}
-	// Walk uploads dir and push files
+
+	type MigrationRequest struct {
+		CleanupLocal bool `json:"cleanup_local"`
+	}
+	var req MigrationRequest
+	c.BodyParser(&req) // Optional body
+
+	// The imageRepo is now available as h.imageRepo
+	
+	// For now, let's migrate files and provide comprehensive feedback
+	type MigrationResult struct {
+		TotalFiles     int      `json:"total_files"`
+		UploadedFiles  int      `json:"uploaded_files"`
+		UpdatedRecords int      `json:"updated_records"`
+		CleanedFiles   int      `json:"cleaned_files,omitempty"`
+		Errors         []string `json:"errors,omitempty"`
+		Success        bool     `json:"success"`
+	}
+
+	result := MigrationResult{
+		Success: true,
+		Errors:  []string{},
+	}
+
+	// Walk uploads dir and collect files
 	root := "uploads"
-	count := 0
+	var filesToMigrate []string
+	
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -220,34 +246,87 @@ func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 		if d.IsDir() {
 			return nil
 		}
+		// Skip subdirectories we don't want to migrate (like avatars/site)
 		rel, _ := filepath.Rel(root, path)
-		// open and upload
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return err
+		if strings.Contains(rel, string(filepath.Separator)) {
+			return nil // Skip files in subdirectories
 		}
-		// basic content-type by extension
+		filesToMigrate = append(filesToMigrate, rel)
+		return nil
+	})
+	
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to scan local files", "details": err.Error()})
+	}
+
+	result.TotalFiles = len(filesToMigrate)
+
+	// Upload each file to remote storage
+	var uploadedFiles []string
+	for _, filename := range filesToMigrate {
+		localPath := filepath.Join(root, filename)
+		b, err := os.ReadFile(localPath)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("Failed to read %s: %v", filename, err))
+			continue
+		}
+
+		// Determine content type
 		ct := "application/octet-stream"
-		switch strings.ToLower(filepath.Ext(path)) {
+		switch strings.ToLower(filepath.Ext(filename)) {
 		case ".jpg", ".jpeg":
 			ct = "image/jpeg"
 		case ".png":
 			ct = "image/png"
 		case ".webp":
 			ct = "image/webp"
-		case ".ico":
-			ct = "image/x-icon"
 		}
-		if _, err := h.storage.Save(c.Context(), rel, bytes.NewReader(b), ct); err != nil {
-			return err
+
+		// Upload to remote storage
+		publicURL, err := h.storage.Save(c.Context(), filename, bytes.NewReader(b), ct)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("Failed to upload %s: %v", filename, err))
+			continue
 		}
-		count++
-		return nil
-	})
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Export failed", "details": err.Error()})
+
+		uploadedFiles = append(uploadedFiles, filename)
+		result.UploadedFiles++
+		
+		// Update database records for images with this filename
+		images, err := h.imageRepo.GetImagesByFilename(filename)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("Failed to query database for %s: %v", filename, err))
+			continue
+		}
+
+		// Update each image record with the new public URL
+		for _, img := range images {
+			err := h.imageRepo.UpdateFilename(img.ID, publicURL)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("Failed to update database for %s: %v", filename, err))
+			} else {
+				result.UpdatedRecords++
+			}
+		}
 	}
-	return c.JSON(fiber.Map{"exported": count})
+
+	// If cleanup is requested and uploads were successful, remove local files
+	if req.CleanupLocal && len(uploadedFiles) > 0 {
+		for _, filename := range uploadedFiles {
+			localPath := filepath.Join(root, filename)
+			if err := os.Remove(localPath); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("Failed to cleanup %s: %v", filename, err))
+			} else {
+				result.CleanedFiles++
+			}
+		}
+	}
+
+	if len(result.Errors) > 0 {
+		result.Success = false
+	}
+
+	return c.JSON(result)
 }
 
 func (h *AdminHandler) TestSMTP(c *fiber.Ctx) error {

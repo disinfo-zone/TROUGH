@@ -1195,7 +1195,7 @@ class TroughApp {
               </div>
               <div class="settings-actions" style="margin-top:8px;gap:8px;align-items:center">
                 <button id="btn-save-site-top" class="nav-btn">Save</button>
-                <button id="btn-export-upload" class="nav-btn">Export local uploads → remote</button>
+                <button id="btn-export-upload" class="nav-btn">Migrate to Remote Storage</button>
               </div>
               <div class="settings-label">SMTP</div>
               <input id="smtp-host" class="settings-input" placeholder="SMTP host (hostname only, no http/https)" value="${s.smtp_host||''}"/>
@@ -1336,12 +1336,7 @@ class TroughApp {
 
             // Wire export uploads
             const exportBtn = document.getElementById('btn-export-upload');
-            if (exportBtn) exportBtn.onclick = async () => {
-                if (!confirm('Export all local uploads to remote storage? This may take a while.')) return;
-                const r = await fetch('/api/admin/site/export-uploads', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
-                if (r.ok) { const d = await r.json().catch(()=>({})); this.showNotification(`Exported ${d.exported||0} files`); }
-                else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Export failed','error'); }
-            };
+            if (exportBtn) exportBtn.onclick = () => this.showMigrationModal();
 
             const favInput = document.getElementById('favicon-file');
             const favPreview = document.getElementById('favicon-preview');
@@ -1588,6 +1583,174 @@ class TroughApp {
                 this.gallery.classList.remove('settings-mode');
                 this.gallery.innerHTML = ''; if (this.profileTop) this.profileTop.innerHTML=''; this.page=1; this.hasMore=true; this.loadImages();
             }
+        };
+    }
+
+    showMigrationModal() {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,0.8);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;padding:24px;';
+        
+        const modal = document.createElement('div');
+        modal.style.cssText = 'max-width:560px;width:100%;background:var(--surface-elevated);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:var(--shadow-3);';
+        
+        const header = document.createElement('div');
+        header.style.cssText = 'padding:24px 24px 16px;border-bottom:1px solid var(--border);';
+        header.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <h2 style="margin:0;font-size:1.25rem;font-weight:var(--weight-semibold);color:var(--text-primary)">Migrate to Remote Storage</h2>
+                <button id="close-migration" style="background:none;border:none;color:var(--text-secondary);font-size:1.5rem;cursor:pointer;padding:4px;border-radius:4px" title="Close">&times;</button>
+            </div>
+            <p style="margin:0;color:var(--text-secondary);font-size:0.9rem;line-height:1.4">Move all local uploads to your configured remote storage and update image URLs in the database.</p>
+        `;
+
+        const content = document.createElement('div');
+        content.style.cssText = 'padding:16px 24px 24px;';
+        content.innerHTML = `
+            <div id="migration-status" style="display:none;margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <div id="migration-spinner" style="width:16px;height:16px;border:2px solid var(--border);border-top:2px solid var(--accent);border-radius:50%;animation:spin 1s linear infinite"></div>
+                    <span id="migration-phase" style="font-weight:var(--weight-medium);color:var(--text-primary)">Preparing migration...</span>
+                </div>
+                <div id="migration-progress" style="background:var(--surface-elevated);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
+                    <div id="migration-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s ease"></div>
+                </div>
+                <div id="migration-details" style="font-size:0.8rem;color:var(--text-secondary)"></div>
+            </div>
+
+            <div id="migration-options" style="display:grid;gap:12px">
+                <label style="display:flex;align-items:center;gap:8px;padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.2s ease" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                    <input type="checkbox" id="cleanup-local" style="accent-color:var(--accent)"/>
+                    <div>
+                        <div style="font-weight:var(--weight-medium);color:var(--text-primary);margin-bottom:2px">Delete local files after successful upload</div>
+                        <div style="font-size:0.8rem;color:var(--text-secondary)">Recommended: Saves disk space by removing local copies once they're safely stored remotely</div>
+                    </div>
+                </label>
+            </div>
+
+            <div id="migration-results" style="display:none;margin-top:16px;padding:12px;border-radius:8px;"></div>
+
+            <div id="migration-actions" style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
+                <button id="cancel-migration" class="nav-btn" style="background:var(--surface);color:var(--text-secondary);border:1px solid var(--border)">Cancel</button>
+                <button id="start-migration" class="nav-btn" style="background:var(--accent);color:var(--color-bg);border:none;font-weight:var(--weight-medium)">Start Migration</button>
+            </div>
+        `;
+
+        modal.appendChild(header);
+        modal.appendChild(content);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        // Add spinner animation
+        const style = document.createElement('style');
+        style.textContent = '@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }';
+        document.head.appendChild(style);
+
+        // Wire up event handlers
+        const closeMigration = () => {
+            document.body.removeChild(overlay);
+            document.head.removeChild(style);
+        };
+
+        document.getElementById('close-migration').onclick = closeMigration;
+        document.getElementById('cancel-migration').onclick = closeMigration;
+
+        document.getElementById('start-migration').onclick = async () => {
+            const cleanupLocal = document.getElementById('cleanup-local').checked;
+            await this.performMigration(cleanupLocal);
+        };
+
+        // Close on overlay click
+        overlay.onclick = (e) => {
+            if (e.target === overlay) closeMigration();
+        };
+
+        // Close on Escape
+        const keyHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeMigration();
+                document.removeEventListener('keydown', keyHandler);
+            }
+        };
+        document.addEventListener('keydown', keyHandler);
+    }
+
+    async performMigration(cleanupLocal) {
+        const statusEl = document.getElementById('migration-status');
+        const optionsEl = document.getElementById('migration-options');
+        const actionsEl = document.getElementById('migration-actions');
+        const phaseEl = document.getElementById('migration-phase');
+        const progressBar = document.getElementById('migration-bar');
+        const detailsEl = document.getElementById('migration-details');
+        const resultsEl = document.getElementById('migration-results');
+
+        // Show progress UI
+        statusEl.style.display = 'block';
+        optionsEl.style.display = 'none';
+        actionsEl.style.display = 'none';
+
+        try {
+            phaseEl.textContent = 'Starting migration...';
+            progressBar.style.width = '10%';
+            detailsEl.textContent = 'Preparing to transfer files...';
+
+            const response = await fetch('/api/admin/site/export-uploads', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ cleanup_local: cleanupLocal })
+            });
+
+            const result = await response.json();
+
+            progressBar.style.width = '100%';
+
+            if (response.ok && result.success) {
+                phaseEl.textContent = 'Migration completed successfully!';
+                detailsEl.textContent = 'All files have been transferred and database updated.';
+                
+                resultsEl.style.display = 'block';
+                resultsEl.style.background = 'var(--color-ok-bg, #1a2e1a)';
+                resultsEl.style.border = '1px solid var(--color-ok, #59e38f)';
+                resultsEl.style.color = 'var(--color-ok)';
+                resultsEl.innerHTML = `
+                    <div style="font-weight:var(--weight-medium);margin-bottom:8px">✅ Migration Summary</div>
+                    <div style="font-size:0.9rem;line-height:1.4">
+                        • <strong>${result.uploaded_files || 0}</strong> files uploaded to remote storage<br>
+                        • <strong>${result.updated_records || 0}</strong> database records updated<br>
+                        ${result.cleaned_files > 0 ? `• <strong>${result.cleaned_files}</strong> local files cleaned up<br>` : ''}
+                        ${result.total_files > 0 ? `• Total files processed: <strong>${result.total_files}</strong>` : ''}
+                    </div>
+                `;
+
+                this.showNotification('Migration completed successfully!', 'success');
+            } else {
+                throw new Error(result.error || 'Migration failed');
+            }
+        } catch (error) {
+            phaseEl.textContent = 'Migration failed';
+            detailsEl.textContent = error.message;
+            progressBar.style.background = 'var(--color-danger)';
+
+            resultsEl.style.display = 'block';
+            resultsEl.style.background = 'var(--color-danger-bg, #2e1a1a)';
+            resultsEl.style.border = '1px solid var(--color-danger)';
+            resultsEl.style.color = 'var(--color-danger)';
+            resultsEl.innerHTML = `
+                <div style="font-weight:var(--weight-medium);margin-bottom:8px">❌ Migration Failed</div>
+                <div style="font-size:0.9rem">${error.message}</div>
+            `;
+
+            this.showNotification('Migration failed: ' + error.message, 'error');
+        }
+
+        // Show close button
+        actionsEl.style.display = 'flex';
+        actionsEl.innerHTML = '<button id="close-migration-final" class="nav-btn" style="background:var(--accent);color:var(--color-bg);border:none;margin-left:auto">Close</button>';
+        document.getElementById('close-migration-final').onclick = () => {
+            document.querySelector('[style*="z-index:3000"]').remove();
+            document.querySelector('style').remove();
         };
     }
 }
