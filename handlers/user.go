@@ -1,20 +1,18 @@
 package handlers
 
 import (
+	"bytes"
 	"database/sql"
-	"errors"
 	"image"
 	"image/draw"
+	"image/jpeg"
 	_ "image/jpeg"
 	_ "image/png"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-
-	"image/jpeg"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -26,13 +24,11 @@ import (
 type UserHandler struct {
 	userRepo  models.UserRepositoryInterface
 	imageRepo models.ImageRepositoryInterface
+	storage   services.Storage
 }
 
-func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *UserHandler {
-	return &UserHandler{
-		userRepo:  userRepo,
-		imageRepo: imageRepo,
-	}
+func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface, storage services.Storage) *UserHandler {
+	return &UserHandler{userRepo: userRepo, imageRepo: imageRepo, storage: storage}
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
@@ -246,8 +242,8 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No avatar file provided"})
 	}
-	ct := file.Header.Get("Content-Type")
-	if !isValidAvatarType(ct) {
+	contentType := file.Header.Get("Content-Type")
+	if !isValidAvatarType(contentType) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image format. Supported: JPEG, PNG, WebP"})
 	}
 	if file.Size > 5*1024*1024 {
@@ -309,19 +305,50 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save avatar"})
 		}
 	}
-	url := "/uploads/avatars/" + filepath.Base(path)
-	if _, err := h.userRepo.UpdateProfile(userID, models.UpdateUserRequest{AvatarURL: &url}); err != nil {
+	// Upload to storage (use current storage)
+	data, _ := os.ReadFile(path)
+	key := filepath.Join("avatars", filepath.Base(path))
+	st := services.GetCurrentStorage()
+	if st == nil {
+		st = h.storage
+	}
+	if st == nil {
+		st = services.NewLocalStorage("uploads")
+	}
+	publicURL := st.PublicURL(key)
+	// Detect content type by extension
+	var ct string = "image/jpeg"
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		ct = "image/png"
+	case ".webp":
+		ct = "image/webp"
+	case ".ico":
+		ct = "image/x-icon"
+	}
+	if _, err := st.Save(c.Context(), key, bytes.NewReader(data), ct); err != nil {
+		// fallback to local path
+		publicURL = "/uploads/avatars/" + filepath.Base(path)
+	}
+	if _, err := h.userRepo.UpdateProfile(userID, models.UpdateUserRequest{AvatarURL: &publicURL}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update profile"})
 	}
 	// Best-effort delete of previous avatar file if it was under /uploads/avatars/
-	if oldAvatar != "" && strings.HasPrefix(oldAvatar, "/uploads/avatars/") {
-		oldPath := filepath.Join(".", oldAvatar) // oldAvatar begins with "/uploads/avatars/"
-		if remErr := os.Remove(oldPath[1:]); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
-			// Log but do not fail the response
-			log.Printf("avatar cleanup failed for %s: %v", oldAvatar, remErr)
+	// Attempt to cleanup old avatar both locally and remote
+	if oldAvatar != "" {
+		// local cleanup
+		if strings.HasPrefix(oldAvatar, "/uploads/avatars/") {
+			oldPath := strings.TrimPrefix(oldAvatar, "/")
+			_ = os.Remove(oldPath)
+		} else {
+			// assume last segment is file name
+			parts := strings.Split(oldAvatar, "/")
+			if len(parts) > 0 {
+				_ = st.Delete(c.Context(), filepath.Join("avatars", parts[len(parts)-1]))
+			}
 		}
 	}
-	return c.JSON(fiber.Map{"avatar_url": url})
+	return c.JSON(fiber.Map{"avatar_url": publicURL})
 }
 
 func isValidAvatarType(contentType string) bool {
@@ -576,7 +603,9 @@ func (h *UserHandler) AdminSendVerification(c *fiber.Ctx) error {
 	}
 	sender := services.NewMailSender(set)
 	link := set.SiteURL + "/verify?token=" + token
-	_ = sender.Send(u.Email, "Verify your email", "Click to verify: "+link)
+	if err := sender.Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

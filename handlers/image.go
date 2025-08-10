@@ -1,12 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
 	"image"
-	_ "image/jpeg"
+	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,19 +20,44 @@ import (
 	"github.com/yourusername/trough/services"
 )
 
+// extractStorageKey extracts the storage key from either a filename or full URL
+func extractStorageKey(filenameOrURL string) string {
+	if filenameOrURL == "" {
+		return ""
+	}
+	// If it's a full URL, extract the filename part
+	if strings.HasPrefix(filenameOrURL, "http://") || strings.HasPrefix(filenameOrURL, "https://") {
+		parts := strings.Split(filenameOrURL, "/")
+		if len(parts) > 0 {
+			return parts[len(parts)-1] // Return the last part (filename)
+		}
+	}
+	// If it's a domain-based URL without protocol (like z.disinfo.zone/file.jpg)
+	if strings.Contains(filenameOrURL, "/") && strings.Contains(filenameOrURL, ".") && !strings.HasPrefix(filenameOrURL, "/") {
+		parts := strings.Split(filenameOrURL, "/")
+		if len(parts) > 0 {
+			return parts[len(parts)-1] // Return the last part (filename)
+		}
+	}
+	// If it's just a filename, return as-is
+	return filenameOrURL
+}
+
 type ImageHandler struct {
 	imageRepo models.ImageRepositoryInterface
 	likeRepo  models.LikeRepositoryInterface
 	userRepo  models.UserRepositoryInterface
 	config    services.Config
+	storage   services.Storage
 }
 
-func NewImageHandler(imageRepo models.ImageRepositoryInterface, likeRepo models.LikeRepositoryInterface, userRepo models.UserRepositoryInterface, config services.Config) *ImageHandler {
+func NewImageHandler(imageRepo models.ImageRepositoryInterface, likeRepo models.LikeRepositoryInterface, userRepo models.UserRepositoryInterface, config services.Config, storage services.Storage) *ImageHandler {
 	return &ImageHandler{
 		imageRepo: imageRepo,
 		likeRepo:  likeRepo,
 		userRepo:  userRepo,
 		config:    config,
+		storage:   storage,
 	}
 }
 
@@ -96,16 +122,74 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 
 	xmp := services.ExtractXMPXML(tmpPath)
 	filename := uuid.New().String() + ".jpg"
-	uploadPath := filepath.Join("uploads", filename)
-	if err := services.WriteJPEGWithXMP(img, 90, uploadPath, xmp); err != nil {
-		os.Remove(tmpPath)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save image"})
+	// Encode to JPEG bytes; if XMP exists, use helper to embed via temp file then read
+	var finalBytes []byte
+	if len(xmp) > 0 {
+		tempOut := filepath.Join("uploads", "tmp-out-"+uuid.New().String()+".jpg")
+		if err := services.WriteJPEGWithXMP(img, 90, tempOut, xmp); err != nil {
+			os.Remove(tmpPath)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save image"})
+		}
+		b, err := os.ReadFile(tempOut)
+		if err != nil {
+			os.Remove(tempOut)
+			os.Remove(tmpPath)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read image"})
+		}
+		finalBytes = b
+		os.Remove(tempOut)
+	} else {
+		var buf bytes.Buffer
+		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+			os.Remove(tmpPath)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to encode image"})
+		}
+		finalBytes = buf.Bytes()
 	}
+	// Save to storage (local or remote) under top-level key = filename
+	st := services.GetCurrentStorage()
+	if st == nil {
+		st = h.storage
+	}
+	if st == nil {
+		st = services.NewLocalStorage("uploads")
+	}
+	publicURL, err := st.Save(c.Context(), filename, bytes.NewReader(finalBytes), "image/jpeg")
+	if err != nil {
+		os.Remove(tmpPath)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to store image"})
+	}
+
+	// For local storage, ensure the public URL is just the filename for backward compatibility
+	// For remote storage, use the full public URL
+	var filenameOrURL string
+	if st.IsLocal() {
+		filenameOrURL = filename
+	} else {
+		filenameOrURL = publicURL
+	}
+	// Remove tmp original
 	os.Remove(tmpPath)
 
 	// Verify AI and extract EXIF JSON from the final file
-	isAI, aiSignature := services.VerifyAIImage(uploadPath, h.config)
-	exifFull := services.ExtractExifJSON(uploadPath)
+	var isAI bool
+	var aiSignature string
+	var exifFull json.RawMessage
+	if st.IsLocal() {
+		localPath := filepath.Join("uploads", filename)
+		isAI, aiSignature = services.VerifyAIImage(localPath, h.config)
+		exifFull = services.ExtractExifJSON(localPath)
+	} else {
+		// Use bytes written
+		tmpExif := filepath.Join("uploads", "tmp-exif-"+uuid.New().String()+".jpg")
+		if err := os.WriteFile(tmpExif, finalBytes, 0o644); err == nil {
+			isAI, aiSignature = services.VerifyAIImage(tmpExif, h.config)
+			exifFull = services.ExtractExifJSON(tmpExif)
+			os.Remove(tmpExif)
+		} else {
+			exifFull = json.RawMessage("null")
+		}
+	}
 
 	var exifData json.RawMessage
 	if len(aiSignature) > 0 {
@@ -127,7 +211,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 
 	imageModel := &models.Image{
 		UserID:        userID,
-		Filename:      filename,
+		Filename:      filenameOrURL, // Store either filename (local) or full URL (remote)
 		OriginalName:  &originalName,
 		FileSize:      &fileSize,
 		Width:         &imageMeta.Width,
@@ -149,7 +233,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 
 	if err := h.imageRepo.Create(imageModel); err != nil {
-		os.Remove(uploadPath)
+		_ = st.Delete(c.Context(), filename) // Use original filename for cleanup
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save image metadata"})
 	}
 
@@ -313,11 +397,19 @@ func (h *ImageHandler) DeleteImage(c *fiber.Ctx) error {
 	if !isOwner && !isPrivileged {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
-	// Remove file from disk first; if it's already gone, continue
+	// Remove file from storage first; if it's already gone, continue
 	if img.Filename != "" {
-		path := filepath.Join("uploads", img.Filename)
-		if remErr := os.Remove(path); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to remove image file"})
+		st := services.GetCurrentStorage()
+		if st == nil {
+			st = h.storage
+		}
+		if st == nil {
+			st = services.NewLocalStorage("uploads")
+		}
+		// Extract the actual storage key from filename (which might be a full URL)
+		storageKey := extractStorageKey(img.Filename)
+		if remErr := st.Delete(c.Context(), storageKey); remErr != nil {
+			// best-effort; ignore not found
 		}
 	}
 	if err := h.imageRepo.Delete(imgID); err != nil {

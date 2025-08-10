@@ -23,7 +23,7 @@ type AuthHandler struct {
 func NewAuthHandler(userRepo models.UserRepositoryInterface) *AuthHandler {
 	return &AuthHandler{
 		userRepo:      userRepo,
-		settingsRepo:  models.NewSiteSettingsRepository(models.DB()),
+		settingsRepo:  &inMemorySettingsRepo{settings: models.SiteSettings{SiteName: "TROUGH"}},
 		validator:     validator.New(),
 		newMailSender: services.NewMailSender,
 	}
@@ -38,6 +38,20 @@ func NewAuthHandlerWithRepos(userRepo models.UserRepositoryInterface, settingsRe
 func (h *AuthHandler) WithMailFactory(f func(*models.SiteSettings) services.MailSender) *AuthHandler {
 	h.newMailSender = f
 	return h
+}
+
+// simple in-memory SiteSettings repo for tests
+type inMemorySettingsRepo struct{ settings models.SiteSettings }
+
+func (r *inMemorySettingsRepo) Get() (*models.SiteSettings, error)  { s := r.settings; return &s, nil }
+func (r *inMemorySettingsRepo) Upsert(s *models.SiteSettings) error { r.settings = *s; return nil }
+func (r *inMemorySettingsRepo) UpdateFavicon(path string) error {
+	r.settings.FaviconPath = path
+	return nil
+}
+func (r *inMemorySettingsRepo) UpdateSocialImageURL(path string) error {
+	r.settings.SocialImageURL = path
+	return nil
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
@@ -158,7 +172,9 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	}
 	sender := h.newMailSender(set)
 	link := set.SiteURL + "/reset?token=" + token
-	_ = sender.Send(u.Email, "Reset your password", "Use this link to reset your password: "+link)
+	if err := sender.Send(u.Email, "Reset your password", "Use this link to reset your password: "+link); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -233,6 +249,8 @@ func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
 	}
 	sender := h.newMailSender(set)
 	link := set.SiteURL + "/verify?token=" + token
-	_ = sender.Send(u.Email, "Verify your email", "Click to verify: "+link)
+	if err := sender.Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

@@ -109,9 +109,18 @@ func Migrate() error {
 			smtp_port INTEGER DEFAULT 0,
 			smtp_username TEXT DEFAULT '',
 			smtp_password TEXT DEFAULT '',
+			smtp_from_email TEXT DEFAULT '',
 			smtp_tls BOOLEAN DEFAULT FALSE,
 			favicon_path TEXT DEFAULT '',
 			require_email_verification BOOLEAN DEFAULT FALSE,
+			-- storage config
+			storage_provider TEXT DEFAULT 'local',
+			s3_endpoint TEXT DEFAULT '',
+			s3_bucket TEXT DEFAULT '',
+			s3_access_key TEXT DEFAULT '',
+			s3_secret_key TEXT DEFAULT '',
+			s3_force_path_style BOOLEAN DEFAULT TRUE,
+			public_base_url TEXT DEFAULT '',
 			updated_at TIMESTAMP DEFAULT NOW()
 		);
 
@@ -136,6 +145,19 @@ func Migrate() error {
 			created_at TIMESTAMP DEFAULT NOW()
 		);
 		ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+
+		-- Ensure new storage columns exist for upgrades
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS require_email_verification BOOLEAN DEFAULT FALSE;
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS smtp_tls BOOLEAN DEFAULT FALSE;
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS smtp_from_email TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS favicon_path TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS storage_provider TEXT DEFAULT 'local';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_endpoint TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_bucket TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_access_key TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_secret_key TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_force_path_style BOOLEAN DEFAULT TRUE;
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS public_base_url TEXT DEFAULT '';
 	`
 
 	_, err := DB.Exec(schema)

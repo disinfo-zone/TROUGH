@@ -27,10 +27,10 @@ type IntegrationTestSuite struct {
 
 func (suite *IntegrationTestSuite) SetupSuite() {
 	os.Setenv("DATABASE_URL", "postgres://trough:trough@localhost:5432/trough_test?sslmode=disable")
-	
+
 	err := db.Connect()
 	suite.Require().NoError(err)
-	
+
 	err = db.Migrate()
 	suite.Require().NoError(err)
 
@@ -42,11 +42,12 @@ func (suite *IntegrationTestSuite) SetupSuite() {
 	suite.likeRepo = models.NewLikeRepository(db.DB)
 
 	authHandler := handlers.NewAuthHandler(suite.userRepo)
-	imageHandler := handlers.NewImageHandler(suite.imageRepo, suite.likeRepo, suite.userRepo, *config)
-	userHandler := handlers.NewUserHandler(suite.userRepo, suite.imageRepo)
+	storage := services.NewLocalStorage("uploads")
+	imageHandler := handlers.NewImageHandler(suite.imageRepo, suite.likeRepo, suite.userRepo, *config, storage)
+	userHandler := handlers.NewUserHandler(suite.userRepo, suite.imageRepo, storage)
 
 	suite.app = fiber.New()
-	
+
 	api := suite.app.Group("/api")
 	api.Post("/register", authHandler.Register)
 	api.Post("/login", authHandler.Login)
@@ -72,7 +73,7 @@ func (suite *IntegrationTestSuite) TestUserRegistrationAndLogin() {
 		"email":    "test@example.com",
 		"password": "password123",
 	}
-	
+
 	body, _ := json.Marshal(registerData)
 	req := httptest.NewRequest("POST", "/api/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -90,7 +91,7 @@ func (suite *IntegrationTestSuite) TestUserRegistrationAndLogin() {
 		"email":    "test@example.com",
 		"password": "password123",
 	}
-	
+
 	body, _ = json.Marshal(loginData)
 	req = httptest.NewRequest("POST", "/api/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -107,7 +108,7 @@ func (suite *IntegrationTestSuite) TestUserRegistrationAndLogin() {
 
 func (suite *IntegrationTestSuite) TestFeedEndpoint() {
 	req := httptest.NewRequest("GET", "/api/feed", nil)
-	
+
 	resp, err := suite.app.Test(req)
 	suite.NoError(err)
 	suite.Equal(http.StatusOK, resp.StatusCode)

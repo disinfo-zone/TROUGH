@@ -59,6 +59,13 @@ make run
 ```bash
 DATABASE_URL=postgres://trough:trough@localhost:5432/trough?sslmode=disable
 JWT_SECRET=your-secret-key-here
+# Optional: remote storage (S3/R2)
+STORAGE_PROVIDER=s3            # or r2
+S3_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
+S3_BUCKET=<bucket-name>
+S3_ACCESS_KEY_ID=<key>
+S3_SECRET_ACCESS_KEY=<secret>
+STORAGE_PUBLIC_BASE_URL=https://cdn.example.com   # optional CDN/public base URL
 ```
 
 ## API Endpoints
@@ -89,6 +96,8 @@ make test-coverage
 # Run integration tests (requires database)
 go test -v ./tests -tags=integration
 ```
+
+If you compile with S3 support via build tags, add `-tags s3` as well.
 
 ## Architecture
 

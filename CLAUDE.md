@@ -29,14 +29,14 @@ Everything is minimal with a brutal and exquisite focus on the art — but never
 ## Current Status (Repo Snapshot)
 - Backend (Go + Fiber): Implemented
   - Routes: `/api/register`, `/api/login`, `/api/me`, `/api/feed`, `/api/images/:id`, `/api/upload` (auth), `/api/images/:id/like` (auth), `/api/users/:username`, `/api/users/:username/images`, `/api/site`
-  - Admin: `/api/admin/users` (GET supports `q`, `page`, `limit`; returns `total_pages`), create/update/delete users, flags, password, SMTP tests, favicon/social image upload
+  - Admin: `/api/admin/users` (GET supports `q`, `page`, `limit`; returns `total_pages`), create/update/delete users, flags, password, SMTP tests with custom "from email" field, favicon/social image upload, S3/R2 storage configuration and testing
   - JWT auth with password hashing (bcrypt)
   - Image upload with processing (blurhash, dominant color), EXIF scan for AI signatures
   - NSFW gating via user preference
   - Auto-migrations on startup
   - Account (auth): `/api/me/profile` (GET/PATCH), `/api/me/account` (GET), `/api/me/email` (PATCH), `/api/me/password` (PATCH), `/api/me` (DELETE), `/api/me/avatar` (POST)
 - Database (PostgreSQL): Implemented
-  - Tables: `users`, `images`, `likes`, `site_settings` (single row) with indexes
+  - Tables: `users`, `images`, `likes`, `site_settings` (single row with SMTP and S3/R2 storage configuration) with indexes
 - Frontend (Vanilla JS/CSS/HTML): Implemented
   - Routes: SPA handles `/`, `/@:username`, `/settings`, `/admin`, `/i/:id` (single image page)
   - Masonry-like gallery, lightbox, drag & drop upload
@@ -50,6 +50,8 @@ Everything is minimal with a brutal and exquisite focus on the art — but never
 - Ops:
   - Docker (multi-stage) + docker-compose with DB healthcheck; `Makefile`
   - Config via `config.yaml` and `.env.example`
+  - S3/R2 storage support with automatic URL generation for remote storage
+  - Image deletion properly cleans up both database records and storage files
 - Tests: Unit + integration tests present (handlers, services)
 
 Note: Code examples here are intentionally minimal; see repo files for implementation details.
@@ -266,6 +268,13 @@ Place at top of `static/css/style.css` under a `:root` block.
 - Admin user search pagination with Prev/Next and server-side `page`/`limit`.
 - Mobile: `#profile-top` padding tightened; usernames render in monospace in nav, cards, lightbox, and profile header.
 - Settings layout margin: reduced top/bottom to 33px.
+
+## Recent Storage & SMTP Updates
+- **SMTP Configuration**: Added optional "from email" field in admin settings to customize sender address (falls back to SMTP username if not set).
+- **S3/R2 Storage**: Full support for Cloudflare R2 and AWS S3 compatible storage with proper URL generation and cleanup.
+- **Image URLs**: Smart URL handling that works with both local storage (`/uploads/filename.jpg`) and remote storage (`https://domain.com/filename.jpg`).
+- **Storage Cleanup**: Image deletion now properly removes files from both database and storage backend (local or remote).
+- **Admin Storage Test**: Added storage verification endpoint to test S3/R2 connectivity and configuration.
 
 ## EXIF
 - Backend writes uploads as high-quality JPEG while preserving XMP and extracting full EXIF into `images.exif_data`.

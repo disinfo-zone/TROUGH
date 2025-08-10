@@ -213,9 +213,16 @@ func main() {
 	maybeSeedAdmin(userRepo)
 
 	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo)
-	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config)
-	userHandler := handlers.NewUserHandler(userRepo, imageRepo)
-	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo)
+	// Build storage from settings or env
+	stSettings, _ := siteRepo.Get()
+	storage, err := services.NewStorageFromSettings(*stSettings)
+	if err != nil {
+		storage = services.NewLocalStorage("uploads")
+	}
+	services.SetCurrentStorage(storage)
+	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage)
+	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo).WithStorage(storage)
 
 	app := fiber.New(fiber.Config{BodyLimit: 10 * 1024 * 1024, ErrorHandler: customErrorHandler})
 
@@ -233,7 +240,16 @@ func main() {
 
 	// Static assets
 	app.Static("/", "./static", fiber.Static{Compress: true, CacheDuration: 3600})
+	// Local uploads are served statically when storage is local. For remote storage (S3/R2),
+	// we keep this mount (for legacy/local files), and add a redirector for /uploads/* to the
+	// configured public base if set.
 	app.Static("/uploads", "./uploads", fiber.Static{Compress: true, CacheDuration: 86400})
+	if !storage.IsLocal() && strings.TrimSpace(stSettings.PublicBaseURL) != "" {
+		app.Get("/uploads/*", func(c *fiber.Ctx) error {
+			key := c.Params("*")
+			return c.Redirect(storage.PublicURL(key), fiber.StatusFound)
+		})
+	}
 
 	api := app.Group("/api")
 
@@ -278,6 +294,8 @@ func main() {
 	api.Post("/admin/site/favicon", middleware.Protected(), adminHandler.UploadFavicon)
 	api.Post("/admin/site/social-image", middleware.Protected(), adminHandler.UploadSocialImage)
 	api.Post("/admin/site/test-smtp", middleware.Protected(), adminHandler.TestSMTP)
+	api.Post("/admin/site/export-uploads", middleware.Protected(), adminHandler.ExportLocalUploadsToStorage)
+	api.Post("/admin/site/test-storage", middleware.Protected(), adminHandler.TestStorage)
 
 	app.Use(func(c *fiber.Ctx) error {
 		if strings.HasPrefix(c.Path(), "/api") {

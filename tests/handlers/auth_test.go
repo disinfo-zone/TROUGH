@@ -84,8 +84,26 @@ func (m *MockUserRepository) SetDisabled(id uuid.UUID, disabled bool) error {
 	return args.Error(0)
 }
 
+func (m *MockUserRepository) SetModerator(id uuid.UUID, isModerator bool) error {
+	args := m.Called(id, isModerator)
+	return args.Error(0)
+}
+
 func (m *MockUserRepository) ListUsers(page, limit int) ([]models.User, int, error) {
 	args := m.Called(page, limit)
+	var users []models.User
+	if u := args.Get(0); u != nil {
+		users = u.([]models.User)
+	}
+	total := 0
+	if t := args.Get(1); t != nil {
+		total = t.(int)
+	}
+	return users, total, args.Error(2)
+}
+
+func (m *MockUserRepository) SearchUsers(q string, page, limit int) ([]models.User, int, error) {
+	args := m.Called(q, page, limit)
 	var users []models.User
 	if u := args.Get(0); u != nil {
 		users = u.([]models.User)

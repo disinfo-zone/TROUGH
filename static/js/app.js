@@ -38,6 +38,24 @@ class TroughApp {
         this.init();
     }
 
+    // Helper function to get the correct image URL (handles both local filenames and remote URLs)
+    getImageURL(filename) {
+        if (!filename) return '';
+        
+        // Check for full URLs with protocol
+        if (filename.startsWith('http://') || filename.startsWith('https://')) {
+            return filename;
+        }
+        
+        // Check for domain-based URLs without protocol (like z.disinfo.zone/file.jpg)
+        if (filename.includes('.') && filename.includes('/') && !filename.startsWith('/')) {
+            return 'https://' + filename;
+        }
+        
+        // Local filename
+        return `/uploads/${filename}`;
+    }
+
     async init() {
         await this.checkAuth();
         await this.applyPublicSiteSettings();
@@ -608,7 +626,7 @@ class TroughApp {
                 </div>`;
         } else {
             const img = document.createElement('img');
-            img.src = `/uploads/${image.filename}`;
+            img.src = this.getImageURL(image.filename);
             img.alt = image.original_name || image.title || '';
             img.loading = 'lazy';
             // NSFW blur logic based on current user preference
@@ -633,11 +651,11 @@ class TroughApp {
             const username = image.username || image.author || 'Unknown';
             const captionHtml = image.caption ? `<div class="image-caption" style="margin-top:4px;color:var(--text-secondary);font-size:0.8rem">${this.sanitizeAndRenderMarkdown(image.caption)}</div>` : '';
             const actions = canEdit ? `
-                <div class="image-actions" style="display:flex;gap:8px;align-items:center;flex-shrink:0">
-                  <button title="Edit" class="like-btn" data-act="edit" data-id="${image.id}" style="width:28px;height:28px;color:var(--text-secondary)">
+                <div class="image-actions" style="display:flex;gap:2px;align-items:center;flex-shrink:0">
+                  <button title="Edit" class="like-btn" data-act="edit" data-id="${image.id}" style="width:28px;height:28px;padding:0;color:var(--text-secondary)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
                   </button>
-                  <button title="Delete" class="like-btn" data-act="delete" data-id="${image.id}" style="width:28px;height:28px;color:#ff6666">
+                  <button title="Delete" class="like-btn" data-act="delete" data-id="${image.id}" style="width:28px;height:28px;padding:0;color:#ff6666">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
                   </button>
                 </div>` : '';
@@ -727,7 +745,7 @@ class TroughApp {
         const panel = document.createElement('div');
         panel.style.cssText = 'max-width:980px;width:100%;max-height:90vh;overflow:auto;background:var(--surface-elevated);border:1px solid var(--border);border-radius:12px;padding:16px;color:var(--text-primary)';
         panel.innerHTML = `
-            ${filename ? `<div style="display:flex;justify-content:center;"><img src="/uploads/${filename}" alt="" style="max-height:60vh;width:auto;border-radius:10px;border:1px solid var(--border);margin-bottom:12px"/></div>` : ''}
+            ${filename ? `<div style="display:flex;justify-content:center;"><img src="${this.getImageURL(filename)}" alt="" style="max-height:60vh;width:auto;border-radius:10px;border:1px solid var(--border);margin-bottom:12px"/></div>` : ''}
             <div style="position:sticky;bottom:0;background:var(--surface-elevated);border-top:1px solid var(--border);padding-top:12px;display:grid;gap:12px">
               <input id="e-title" placeholder="Title" value="${(image.title || image.original_name || '').replaceAll('"','&quot;')}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-primary)"/>
               <textarea id="e-caption" placeholder="Caption" rows="3" maxlength="2000" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-primary)">${(image.caption||'').replaceAll('<','&lt;')}</textarea>
@@ -757,7 +775,7 @@ class TroughApp {
         if (!lightboxImg) return;
 
         if (image.filename) {
-            lightboxImg.src = `/uploads/${image.filename}`;
+            lightboxImg.src = this.getImageURL(image.filename);
             lightboxImg.alt = image.original_name || image.title || '';
         }
         const username = image.username || image.author || 'Unknown';
@@ -1157,13 +1175,35 @@ class TroughApp {
                 <button id="btn-upload-social" class="nav-btn">Upload social image</button>
                 <img id="social-image-preview" src="${s.social_image_url||''}" alt="Social image preview" style="height:40px;aspect-ratio:1/1;object-fit:cover;border:1px solid var(--border);border-radius:8px;${s.social_image_url?'':'display:none'}"/>
               </div>
-              <div class="settings-actions" style="margin-top:8px"><button id="btn-save-site-top" class="nav-btn">Save</button></div>
+              <div class="settings-label">Storage</div>
+              <div style="display:grid;gap:8px">
+                <label class="settings-label">Provider</label>
+                <select id="storage-provider" class="settings-input">
+                  <option value="local" ${!s.storage_provider || s.storage_provider==='local' ? 'selected' : ''}>Local</option>
+                  <option value="s3" ${s.storage_provider==='s3' || s.storage_provider==='r2' ? 'selected' : ''}>S3 / R2</option>
+                </select>
+                <input id="s3-endpoint" class="settings-input" placeholder="S3/R2 endpoint (https://...)" value="${s.s3_endpoint||''}"/>
+                <input id="s3-bucket" class="settings-input" placeholder="Bucket name" value="${s.s3_bucket||''}"/>
+                <input id="s3-access" class="settings-input" placeholder="Access key" value="${s.s3_access_key||''}"/>
+                <input id="s3-secret" class="settings-input" type="password" placeholder="Secret key" value="${s.s3_secret_key||''}"/>
+                <label style="display:flex;gap:8px;align-items:center"><input id="s3-path" type="checkbox" ${s.s3_force_path_style?'checked':''}/> Force path-style URLs</label>
+                <input id="public-base" class="settings-input" placeholder="Public base URL (e.g., CDN)" value="${s.public_base_url||''}"/>
+                <div class="settings-actions" style="gap:8px;align-items:center">
+                  <span id="storage-status" class="meta" style="opacity:.8">Current: ${s.storage_provider||'local'}</span>
+                  <button id="btn-test-storage" class="nav-btn">Verify storage</button>
+                </div>
+              </div>
+              <div class="settings-actions" style="margin-top:8px;gap:8px;align-items:center">
+                <button id="btn-save-site-top" class="nav-btn">Save</button>
+                <button id="btn-export-upload" class="nav-btn">Export local uploads → remote</button>
+              </div>
               <div class="settings-label">SMTP</div>
-              <input id="smtp-host" class="settings-input" placeholder="SMTP host" value="${s.smtp_host||''}"/>
+              <input id="smtp-host" class="settings-input" placeholder="SMTP host (hostname only, no http/https)" value="${s.smtp_host||''}"/>
               <input id="smtp-port" class="settings-input no-spinner" type="number" placeholder="SMTP port" value="${s.smtp_port||''}"/>
-              <input id="smtp-username" class="settings-input" placeholder="SMTP username" value="${s.smtp_username||''}"/>
+              <input id="smtp-username" class="settings-input" placeholder="SMTP username (often your full email address)" value="${s.smtp_username||''}"/>
               <input id="smtp-password" class="settings-input" type="password" placeholder="SMTP password" value="${s.smtp_password||''}"/>
-              <label style="display:flex;gap:8px;align-items:center"><input id="smtp-tls" type="checkbox" ${s.smtp_tls?'checked':''}/> Use TLS for SMTP connection (STARTTLS/SSL)</label>
+              <input id="smtp-from" class="settings-input" placeholder="From email (optional, defaults to username)" value="${s.smtp_from_email||''}"/>
+              <label style="display:flex;gap:8px;align-items:center"><input id="smtp-tls" type="checkbox" ${s.smtp_tls?'checked':''}/> Use TLS (465 implicit TLS or 587 STARTTLS)</label>
               ${smtpConfigured ? `<label style="display:flex;gap:8px;align-items:center"><input id="require-verify" type="checkbox" ${s.require_email_verification?'checked':''}/> Require email verification for new accounts</label>
               <div class="settings-actions" style="gap:8px;align-items:center"><input id="smtp-test-to" class="settings-input" placeholder="Test email to"/><button id="btn-smtp-test" class="nav-btn">Send test</button></div>` : '<small style="color:var(--text-tertiary)">Enter SMTP settings to enable email features</small>'}
               <div class="settings-actions"><button id="btn-save-site" class="nav-btn">Save</button></div>
@@ -1173,31 +1213,9 @@ class TroughApp {
                 <button id="btn-upload-favicon" class="nav-btn">Upload favicon</button>
                 <img id="favicon-preview" src="${s.favicon_path||''}" alt="Favicon preview" style="height:24px;width:24px;object-fit:contain;border:1px solid var(--border);border-radius:4px;${s.favicon_path?'':'display:none'}"/>
               </div>`;
-            // Save includes require verification value
-            const doSave = async () => {
-                const body = {
-                    site_name: document.getElementById('site-name').value,
-                    site_url: document.getElementById('site-url').value,
-                    seo_title: document.getElementById('seo-title').value,
-                    seo_description: document.getElementById('seo-description').value,
-                    social_image_url: document.getElementById('social-image').value,
-                    smtp_host: document.getElementById('smtp-host').value,
-                    smtp_port: parseInt(document.getElementById('smtp-port').value||'0',10),
-                    smtp_username: document.getElementById('smtp-username').value,
-                    smtp_password: document.getElementById('smtp-password').value,
-                    smtp_tls: document.getElementById('smtp-tls').checked,
-                    require_email_verification: document.getElementById('require-verify')?.checked || false,
-                };
-                const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
-                if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }
-                else { this.showNotification('Save failed','error'); }
-            };
-            // Wire SMTP test
-            const btnTest = document.getElementById('btn-smtp-test'); if (btnTest) btnTest.onclick = async () => { const to = (document.getElementById('smtp-test-to').value||'').trim(); if(!to){ this.showNotification('Enter recipient','error'); return;} const r = await fetch('/api/admin/site/test-smtp', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify({ to }) }); if (r.status===204) this.showNotification('Test email sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Send failed','error'); } };
-            const saveBtnTop = document.getElementById('btn-save-site-top');
-            if (saveBtnTop) saveBtnTop.onclick = doSave;
-            const saveBtn = document.getElementById('btn-save-site');
-            if (saveBtn) saveBtn.onclick = doSave;
+            // Event handlers will be wired up in the isAdmin block below
+
+            // Storage test handler will be wired up in the isAdmin block below
 
             const favInput = document.getElementById('favicon-file');
             const favPreview = document.getElementById('favicon-preview');
@@ -1246,17 +1264,28 @@ class TroughApp {
         this.gallery.appendChild(wrap);
 
         if (isAdmin) {
+            // Define doSave function with all settings (including storage)
             const doSave = async () => {
+                const rawHost = document.getElementById('smtp-host').value.trim();
+                const smtpHost = rawHost.replace(/^https?:\/\//i, ''); // host only
                 const body = {
                     site_name: document.getElementById('site-name').value,
                     site_url: document.getElementById('site-url').value,
                     seo_title: document.getElementById('seo-title').value,
                     seo_description: document.getElementById('seo-description').value,
                     social_image_url: document.getElementById('social-image').value,
-                    smtp_host: document.getElementById('smtp-host').value,
+                    storage_provider: document.getElementById('storage-provider').value,
+                    s3_endpoint: document.getElementById('s3-endpoint').value,
+                    s3_bucket: document.getElementById('s3-bucket').value,
+                    s3_access_key: document.getElementById('s3-access').value,
+                    s3_secret_key: document.getElementById('s3-secret').value,
+                    s3_force_path_style: document.getElementById('s3-path').checked,
+                    public_base_url: document.getElementById('public-base').value,
+                    smtp_host: smtpHost,
                     smtp_port: parseInt(document.getElementById('smtp-port').value||'0',10),
                     smtp_username: document.getElementById('smtp-username').value,
                     smtp_password: document.getElementById('smtp-password').value,
+                    smtp_from_email: document.getElementById('smtp-from').value,
                     smtp_tls: document.getElementById('smtp-tls').checked,
                     require_email_verification: document.getElementById('require-verify')?.checked || false,
                 };
@@ -1264,10 +1293,55 @@ class TroughApp {
                 if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }
                 else { this.showNotification('Save failed','error'); }
             };
+
+            // Wire up all event handlers
             const saveBtnTop = document.getElementById('btn-save-site-top');
             if (saveBtnTop) saveBtnTop.onclick = doSave;
             const saveBtn = document.getElementById('btn-save-site');
             if (saveBtn) saveBtn.onclick = doSave;
+
+            // Wire SMTP test
+            const btnTest = document.getElementById('btn-smtp-test');
+            if (btnTest) btnTest.onclick = async () => {
+                const to = (document.getElementById('smtp-test-to').value||'').trim();
+                if(!to){ this.showNotification('Enter recipient','error'); return;}
+                const r = await fetch('/api/admin/site/test-smtp', {
+                    method:'POST',
+                    headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' },
+                    body: JSON.stringify({ to })
+                });
+                if (r.status===204) this.showNotification('Test email sent');
+                else {
+                    const e = await r.json().catch(()=>({}));
+                    const msg = e.details ? `${e.error||'Send failed'}: ${e.details}` : (e.error||'Send failed');
+                    this.showNotification(msg,'error');
+                }
+            };
+
+            // Wire storage test
+            const btnTestStorage = document.getElementById('btn-test-storage');
+            if (btnTestStorage) btnTestStorage.onclick = async () => {
+                const r = await fetch('/api/admin/site/test-storage', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                const statusEl = document.getElementById('storage-status');
+                if (r.ok) {
+                    const d = await r.json().catch(()=>({}));
+                    if (statusEl) statusEl.textContent = `Current: ${d.provider||'local'} • OK`;
+                    this.showNotification('Storage verified');
+                } else {
+                    const e = await r.json().catch(()=>({}));
+                    if (statusEl) statusEl.textContent = `Current: ${document.getElementById('storage-provider').value} • Error`;
+                    this.showNotification(e.error||'Storage verification failed','error');
+                }
+            };
+
+            // Wire export uploads
+            const exportBtn = document.getElementById('btn-export-upload');
+            if (exportBtn) exportBtn.onclick = async () => {
+                if (!confirm('Export all local uploads to remote storage? This may take a while.')) return;
+                const r = await fetch('/api/admin/site/export-uploads', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                if (r.ok) { const d = await r.json().catch(()=>({})); this.showNotification(`Exported ${d.exported||0} files`); }
+                else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Export failed','error'); }
+            };
 
             const favInput = document.getElementById('favicon-file');
             const favPreview = document.getElementById('favicon-preview');
@@ -1422,7 +1496,7 @@ class TroughApp {
               <h1 style="font-size:1.25rem;margin:0;letter-spacing:-0.01em">${title}</h1>
               <a href="/@${encodeURIComponent(username)}" class="link-btn" style="text-decoration:none">@${username}</a>
             </div>
-            <div style="display:flex;justify-content:center"><img src="/uploads/${data.filename}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>
+            <div style="display:flex;justify-content:center"><img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>
             ${captionHtml}
           </div>`;
         this.gallery.appendChild(wrap);
