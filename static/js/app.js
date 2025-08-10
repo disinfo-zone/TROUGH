@@ -1660,7 +1660,7 @@ class TroughApp {
 
         document.getElementById('start-migration').onclick = async () => {
             const cleanupLocal = document.getElementById('cleanup-local').checked;
-            await this.performMigration(cleanupLocal);
+            await this.performMigration(cleanupLocal, closeMigration);
         };
 
         // Close on overlay click
@@ -1678,7 +1678,7 @@ class TroughApp {
         document.addEventListener('keydown', keyHandler);
     }
 
-    async performMigration(cleanupLocal) {
+    async performMigration(cleanupLocal, closeModalFunction) {
         const statusEl = document.getElementById('migration-status');
         const optionsEl = document.getElementById('migration-options');
         const actionsEl = document.getElementById('migration-actions');
@@ -1772,14 +1772,7 @@ class TroughApp {
         actionsEl.style.display = 'flex';
         actionsEl.innerHTML = '<button id="close-migration-final" class="nav-btn" style="background:var(--surface-elevated);color:var(--text-primary);border:1px solid var(--border);margin-left:auto;padding:8px 16px;font-weight:var(--weight-medium, 500)">Close</button>';
         
-        document.getElementById('close-migration-final').onclick = () => {
-            if (overlay.parentNode) {
-                overlay.parentNode.removeChild(overlay);
-            }
-            if (style.parentNode) {
-                style.parentNode.removeChild(style);
-            }
-        };
+        document.getElementById('close-migration-final').onclick = closeModalFunction;
     }
 }
 
