@@ -1630,8 +1630,8 @@ class TroughApp {
             <div id="migration-results" style="display:none;margin-top:16px;padding:12px;border-radius:8px;"></div>
 
             <div id="migration-actions" style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
-                <button id="cancel-migration" class="nav-btn" style="background:var(--surface);color:var(--text-secondary);border:1px solid var(--border)">Cancel</button>
-                <button id="start-migration" class="nav-btn" style="background:var(--accent);color:var(--color-bg);border:none;font-weight:var(--weight-medium)">Start Migration</button>
+                <button id="cancel-migration" class="nav-btn" style="background:var(--surface-elevated);color:var(--text-primary);border:1px solid var(--border);padding:8px 16px">Cancel</button>
+                <button id="start-migration" class="nav-btn" style="background:var(--color-warn, #f2c94c);color:var(--color-bg, #0a0a0a);border:none;font-weight:var(--weight-medium, 500);padding:8px 16px">Start Migration</button>
             </div>
         `;
 
@@ -1647,8 +1647,12 @@ class TroughApp {
 
         // Wire up event handlers
         const closeMigration = () => {
-            document.body.removeChild(overlay);
-            document.head.removeChild(style);
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+            if (style.parentNode) {
+                style.parentNode.removeChild(style);
+            }
         };
 
         document.getElementById('close-migration').onclick = closeMigration;
@@ -1690,8 +1694,16 @@ class TroughApp {
 
         try {
             phaseEl.textContent = 'Starting migration...';
-            progressBar.style.width = '10%';
+            progressBar.style.width = '20%';
             detailsEl.textContent = 'Preparing to transfer files...';
+
+            // Simulate progress updates
+            setTimeout(() => {
+                if (progressBar.style.width === '20%') {
+                    progressBar.style.width = '40%';
+                    detailsEl.textContent = 'Uploading files to remote storage...';
+                }
+            }, 500);
 
             const response = await fetch('/api/admin/site/export-uploads', {
                 method: 'POST',
@@ -1702,20 +1714,27 @@ class TroughApp {
                 body: JSON.stringify({ cleanup_local: cleanupLocal })
             });
 
+            progressBar.style.width = '80%';
+            detailsEl.textContent = 'Processing response...';
+
             const result = await response.json();
 
             progressBar.style.width = '100%';
 
             if (response.ok && result.success) {
+                // Stop spinner and update phase
+                const spinner = document.getElementById('migration-spinner');
+                if (spinner) spinner.style.display = 'none';
+                
                 phaseEl.textContent = 'Migration completed successfully!';
                 detailsEl.textContent = 'All files have been transferred and database updated.';
                 
                 resultsEl.style.display = 'block';
-                resultsEl.style.background = 'var(--color-ok-bg, #1a2e1a)';
-                resultsEl.style.border = '1px solid var(--color-ok, #59e38f)';
-                resultsEl.style.color = 'var(--color-ok)';
+                resultsEl.style.background = 'var(--color-ok-bg, #0f2e1f)';
+                resultsEl.style.border = '1px solid var(--color-ok, #4ade80)';
+                resultsEl.style.color = 'var(--color-ok, #4ade80)';
                 resultsEl.innerHTML = `
-                    <div style="font-weight:var(--weight-medium);margin-bottom:8px">✅ Migration Summary</div>
+                    <div style="font-weight:var(--weight-medium, 500);margin-bottom:8px">✅ Migration Summary</div>
                     <div style="font-size:0.9rem;line-height:1.4">
                         • <strong>${result.uploaded_files || 0}</strong> files uploaded to remote storage<br>
                         • <strong>${result.updated_records || 0}</strong> database records updated<br>
@@ -1729,16 +1748,20 @@ class TroughApp {
                 throw new Error(result.error || 'Migration failed');
             }
         } catch (error) {
+            // Stop spinner on error
+            const spinner = document.getElementById('migration-spinner');
+            if (spinner) spinner.style.display = 'none';
+            
             phaseEl.textContent = 'Migration failed';
             detailsEl.textContent = error.message;
-            progressBar.style.background = 'var(--color-danger)';
+            progressBar.style.background = 'var(--color-danger, #ef4444)';
 
             resultsEl.style.display = 'block';
             resultsEl.style.background = 'var(--color-danger-bg, #2e1a1a)';
-            resultsEl.style.border = '1px solid var(--color-danger)';
-            resultsEl.style.color = 'var(--color-danger)';
+            resultsEl.style.border = '1px solid var(--color-danger, #ef4444)';
+            resultsEl.style.color = 'var(--color-danger, #ef4444)';
             resultsEl.innerHTML = `
-                <div style="font-weight:var(--weight-medium);margin-bottom:8px">❌ Migration Failed</div>
+                <div style="font-weight:var(--weight-medium, 500);margin-bottom:8px">❌ Migration Failed</div>
                 <div style="font-size:0.9rem">${error.message}</div>
             `;
 
@@ -1747,10 +1770,15 @@ class TroughApp {
 
         // Show close button
         actionsEl.style.display = 'flex';
-        actionsEl.innerHTML = '<button id="close-migration-final" class="nav-btn" style="background:var(--accent);color:var(--color-bg);border:none;margin-left:auto">Close</button>';
+        actionsEl.innerHTML = '<button id="close-migration-final" class="nav-btn" style="background:var(--surface-elevated);color:var(--text-primary);border:1px solid var(--border);margin-left:auto;padding:8px 16px;font-weight:var(--weight-medium, 500)">Close</button>';
+        
         document.getElementById('close-migration-final').onclick = () => {
-            document.querySelector('[style*="z-index:3000"]').remove();
-            document.querySelector('style').remove();
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+            if (style.parentNode) {
+                style.parentNode.removeChild(style);
+            }
         };
     }
 }
