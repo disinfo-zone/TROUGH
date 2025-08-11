@@ -2282,19 +2282,35 @@ class TroughApp {
         const wrap = document.createElement('section');
         wrap.className = 'mono-col';
         wrap.style.cssText = 'margin:0 auto 16px;max-width:980px;padding:16px;color:var(--text-primary)';
-        const title = (data.original_name || 'Untitled');
+        const title = ((data.title && String(data.title).trim()) || data.original_name || 'Untitled');
         const username = data.username || 'unknown';
         const captionHtml = data.caption ? `<div class="image-caption" id="single-caption" style="margin-top:8px;color:var(--text-secondary);position:relative">${this.sanitizeAndRenderMarkdown(data.caption)}</div>` : '';
         wrap.innerHTML = `
           <div style="display:grid;gap:12px">
-            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
-              <h1 style="font-size:1.25rem;margin:0;letter-spacing:-0.01em">${title}</h1>
-              <a href="/@${encodeURIComponent(username)}" class="link-btn" style="text-decoration:none">@${username}</a>
+            <div class="single-header">
+              <h1 class="single-title" title="${this.escapeHTML(title)}">${this.escapeHTML(title)}</h1>
+              <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${username}</a>
             </div>
             <div style="display:flex;justify-content:center"><img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>
             ${captionHtml}
           </div>`;
         this.gallery.appendChild(wrap);
+
+        // Allow expanding long titles on click (toggle multi-line clamp)
+        const titleEl = wrap.querySelector('.single-title');
+        if (titleEl) {
+            titleEl.setAttribute('role', 'button');
+            titleEl.setAttribute('tabindex', '0');
+            titleEl.setAttribute('aria-expanded', 'false');
+            const toggle = () => {
+                const expanded = titleEl.classList.toggle('expanded');
+                titleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            };
+            titleEl.addEventListener('click', toggle);
+            titleEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+            });
+        }
 
         // Collapsible caption: clamp long captions and toggle on click
         const cap = wrap.querySelector('#single-caption');
