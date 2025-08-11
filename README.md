@@ -6,6 +6,7 @@ An impossibly slick, minimalist web app for AI-generated images. Every pixel mat
 
 - **Gorgeous masonry gallery** with infinite scroll
 - **AI image detection** via EXIF metadata analysis
+- **AI provenance enforcement** using EXIF/XMP heuristics and C2PA/Content Credentials sniffing
 - **Beautiful loading states** with blurhash placeholders
 - **JWT authentication** with secure password hashing
 - **Drag & drop uploads** with real-time processing
@@ -128,6 +129,7 @@ images(
   dominant_color VARCHAR(7),  -- For placeholder backgrounds
   is_nsfw BOOLEAN DEFAULT FALSE,
   ai_signature VARCHAR(500),  -- AI detection metadata
+  ai_provider VARCHAR(100),   -- Detected provider (e.g., Midjourney, OpenAI, Firefly)
   exif_data JSONB,           -- Full EXIF data
   likes_count INTEGER DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW()

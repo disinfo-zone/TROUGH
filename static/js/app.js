@@ -6,6 +6,23 @@ class TroughApp {
         this.loading = false;
         this.hasMore = true;
         this.currentUser = null;
+        // Mobile magnetic scroll state
+        this.magneticEnabled = false;
+        this.magneticListenersAttached = false;
+        this.magnetOffset = 10; // px distance from viewport top (updated dynamically)
+        this.magnetSkipNextSnap = false;
+        this.magnetMaxVelocity = 0;
+        this.magnetVelocityThreshold = 1.2; // px/ms ~1200px/s counts as a fast flick
+        this._magnetSnapTimer = null;
+        this._lastTouchY = 0;
+        this._lastTouchTime = 0;
+        this._activeScrollAnim = null;
+        this._lastScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+        this._magnetDirection = 1; // 1 = down, -1 = up
+        this._epsilonBackward = 24; // px allowed to snap slightly backwards
+        this._topGuardPx = 16; // legacy; no hard first-image forcing now
+        this._lastSnapY = -1;
+        this._lastSnapEl = null;
         
         // DOM elements
         this.gallery = document.getElementById('gallery');
@@ -85,6 +102,23 @@ class TroughApp {
         if (this.profileTop) this.profileTop.innerHTML = '';
         await this.loadImages();
         this.setupInfiniteScroll();
+        // Ensure logo data-text mirrors current text for blend-mode rendering
+        const logo = document.querySelector('.logo');
+        if (logo && !logo.getAttribute('data-text')) {
+            logo.setAttribute('data-text', logo.textContent || '');
+        }
+        // Initialize new drift-based MagneticScroll
+        this.magneticScroll = new MagneticScroll({
+            minCardIndex: 2,
+            attractionStrength: 0.012,
+            damping: 0.94,
+            maxDriftSpeed: 0.6,
+            settleDelay: 200,
+            effectiveRange: 250,
+        });
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) {
+            this.magneticScroll.updateEnabledState();
+        }
     }
 
     async applyPublicSiteSettings() {
@@ -93,9 +127,10 @@ class TroughApp {
             if (!r.ok) return;
             const s = await r.json();
             window.__SITE_EMAIL_ENABLED__ = !!s.email_enabled;
+            if (s.from_email) window.__SITE_FROM_EMAIL__ = s.from_email;
             if (s.site_name) {
                 const logo = document.querySelector('.logo');
-                if (logo) logo.textContent = s.site_name;
+                if (logo) { logo.textContent = s.site_name; logo.setAttribute('data-text', s.site_name); }
                 document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
             }
             if (s.favicon_path) {
@@ -331,6 +366,8 @@ class TroughApp {
     showAuthModal() {
         this.authModal.classList.add('active');
         document.body.style.overflow = 'hidden';
+        // Ensure magnetic scroll disables while modal is open
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
         
         // Clear form and errors
         document.getElementById('auth-form').reset();
@@ -347,6 +384,7 @@ class TroughApp {
     closeAuthModal() {
         this.authModal.classList.remove('active');
         document.body.style.overflow = '';
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
     }
 
     showAuthError(message) {
@@ -635,16 +673,17 @@ class TroughApp {
             const shouldHide = image.is_nsfw && (!this.currentUser || nsfwPref === 'hide');
             if (shouldHide) { return; }
             if (shouldBlur) {
-                card.classList.add('nsfw-blur');
-                const mask = document.createElement('div');
-                mask.className = 'nsfw-mask';
-                mask.innerHTML = '<span>NSFW · Click to reveal</span>';
-                card.appendChild(mask);
-                const reveal = (e) => { e.stopPropagation(); card.classList.remove('nsfw-blur'); mask.remove(); img.removeEventListener('click', reveal); };
-                img.addEventListener('click', reveal, { once: true });
-                mask.addEventListener('click', reveal, { once: true });
+                // Simple approach: just add the blur class and image
+                card.classList.add('nsfw-blurred');
+                card.appendChild(img);
+                
+                // Store state directly on the card element
+                card._nsfwRevealed = false;
+                
+                // Don't add 'hovering' class - let normal hover effects work
+            } else {
+                card.appendChild(img);
             }
-            card.appendChild(img);
 
             const meta = document.createElement('div');
             meta.className = 'image-meta';
@@ -731,7 +770,26 @@ class TroughApp {
             }
         }
 
-        card.addEventListener('click', () => this.openLightbox(image));
+        card.addEventListener('click', (e) => {
+            // Handle NSFW blur logic - single click removes blur immediately
+            if (card.classList.contains('nsfw-blurred') && !card._nsfwRevealed) {
+                // Single click: start reveal animation and immediately allow lightbox
+                card._nsfwRevealed = true;
+                card.classList.add('revealing');
+                
+                // After melting animation completes, clean up classes
+                setTimeout(() => {
+                    card.classList.remove('nsfw-blurred', 'revealing');
+                    card.classList.add('nsfw-revealed');
+                }, 1200); // Match the CSS animation duration
+                
+                // Don't stop propagation - let it fall through to open lightbox
+                // This creates the desired behavior: single click reveals AND opens lightbox
+            }
+            
+            // Open lightbox (happens for all clicks)
+            this.openLightbox(image);
+        });
         this.gallery.appendChild(card);
     }
 
@@ -801,11 +859,13 @@ class TroughApp {
         }
         this.lightbox.classList.add('active');
         document.body.style.overflow = 'hidden';
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
     }
 
     closeLightbox() {
         this.lightbox.classList.remove('active');
         document.body.style.overflow = '';
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
     }
 
     setupLightbox() {
@@ -879,6 +939,7 @@ class TroughApp {
     }
 
     async renderSettingsPage() {
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
         if (!this.currentUser) { this.showAuthModal(); return; }
         let email = '';
         try { const resp = await fetch('/api/me/account', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` } }); if (resp.ok) { const acc = await resp.json(); email = acc.email || ''; } } catch {}
@@ -951,6 +1012,7 @@ class TroughApp {
                 this.gallery.classList.remove('settings-mode');
                 this.gallery.innerHTML = ''; if (this.profileTop) this.profileTop.innerHTML=''; this.page=1; this.hasMore=true; this.loadImages();
             }
+            if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
         };
 
         // Handlers remain (updated references)
@@ -1027,6 +1089,9 @@ class TroughApp {
                 const image = await response.json();
                 this.showNotification('Image uploaded');
                 return image;
+            } else if (response.status === 400) {
+                const error = await response.json().catch(() => ({}));
+                await this.showErrorModal('Upload rejected', error.error || 'Only AI images with verifiable metadata (EXIF/XMP/C2PA) are accepted.');
             } else if (response.status === 401) {
                 localStorage.removeItem('token');
                 localStorage.removeItem('user');
@@ -1035,15 +1100,44 @@ class TroughApp {
                 this.showAuthModal();
             } else {
                 const error = await response.json().catch(() => ({}));
-                this.showNotification(`Upload failed: ${error.error || 'Unknown error'}`, 'error');
+                await this.showErrorModal('Upload failed', error.error || 'Unknown error');
             }
         } catch (error) {
-            this.showNotification('Upload failed', 'error');
+            await this.showErrorModal('Upload failed', (error && error.message) || 'Network error');
         } finally {
             this.hideLoader();
         }
         return null;
     }
+
+    async showErrorModal(title, message) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px;';
+            const panel = document.createElement('div');
+            panel.style.cssText = 'max-width:520px;width:100%;background:var(--surface-elevated);border:1px solid var(--border-strong);border-radius:12px;padding:16px;color:var(--text-primary);box-shadow:0 20px 60px rgba(0,0,0,0.45)';
+            panel.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                  <span style="display:inline-flex;width:28px;height:28px;border-radius:50%;align-items:center;justify-content:center;background:#ef44441a;border:1px solid #ef444433;color:#ef4444">!</span>
+                  <div style="font-weight:700">${this.escapeHTML(String(title||'Error'))}</div>
+                </div>
+                <div style="color:var(--text-secondary);font-family:var(--font-mono);white-space:pre-wrap;margin-bottom:12px">${this.escapeHTML(String(message||''))}</div>
+                <div style="color:var(--text-tertiary);font-size:12px;line-height:1.5;margin:-4px 0 12px">
+                  We’re actively tuning our filters. If this seems wrong, please email details to ${this.escapeHTML(window.__SITE_FROM_EMAIL__||'our support email')}.
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end">
+                  <button id="err-ok" class="nav-btn">OK</button>
+                </div>`;
+            overlay.appendChild(panel);
+            const close = () => { overlay.remove(); resolve(); };
+            panel.querySelector('#err-ok').onclick = close;
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+            document.addEventListener('keydown', function onKey(e){ if(e.key==='Escape'){ close(); document.removeEventListener('keydown', onKey);} });
+            document.body.appendChild(overlay);
+        });
+    }
+
+    escapeHTML(s){ return (s||'').replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 
     setupInfiniteScroll() {
         let ticking = false;
@@ -1065,6 +1159,222 @@ class TroughApp {
         };
         
         window.addEventListener('scroll', handleScroll, { passive: true });
+    }
+
+    // MOBILE-ONLY: Magnetic kinetic scroll that snaps to each image card on low-velocity stops
+    setupMobileMagneticScroll() {
+        this._evaluateMagnetEnabled();
+        this._computeMagnetOffset();
+
+        if (!this.magneticListenersAttached) {
+            this.magneticListenersAttached = true;
+            // Track touch velocity
+            window.addEventListener('touchstart', (e) => {
+                this._evaluateMagnetEnabled();
+                if (!this.magneticEnabled) return;
+                const t = e.touches && e.touches[0];
+                if (!t) return;
+                this._lastTouchY = t.clientY;
+                this._lastTouchTime = performance.now();
+                this.magnetMaxVelocity = 0;
+            }, { passive: true });
+            window.addEventListener('touchmove', (e) => {
+                this._evaluateMagnetEnabled();
+                if (!this.magneticEnabled) return;
+                const t = e.touches && e.touches[0];
+                if (!t) return;
+                const now = performance.now();
+                const dy = t.clientY - this._lastTouchY;
+                const dt = now - this._lastTouchTime;
+                if (dt > 0) {
+                    const v = Math.abs(dy / dt); // px/ms
+                    if (v > this.magnetMaxVelocity) this.magnetMaxVelocity = v;
+                }
+                this._lastTouchY = t.clientY;
+                this._lastTouchTime = now;
+            }, { passive: true });
+            window.addEventListener('touchend', () => {
+                this._evaluateMagnetEnabled();
+                if (!this.magneticEnabled) return;
+                // Fast flick? Skip the next snap
+                if (this.magnetMaxVelocity >= this.magnetVelocityThreshold) {
+                    this.magnetSkipNextSnap = true;
+                } else {
+                    // Snap very soon after release for quicker response, but give inertia a tick
+                    setTimeout(() => { if (!this._activeScrollAnim) this._snapToNearestCard(); }, 20);
+                }
+            }, { passive: true });
+
+            // Debounced snap after scrolling idles
+            window.addEventListener('scroll', () => {
+                this._evaluateMagnetEnabled();
+                if (!this.magneticEnabled) return;
+                // Track direction by scroll delta
+                const y = window.scrollY;
+                const dy = y - this._lastScrollY;
+                if (Math.abs(dy) > 0.5) this._magnetDirection = dy > 0 ? 1 : -1;
+                this._lastScrollY = y;
+                this._scheduleMagnetSnap();
+            }, { passive: true });
+
+            // Re-evaluate on resize/orientation
+            window.addEventListener('resize', () => { this._evaluateMagnetEnabled(); this._computeMagnetOffset(); });
+            window.addEventListener('orientationchange', () => { this._evaluateMagnetEnabled(); this._computeMagnetOffset(); });
+        }
+    }
+
+    _scheduleMagnetSnap() {
+        if (this._magnetSnapTimer) clearTimeout(this._magnetSnapTimer);
+        if (this._activeScrollAnim) return; // avoid fighting active animation
+        // If a fast flick happened, consume the skip once then return
+        if (this.magnetSkipNextSnap) {
+            this.magnetSkipNextSnap = false;
+            return;
+        }
+        this._magnetSnapTimer = setTimeout(() => this._snapToNearestCard(), 35);
+    }
+
+    _snapToNearestCard() {
+        if (!this.magneticEnabled) return;
+        // Do not interfere with modals/lightbox
+        if (document.body.style.overflow === 'hidden') return;
+        const cards = Array.from(document.querySelectorAll('.image-card'));
+        if (cards.length === 0) return;
+
+        const sel = this._selectSnapTarget(cards);
+        if (!sel) return;
+        const { node: bestEl, snapY } = sel;
+        let snapTo = snapY;
+        const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+        if (snapTo < 0) snapTo = 0; else if (snapTo > maxScroll) snapTo = maxScroll;
+        if (Math.abs(window.scrollY - snapTo) < 1) return;
+        if (this._lastSnapEl === bestEl && Math.abs(this._lastSnapY - snapTo) < 2) return; // stable target, skip
+
+        // Luxe animation: dynamic duration based on distance and easing
+        const distance = Math.abs(window.scrollY - snapTo);
+        const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const duration = prefersReduced ? 0 : Math.min(820, Math.max(260, 260 + distance * 0.32));
+        this._animateScrollTo(snapTo, duration);
+
+        // Highlight the focused card container
+        const focusedCard = bestEl.closest ? (bestEl.closest('.image-card') || bestEl) : bestEl;
+        document.querySelectorAll('.image-card.focused').forEach(el => el.classList.remove('focused'));
+        if (focusedCard) focusedCard.classList.add('focused');
+        this._lastSnapEl = bestEl;
+        this._lastSnapY = snapTo;
+    }
+
+    _animateScrollTo(targetY, durationMs = 400) {
+        if (this._activeScrollAnim) { this._activeScrollAnim.cancelled = true; this._activeScrollAnim = null; }
+        if (durationMs <= 0) { window.scrollTo(0, targetY); return; }
+        const startY = window.scrollY;
+        const delta = targetY - startY;
+        const startTime = performance.now();
+        const anim = { cancelled: false };
+        this._activeScrollAnim = anim;
+        // Smooth blend between ease-out-sine at start and ease-out-cubic at end
+        const easeOutSine = (t) => Math.sin((t * Math.PI) / 2);
+        const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+        const ease = (t) => {
+            const mid = 0.35; // earlier acceleration, longer gentle settle
+            if (t < mid) {
+                const nt = t / mid;
+                return easeOutSine(nt) * mid;
+            } else {
+                const nt = (t - mid) / (1 - mid);
+                return mid + easeOutCubic(nt) * (1 - mid);
+            }
+        };
+        const step = () => {
+            if (anim.cancelled) return;
+            const now = performance.now();
+            const t = Math.min(1, (now - startTime) / durationMs);
+            const y = startY + delta * ease(t);
+            window.scrollTo(0, Math.round(y));
+            if (t < 1) requestAnimationFrame(step);
+            else this._activeScrollAnim = null;
+        };
+        requestAnimationFrame(step);
+        // Cancel animation on user input
+        const cancelOnInput = () => { if (this._activeScrollAnim) this._activeScrollAnim.cancelled = true; this._activeScrollAnim = null; cleanup(); };
+        const cleanup = () => {
+            window.removeEventListener('wheel', cancelOnInput, { passive: true });
+            window.removeEventListener('touchstart', cancelOnInput, { passive: true });
+            window.removeEventListener('keydown', cancelOnInput);
+        };
+        window.addEventListener('wheel', cancelOnInput, { passive: true });
+        window.addEventListener('touchstart', cancelOnInput, { passive: true });
+        window.addEventListener('keydown', cancelOnInput);
+    }
+
+    _selectSnapTarget(cards) {
+        const viewportTop = window.scrollY;
+        const viewportBottom = viewportTop + window.innerHeight;
+        const viewportCenter = viewportTop + (window.innerHeight / 2);
+        const dir = this._magnetDirection >= 0 ? 1 : -1;
+
+        const candidates = [];
+        for (const card of cards) {
+            const node = card.querySelector('img') || card;
+            const r = node.getBoundingClientRect();
+            if (r.height <= 0) continue;
+            const elTop = r.top + window.scrollY;
+            const elBottom = elTop + r.height;
+            const elCenter = elTop + r.height / 2;
+            const overlapPx = Math.max(0, Math.min(viewportBottom, elBottom) - Math.max(viewportTop, elTop));
+            const viewportOverlapRatio = overlapPx / window.innerHeight;
+            const elementOverlapRatio = overlapPx / Math.max(1, r.height);
+            const hasExpandedCaption = !!card.querySelector('.image-caption.expanded');
+            const captionHeight = (() => { const cap = card.querySelector('.image-caption'); return cap ? cap.getBoundingClientRect().height : 0; })();
+            const snapDisabled = hasExpandedCaption && captionHeight > window.innerHeight * 0.45; // disable if caption dominates view
+            candidates.push({ node, elTop, elBottom, elCenter, viewportOverlapRatio, elementOverlapRatio });
+        }
+        if (!candidates.length) return null;
+
+        // If a tall or currently dominant element occupies most of the viewport, favor it
+        const dominant = candidates.find(c => c.viewportOverlapRatio >= 0.6 || c.elementOverlapRatio >= 0.7);
+        if (dominant) {
+            const snapY = Math.round(dominant.elCenter - (window.innerHeight / 2));
+            return { node: dominant.node, snapY };
+        }
+
+        // Direction-aware: pick nearest in the scroll direction based on edge proximity
+        if (dir > 0) {
+            // Down: find the first element whose top is at or below current top (with small epsilon)
+            const forward = candidates
+                .filter(c => c.elTop >= (viewportTop - this._epsilonBackward))
+                .sort((a, b) => (a.elTop - viewportTop) - (b.elTop - viewportTop));
+            let chosen = forward.find(c => !((c.snapDisabled===true))) || forward[0];
+            if (!chosen) chosen = candidates.sort((a,b)=>Math.abs(a.elCenter-viewportCenter)-Math.abs(b.elCenter-viewportCenter))[0];
+            const snapY = Math.round(chosen.elCenter - (window.innerHeight / 2));
+            return { node: chosen.node, snapY };
+        } else {
+            // Up: find the last element whose bottom is at or above current bottom (with small epsilon)
+            const backward = candidates
+                .filter(c => c.elBottom <= (viewportBottom + this._epsilonBackward))
+                .sort((a, b) => (viewportBottom - b.elBottom) - (viewportBottom - a.elBottom));
+            let chosen = backward.find(c => !((c.snapDisabled===true))) || backward[0];
+            if (!chosen) chosen = candidates.sort((a,b)=>Math.abs(a.elCenter-viewportCenter)-Math.abs(b.elCenter-viewportCenter))[0];
+            const snapY = Math.round(chosen.elCenter - (window.innerHeight / 2));
+            return { node: chosen.node, snapY };
+        }
+    }
+
+    _evaluateMagnetEnabled() {
+        const isMobile = window.matchMedia('(max-width: 600px)').matches;
+        const inSettings = this.gallery?.classList?.contains('settings-mode');
+        const path = location.pathname || '/';
+        const blocked = (path === '/settings' || path === '/admin' || path === '/reset' || path === '/verify');
+        this.magneticEnabled = isMobile && !blocked && !inSettings;
+    }
+
+    _computeMagnetOffset() {
+        // Try to keep snapped card just below the fixed nav
+        const nav = document.getElementById('nav');
+        const navH = nav ? nav.getBoundingClientRect().height : 0;
+        // A small breathing space below nav
+        const gap = 12;
+        this.magnetOffset = Math.max(0, Math.round(navH + gap));
     }
 
     showLoader() {
@@ -1144,6 +1454,7 @@ class TroughApp {
     }
 
     async renderAdminPage() {
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
         if (!this.currentUser) { this.showAuthModal(); return; }
         const isAdmin = !!this.currentUser.is_admin;
         const isModerator = !!this.currentUser.is_moderator;
@@ -1463,6 +1774,7 @@ class TroughApp {
     }
 
     async renderImagePage(id) {
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
         if (this.profileTop) this.profileTop.innerHTML = '';
         this.gallery.innerHTML = '';
         this.gallery.classList.add('settings-mode');
@@ -1774,6 +2086,428 @@ class TroughApp {
         
         document.getElementById('close-migration-final').onclick = closeModalFunction;
     }
+}
+
+// MagneticScroll: gentle, oozing drift-to-focus behavior
+class MagneticScroll {
+    constructor(options = {}) {
+        // Configuration for drift-based oozing feel
+        this.config = {
+            settleDelay: 150,
+            driftCheckInterval: 16,
+            maxDriftSpeed: 0.8,
+            minDriftSpeed: 0.05,
+            attractionStrength: 0.015,
+            damping: 0.92,
+            effectiveRange: 200,
+            minCardIndex: 2,
+            captionMaxHeight: 0.4,
+            velocityMemory: 5,
+            highVelocityThreshold: 8,
+            ...options
+        };
+
+        // State for drift-based behavior
+        this.state = {
+            enabled: false,
+            isDrifting: false,
+            currentVelocity: 0,
+            targetPosition: null,
+            lastScrollY: 0,
+            lastScrollTime: 0,
+            settleTimer: null,
+            driftAnimationId: null
+        };
+
+        // Velocity tracking
+        this.velocityBuffer = [];
+        
+        // Touch tracking
+        this.touch = {
+            active: false,
+            startY: 0,
+            startTime: 0,
+            velocities: []
+        };
+
+        // Bind methods
+        this.handleScroll = this.handleScroll.bind(this);
+        this.handleTouchStart = this.handleTouchStart.bind(this);
+        this.handleTouchMove = this.handleTouchMove.bind(this);
+        this.handleTouchEnd = this.handleTouchEnd.bind(this);
+        this.handleWheel = this.handleWheel.bind(this);
+        this.updateDrift = this.updateDrift.bind(this);
+
+        this.init();
+    }
+
+    init() {
+        this.updateEnabledState();
+        window.addEventListener('scroll', this.handleScroll, { passive: true });
+        window.addEventListener('touchstart', this.handleTouchStart, { passive: true });
+        window.addEventListener('touchmove', this.handleTouchMove, { passive: true });
+        window.addEventListener('touchend', this.handleTouchEnd, { passive: true });
+        window.addEventListener('wheel', this.handleWheel, { passive: true });
+        window.addEventListener('resize', () => this.updateEnabledState());
+        window.addEventListener('orientationchange', () => this.updateEnabledState());
+        // Inject optional CSS once
+        if (!document.getElementById('magnetic-scroll-style')) {
+            const style = document.createElement('style');
+            style.id = 'magnetic-scroll-style';
+            style.textContent = `
+                .image-card { transition: transform 0.3s cubic-bezier(0.23, 1, 0.32, 1); }
+                .image-card.in-focus { transform: scale(1.01); }
+                html { scroll-behavior: auto !important; }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+
+    destroy() {
+        this.stopDrift();
+        clearTimeout(this.state.settleTimer);
+        window.removeEventListener('scroll', this.handleScroll);
+        window.removeEventListener('touchstart', this.handleTouchStart);
+        window.removeEventListener('touchmove', this.handleTouchMove);
+        window.removeEventListener('touchend', this.handleTouchEnd);
+        window.removeEventListener('wheel', this.handleWheel);
+    }
+
+    updateEnabledState() {
+        const isMobileWidth = window.matchMedia('(max-width: 768px)').matches;
+        const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia('(pointer: coarse)').matches;
+        const hasModalOpen = document.body.style.overflow === 'hidden';
+        const isSpecialPage = /^\/(settings|admin|reset|verify)/.test(location.pathname);
+        this.state.enabled = isMobileWidth && hasTouch && !hasModalOpen && !isSpecialPage;
+        
+        // Debug logging (can be removed in production)
+        // console.log('MagneticScroll.updateEnabledState:', { enabled: this.state.enabled });
+        
+        if (!this.state.enabled) this.stopDrift();
+    }
+
+    handleScroll() {
+        if (!this.state.enabled) return;
+        // Ignore scroll events generated by our own drift motion
+        if (this.state.isDrifting) return;
+        const now = performance.now();
+        const scrollY = window.scrollY;
+        const dt = now - this.state.lastScrollTime;
+        if (dt > 0 && dt < 100) this.trackVelocity((scrollY - this.state.lastScrollY) / dt);
+        this.state.lastScrollY = scrollY;
+        this.state.lastScrollTime = now;
+        this.scheduleSettle();
+    }
+
+    handleTouchStart(e) {
+        if (!this.state.enabled) return;
+        const t = e.touches[0]; if (!t) return;
+        this.touch = { active: true, startY: t.clientY, startTime: performance.now(), velocities: [] };
+        this.stopDrift();
+    }
+
+    handleTouchMove(e) {
+        if (!this.state.enabled || !this.touch.active) return;
+        const t = e.touches[0]; if (!t) return;
+        const now = performance.now(); const dt = now - this.touch.startTime;
+        if (dt > 16) {
+            const dy = t.clientY - this.touch.startY; const v = dy / dt;
+            this.touch.velocities.push(v); if (this.touch.velocities.length > 5) this.touch.velocities.shift();
+            this.touch.startY = t.clientY; this.touch.startTime = now;
+        }
+    }
+
+    handleTouchEnd() {
+        if (!this.state.enabled || !this.touch.active) return;
+        this.touch.active = false;
+        if (this.touch.velocities.length > 0) {
+            const avg = this.touch.velocities.reduce((a,b)=>a+b,0) / this.touch.velocities.length;
+            // Convert px/frame to px/ms (assuming 60fps = 16.67ms per frame)
+            const threshold = this.config.highVelocityThreshold / 16.67;
+            // console.log('MagneticScroll.handleTouchEnd velocity check:', { avg, threshold, velocities: this.touch.velocities });
+            if (Math.abs(avg) > threshold) this.scheduleSettle(400);
+            else this.scheduleSettle(this.config.settleDelay);
+        } else {
+            this.scheduleSettle(this.config.settleDelay);
+        }
+    }
+
+    handleWheel() {
+        if (!this.state.enabled) return;
+        this.stopDrift();
+        this.scheduleSettle(200);
+    }
+
+    trackVelocity(position) {
+        const now = performance.now();
+        const dt = now - this.velocityTracker.lastTime;
+        if (dt > 0) {
+            this.velocityTracker.positions.push({ y: position, time: now });
+            if (this.velocityTracker.positions.length > this.velocityTracker.maxSize) this.velocityTracker.positions.shift();
+        }
+        this.velocityTracker.lastTime = now;
+    }
+
+    trackVelocity(v) {
+        this.velocityBuffer.push(v);
+        if (this.velocityBuffer.length > this.config.velocityMemory) this.velocityBuffer.shift();
+    }
+
+    getAverageVelocity() {
+        if (!this.velocityBuffer.length) return 0;
+        return this.velocityBuffer.reduce((a, b) => a + b, 0) / this.velocityBuffer.length;
+    }
+
+    scheduleSettle(delay = null) {
+        clearTimeout(this.state.settleTimer);
+        const d = delay ?? this.config.settleDelay;
+        // console.log('MagneticScroll.scheduleSettle:', { delay: d, enabled: this.state.enabled });
+        this.state.settleTimer = setTimeout(() => this.beginDrift(), d);
+    }
+
+    hasExpandedCaptionInView() {
+        const cards = Array.from(document.querySelectorAll('.image-card'));
+        const viewportTop = window.scrollY;
+        const viewportHeight = window.innerHeight;
+        
+        return cards.some(card => {
+            const caption = card.querySelector('.image-caption');
+            if (!caption?.classList.contains('expanded')) return false;
+            
+            const rect = card.getBoundingClientRect();
+            const cardTop = rect.top + viewportTop;
+            const cardBottom = cardTop + rect.height;
+            
+            // Check if card overlaps with viewport significantly
+            const visibleTop = Math.max(cardTop, viewportTop);
+            const visibleBottom = Math.min(cardBottom, viewportTop + viewportHeight);
+            const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+            const visibilityRatio = visibleHeight / viewportHeight;
+            
+            return visibilityRatio > 0.3; // Card takes up significant viewport space
+        });
+    }
+
+    beginDrift() {
+        // console.log('MagneticScroll.beginDrift called:', { enabled: this.state.enabled, isDrifting: this.state.isDrifting });
+        if (!this.state.enabled || this.state.isDrifting) return;
+        
+        // Don't drift if user is reading an expanded caption
+        if (this.hasExpandedCaptionInView()) {
+            // console.log('MagneticScroll.beginDrift blocked: expanded caption in view');
+            return;
+        }
+        
+        const point = this.findAttractionPoint();
+        // console.log('MagneticScroll.beginDrift attraction point:', point);
+        if (!point) return;
+        const currentY = window.scrollY; const distance = Math.abs(point.position - currentY);
+        // console.log('MagneticScroll.beginDrift distance check:', { currentY, targetY: point.position, distance });
+        if (distance < 3) return; // Increased threshold to prevent micro-adjustments
+        this.state.targetPosition = point.position; this.state.currentVelocity = 0; this.state.isDrifting = true;
+        // console.log('MagneticScroll.beginDrift starting drift to:', point.position);
+        this.highlightCard(point.card);
+        this.updateDrift();
+    }
+
+    updateDrift() {
+        if (!this.state.isDrifting || !this.state.enabled) { this.stopDrift(); return; }
+        const currentY = window.scrollY; 
+        const targetY = this.state.targetPosition; 
+        let distance = targetY - currentY;
+        
+        // Smooth stop when very close
+        if (Math.abs(distance) < 1) { 
+            this.smoothScrollTo(targetY, 150);
+            this.stopDrift(); 
+            return; 
+        }
+        
+        // Dynamic attraction force - stronger when closer, with smooth falloff
+        const normalizedDistance = Math.min(1, Math.abs(distance) / this.config.effectiveRange);
+        const attractionCurve = Math.pow(1 - normalizedDistance, 1.5); // Smooth curve
+        const baseForce = this.config.attractionStrength * attractionCurve;
+        
+        // Prevent overshoot by reducing force when velocity is in same direction as distance
+        const velocityDirection = Math.sign(this.state.currentVelocity);
+        const distanceDirection = Math.sign(distance);
+        const overshootDamping = (velocityDirection === distanceDirection && Math.abs(this.state.currentVelocity) > 0.3) ? 0.5 : 1;
+        
+        const force = distanceDirection * baseForce * overshootDamping * Math.min(Math.abs(distance), 30);
+        
+        // Apply force and damping
+        this.state.currentVelocity += force;
+        this.state.currentVelocity *= this.config.damping;
+        
+        // Clamp velocity
+        this.state.currentVelocity = Math.max(-this.config.maxDriftSpeed, Math.min(this.config.maxDriftSpeed, this.state.currentVelocity));
+        
+        // Smooth stop when velocity gets very low
+        if (Math.abs(this.state.currentVelocity) < this.config.minDriftSpeed) { 
+            this.smoothScrollTo(targetY, 200);
+            this.stopDrift(); 
+            return; 
+        }
+        
+        // Apply movement
+        const newY = currentY + this.state.currentVelocity;
+        const maxScroll = document.documentElement.scrollHeight - window.innerHeight; 
+        const clampedY = Math.max(0, Math.min(maxScroll, newY));
+        window.scrollTo(0, clampedY);
+        
+        this.state.driftAnimationId = requestAnimationFrame(() => this.updateDrift());
+    }
+
+    stopDrift() {
+        if (this.state.driftAnimationId) { cancelAnimationFrame(this.state.driftAnimationId); this.state.driftAnimationId = null; }
+        this.state.isDrifting = false; this.state.currentVelocity = 0; this.state.targetPosition = null;
+    }
+
+    smoothScrollTo(targetY, duration = 300) {
+        const startY = window.scrollY;
+        const distance = targetY - startY;
+        if (Math.abs(distance) < 1) return;
+        
+        const startTime = performance.now();
+        const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+        
+        const animate = () => {
+            const elapsed = performance.now() - startTime;
+            const progress = Math.min(1, elapsed / duration);
+            const easedProgress = easeOutCubic(progress);
+            const currentY = startY + (distance * easedProgress);
+            
+            window.scrollTo(0, Math.round(currentY));
+            
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            }
+        };
+        
+        requestAnimationFrame(animate);
+    }
+
+    findAttractionPoint() {
+        const scan = (ignoreMinIndex = false) => {
+            const cards = Array.from(document.querySelectorAll('.image-card'));
+            if (cards.length === 0) return { bestInRange: null, bestOverall: null };
+            const viewportTop = window.scrollY;
+            const viewportHeight = window.innerHeight;
+            const maxScroll = Math.max(0, document.documentElement.scrollHeight - viewportHeight);
+
+            let bestInRange = null;
+            let bestInRangeScore = Infinity;
+            let bestOverall = null;
+            let bestOverallDist = Infinity;
+
+            cards.forEach((card, index) => {
+                if (!ignoreMinIndex && index < this.config.minCardIndex) return;
+                const caption = card.querySelector('.image-caption');
+                if (caption?.classList.contains('expanded')) {
+                    const ch = caption.getBoundingClientRect().height;
+                    if (ch / viewportHeight > this.config.captionMaxHeight) return;
+                }
+                
+                const img = card.querySelector('img');
+                const cardRect = card.getBoundingClientRect();
+                const imgRect = img ? img.getBoundingClientRect() : cardRect;
+                
+                // Use image center for targeting, but ensure it's visible
+                const imgCenter = imgRect.top + viewportTop + (imgRect.height / 2);
+                const cardTop = cardRect.top + viewportTop;
+                const cardBottom = cardTop + cardRect.height;
+                
+                // Calculate ideal scroll position to center the image nicely
+                const navHeight = document.getElementById('nav')?.offsetHeight || 0;
+                const offset = (viewportHeight / 2) - navHeight * 0.25;
+                let idealScrollY = imgCenter - offset;
+                idealScrollY = Math.max(0, Math.min(maxScroll, idealScrollY));
+                
+                const distance = Math.abs(idealScrollY - viewportTop);
+                
+                // Track overall nearest
+                if (distance < bestOverallDist) { 
+                    bestOverallDist = distance; 
+                    bestOverall = { card, position: idealScrollY }; 
+                }
+
+                // Only consider cards that are reasonably close and visible
+                if (distance < this.config.effectiveRange * 1.5) {
+                    const visibleTop = Math.max(cardRect.top, 0);
+                    const visibleBottom = Math.min(cardRect.bottom, viewportHeight);
+                    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+                    const visibility = cardRect.height > 0 ? visibleHeight / cardRect.height : 0;
+                    
+                    // Prefer cards that are partially visible and close to ideal position
+                    const visibilityBonus = visibility > 0.1 ? (1 - visibility * 0.5) : 1.5; // Slight penalty for fully visible
+                    const score = distance * visibilityBonus;
+                    
+                    if (score < bestInRangeScore) { 
+                        bestInRangeScore = score; 
+                        bestInRange = { card, position: idealScrollY }; 
+                    }
+                }
+            });
+            return { bestInRange, bestOverall };
+        };
+
+        // First pass honors minCardIndex
+        const pass1 = scan(false);
+        if (pass1.bestInRange || pass1.bestOverall) return pass1.bestInRange || pass1.bestOverall;
+        // Fallback pass ignores minCardIndex so top-of-feed still works
+        const pass2 = scan(true);
+        return pass2.bestInRange || pass2.bestOverall;
+    }
+
+    highlightCard(card) {
+        document.querySelectorAll('.image-card.in-focus, .image-card.focused').forEach(el => { el.classList.remove('in-focus'); el.classList.remove('focused'); });
+        if (card) { card.classList.add('in-focus'); card.classList.add('focused'); }
+    }
+
+    animateScrollTo(targetY) {
+        this.cancelAnimation();
+        const startY = window.scrollY;
+        const distance = Math.abs(targetY - startY);
+        if (distance < 3) { window.scrollTo(0, targetY); return; }
+        const duration = Math.min(this.config.animationDuration.max, Math.max(this.config.animationDuration.min, this.config.animationDuration.min + (distance * this.config.animationDuration.perPixel)));
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { window.scrollTo(0, targetY); return; }
+        const startTime = performance.now();
+        this.state.isAnimating = true;
+        const easeOutQuint = (t) => 1 - Math.pow(1 - t, 5);
+        const animate = () => {
+            if (!this.state.isAnimating) return;
+            const now = performance.now();
+            const elapsed = now - startTime;
+            const progress = Math.min(1, elapsed / duration);
+            const eased = easeOutQuint(progress);
+            const currentY = startY + (targetY - startY) * eased;
+            window.scrollTo(0, Math.round(currentY));
+            if (progress < 1) this.state.animationId = requestAnimationFrame(animate);
+            else { this.state.isAnimating = false; this.state.animationId = null; }
+        };
+        this.state.animationId = requestAnimationFrame(animate);
+    }
+
+    cancelAnimation() {
+        if (this.state.animationId) { cancelAnimationFrame(this.state.animationId); this.state.animationId = null; }
+        this.state.isAnimating = false;
+    }
+
+    highlightCard(card) {
+        document.querySelectorAll('.image-card.magnetic-focused, .image-card.focused').forEach(el => {
+            el.classList.remove('magnetic-focused');
+            el.classList.remove('focused');
+        });
+        if (card) {
+            card.classList.add('magnetic-focused');
+            card.classList.add('focused');
+        }
+    }
+}
+
+// Export for CommonJS if needed
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = MagneticScroll;
 }
 
 document.addEventListener('DOMContentLoaded', () => { window.app = new TroughApp(); });

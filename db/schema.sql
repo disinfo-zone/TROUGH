@@ -25,6 +25,7 @@ CREATE TABLE images (
     dominant_color VARCHAR(7), -- For placeholder backgrounds
     is_nsfw BOOLEAN DEFAULT FALSE,
     ai_signature VARCHAR(500),
+    ai_provider VARCHAR(100),
     exif_data JSONB,
     likes_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT NOW()

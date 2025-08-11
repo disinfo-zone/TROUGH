@@ -81,7 +81,7 @@
 /* Hide number input arrows for a cleaner look */
 .settings-input.no-spinner::-webkit-outer-spin-button,
 .settings-input.no-spinner::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.settings-input.no-spinner { -moz-appearance: textfield; }
+.settings-input.no-spinner { -moz-appearance: textfield; appearance: textfield; }
 
 @media (prefers-color-scheme: light) {
   :root {
@@ -189,7 +189,20 @@ input, button {
     font-size: 1.25rem;
     font-weight: 800;
     letter-spacing: -0.025em;
-    color: var(--text-primary);
+    position: relative;
+    color: transparent;
+    background: linear-gradient(135deg,
+        rgba(255,255,255,1) 0%,
+        rgba(255,255,255,0.8) 25%,
+        rgba(255,255,255,1) 50%,
+        rgba(255,255,255,0.8) 75%,
+        rgba(255,255,255,1) 100%);
+    background-size: 400% 400%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    mix-blend-mode: exclusion; /* subtle negative relative to backdrop */
+    animation: gradientShift 6s ease infinite; /* slightly slower */
     cursor: pointer;
     transition: opacity var(--duration-fast) var(--ease-out);
 }
@@ -284,6 +297,13 @@ input, button {
 
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
 
+/* Iridescent shimmer across title text */
+@keyframes gradientShift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
 .image-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--border-strong); }
 
 .image-card img {
@@ -303,6 +323,14 @@ input, button {
 .image-card.hovering img { transform: scale(1.02); animation: troughFlash var(--duration-slow) var(--ease-out) 1; }
 .image-card.leaving img  { transform: scale(1);    animation: troughFlash var(--duration-slow) var(--ease-out) 1; }
 
+/* Mobile: focused card subtle emphasis */
+@media (max-width: 600px) {
+  .image-card.focused {
+    box-shadow: 0 16px 36px rgba(0,0,0,0.45);
+    border-color: var(--border-strong);
+  }
+}
+
 .image-meta { padding: var(--space-lg); background: transparent; }
 
 .image-title { font-size: 0.875rem; font-weight: 600; color: var(--text-primary); margin-bottom: var(--space-xs); line-height: 1.4; }
@@ -310,8 +338,8 @@ input, button {
 .image-author { font-size: 0.75rem; font-weight: 400; color: var(--text-secondary); line-height: 1.4; }
 
 /* Caption clamp + expand */
-.image-caption { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.image-caption.expanded { -webkit-line-clamp: unset; }
+.image-caption { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.image-caption.expanded { -webkit-line-clamp: unset; line-clamp: unset; }
 
 /* LIGHTBOX */
 
@@ -727,6 +755,17 @@ input, button {
     }
 }
 
+/* Fallback for environments without blend modes */
+@supports not (mix-blend-mode: exclusion) {
+  .logo {
+    background: none;
+    -webkit-text-fill-color: var(--text-primary);
+    color: var(--text-primary);
+    mix-blend-mode: normal;
+    animation: none;
+  }
+}
+
 /* DARK MODE SUPPORT (if needed later) */
 
 @media (prefers-color-scheme: dark) {
@@ -849,13 +888,118 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 .lightbox-caption { margin-top: var(--space-2); color: var(--text-secondary); font-size: 0.95rem; line-height: 1.5; max-width: 70ch; }
 .lightbox-caption a { color: inherit; text-decoration: underline; }
 
-/* NSFW blur treatment */
-.nsfw-blur { position: relative; }
-.nsfw-blur img { filter: blur(16px) saturate(0.8) !important; transform: none !important; }
-.nsfw-blur .nsfw-mask { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color: var(--text-primary); background: rgba(0,0,0,0.35); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); font-family: var(--font-mono); letter-spacing: .04em; }
-.nsfw-mask span { background: rgba(0,0,0,0.5); border: 1px solid var(--border); padding: 6px 10px; border-radius: 999px; }
-/* disable hover flash when blurred */
-.nsfw-blur.hovering img, .nsfw-blur.leaving img { animation: none !important; }
+/* NSFW blur system with sick melting animation */
+.nsfw-blurred {
+  position: relative;
+  cursor: pointer;
+}
+
+
+
+/* Dark melting overlay that starts covering everything */
+.nsfw-blurred::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, 
+    rgba(0,0,0,0.6) 0%, 
+    rgba(0,0,0,0.4) 50%, 
+    rgba(0,0,0,0.6) 100%);
+  pointer-events: none;
+  z-index: 2;
+  clip-path: inset(0% 0% 0% 0%);
+}
+
+/* NO hover effects on blurred images - they should remain static */
+.nsfw-blurred:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border);
+}
+
+.nsfw-blurred img {
+  filter: blur(25px) saturate(0.4) brightness(0.5);
+  transform: scale(1) !important;
+  transition: filter 1200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation: none !important;
+}
+
+/* Hover effects ONLY work after blur is revealed */
+.nsfw-revealed:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--border-strong);
+}
+
+.nsfw-revealed:hover img {
+  transform: scale(1.02);
+  animation: troughFlash var(--duration-slow) var(--ease-out) 1;
+}
+
+/* Sick melting/dissolving animation from top-left corner */
+.nsfw-blurred.revealing::before {
+  animation: meltAway 1200ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.nsfw-blurred.revealing img {
+  filter: blur(0px) saturate(1) brightness(1);
+  transition: filter 1200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Melting animation - like burning paper from top-left */
+@keyframes meltAway {
+  0% { 
+    clip-path: inset(0% 0% 0% 0%);
+  }
+  15% {
+    clip-path: inset(5% 95% 95% 5%);
+  }
+  25% {
+    clip-path: inset(12% 88% 88% 12%);
+  }
+  35% {
+    clip-path: inset(22% 78% 78% 22%);
+  }
+  45% {
+    clip-path: inset(35% 65% 65% 35%);
+  }
+  55% {
+    clip-path: inset(50% 50% 50% 50%);
+  }
+  65% {
+    clip-path: inset(68% 32% 32% 68%);
+  }
+  75% {
+    clip-path: inset(82% 18% 18% 82%);
+  }
+  85% {
+    clip-path: inset(94% 6% 6% 94%);
+  }
+  95% {
+    clip-path: inset(99% 1% 1% 99%);
+  }
+  100% { 
+    clip-path: inset(100% 0% 0% 100%);
+  }
+}
+
+
+
+/* Once revealed, remove blur permanently and restore normal behavior */
+.nsfw-revealed {
+  cursor: pointer !important;
+}
+
+.nsfw-revealed img {
+  filter: none !important;
+}
+
+.nsfw-revealed::before {
+  display: none;
+}
 
 /* Ensure consistent focus across inputs and textarea */
 .settings-input:focus { outline: none; border-color: var(--text-primary); box-shadow: 0 0 0 2px rgba(122,240,255,0.12); }

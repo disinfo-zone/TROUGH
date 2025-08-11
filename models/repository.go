@@ -161,16 +161,32 @@ func NewImageRepository(db *sqlx.DB) *ImageRepository {
 }
 
 func (r *ImageRepository) Create(image *Image) error {
-	query := `
-		INSERT INTO images (user_id, filename, original_name, file_size, width, height, blurhash, dominant_color, is_nsfw, ai_signature, exif_data, caption)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id, created_at`
+	// Preferred insert including ai_provider (new installs / migrated DBs)
+	queryNew := `
+        INSERT INTO images (user_id, filename, original_name, file_size, width, height, blurhash, dominant_color, is_nsfw, ai_signature, ai_provider, exif_data, caption)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING id, created_at`
 
-	return r.db.QueryRow(query,
+	if err := r.db.QueryRow(queryNew,
 		image.UserID, image.Filename, image.OriginalName, image.FileSize,
 		image.Width, image.Height, image.Blurhash, image.DominantColor,
-		image.IsNSFW, image.AISignature, image.ExifData, image.Caption).
-		Scan(&image.ID, &image.CreatedAt)
+		image.IsNSFW, image.AISignature, image.AIProvider, image.ExifData, image.Caption).
+		Scan(&image.ID, &image.CreatedAt); err != nil {
+		// Fallback for older schema without ai_provider column
+		if !containsIgnoreCase(err.Error(), "ai_provider") {
+			return err
+		}
+		queryLegacy := `
+            INSERT INTO images (user_id, filename, original_name, file_size, width, height, blurhash, dominant_color, is_nsfw, ai_signature, exif_data, caption)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id, created_at`
+		return r.db.QueryRow(queryLegacy,
+			image.UserID, image.Filename, image.OriginalName, image.FileSize,
+			image.Width, image.Height, image.Blurhash, image.DominantColor,
+			image.IsNSFW, image.AISignature, image.ExifData, image.Caption).
+			Scan(&image.ID, &image.CreatedAt)
+	}
+	return nil
 }
 
 func (r *ImageRepository) GetFeed(page, limit int, showNSFW bool) ([]ImageWithUser, int, error) {
@@ -317,6 +333,12 @@ func stringJoin(parts []string, sep string) string {
 		out += sep + parts[i]
 	}
 	return out
+}
+
+func containsIgnoreCase(s, sub string) bool {
+	ls := strings.ToLower(s)
+	lsub := strings.ToLower(sub)
+	return strings.Contains(ls, lsub)
 }
 
 type LikeRepository struct {

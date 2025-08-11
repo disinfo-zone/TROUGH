@@ -19,6 +19,7 @@ type Image struct {
 	DominantColor *string         `json:"dominant_color" db:"dominant_color"`
 	IsNSFW        bool            `json:"is_nsfw" db:"is_nsfw"`
 	AISignature   *string         `json:"ai_signature" db:"ai_signature"`
+	AIProvider    *string         `json:"ai_provider" db:"ai_provider"`
 	ExifData      json.RawMessage `json:"exif_data,omitempty" db:"exif_data"`
 	Caption       *string         `json:"caption" db:"caption"`
 	LikesCount    int             `json:"likes_count" db:"likes_count"`
