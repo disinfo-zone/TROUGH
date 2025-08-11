@@ -6,6 +6,11 @@ class TroughApp {
         this.loading = false;
         this.hasMore = true;
         this.currentUser = null;
+        // Image lazy-loading state
+        this.imageObserver = null;
+        this.lazyQueue = [];
+        this.currentImageLoads = 0;
+        this.maxConcurrentImageLoads = 4; // cap concurrent downloads to reduce server stress
         // Mobile magnetic scroll state
         this.magneticEnabled = false;
         this.magneticListenersAttached = false;
@@ -77,6 +82,7 @@ class TroughApp {
         await this.checkAuth();
         await this.applyPublicSiteSettings();
         this.setupEventListeners();
+        this.setupImageLazyLoader();
 
         if (location.pathname === '/reset') { await this.renderResetPage(); return; }
         if (location.pathname === '/verify') { await this.renderVerifyPage(); return; }
@@ -118,6 +124,163 @@ class TroughApp {
         });
         if (this.magneticScroll && this.magneticScroll.updateEnabledState) {
             this.magneticScroll.updateEnabledState();
+        }
+    }
+
+    // IntersectionObserver + small queue for seamless lazy loading
+    setupImageLazyLoader() {
+        // Fallback: if no IO, we'll just let native lazy do the work
+        if (!('IntersectionObserver' in window)) return;
+        try {
+            // Preload a comfortable buffer below the viewport so scrolling feels instant
+            const rootMargin = '800px 0px 800px 0px';
+            this.imageObserver = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    // We observe the card host to avoid zero-area issues; map back to the image
+                    const target = entry.target;
+                    const img = target._lazyImg || target;
+                    if (entry.isIntersecting) {
+                        this.imageObserver.unobserve(target);
+                        if (target._lazyImg) delete target._lazyImg;
+                        this.enqueueImageLoad(img);
+                    }
+                }
+            }, { root: null, threshold: 0.01, rootMargin });
+        } catch {}
+    }
+
+    registerImageForLazyLoad(img) {
+        // If no observer, set src immediately as a graceful fallback
+        if (!this.imageObserver) {
+            this.loadImageNow(img, { eager: true, highPriority: true });
+            return;
+        }
+
+        // Measure using the card container to avoid zero-height issues before image paints
+        const host = img.closest('.image-card') || img;
+        const rect = host.getBoundingClientRect();
+        const viewportH = window.innerHeight || document.documentElement.clientHeight;
+        
+        // Load images that are above the fold immediately with high priority
+        // Be generous with "above the fold" to ensure instant visibility
+        if (rect.top < viewportH + 100) {
+            this.loadImageNow(img, { eager: true, highPriority: true });
+            return;
+        }
+        
+        // Also prioritize the first few images regardless of position (for fast initial paint)
+        const cardIndex = Array.from(this.gallery.children).indexOf(host);
+        if (cardIndex < 4) {
+            this.loadImageNow(img, { eager: true, highPriority: true });
+            return;
+        }
+
+        // Load images just below the fold (buffer zone) with normal priority
+        if (rect.top < viewportH + 600) {
+            this.enqueueImageLoad(img, /*preferFront*/ true);
+            return;
+        }
+
+        // For images further down, observe them and load when they approach
+        host._lazyImg = img;
+        this.imageObserver.observe(host);
+
+        // Safety: re-check after layout settles in case positions changed
+        requestAnimationFrame(() => {
+            if (img.dataset.loaded === '1' || img.dataset.loading === '1' || img.dataset.queued === '1') return;
+            const h = img.closest('.image-card') || img;
+            const r = h.getBoundingClientRect();
+            const vh = window.innerHeight || document.documentElement.clientHeight;
+            // If now in buffer zone, add to queue
+            if (r.top < vh + 900) {
+                this.enqueueImageLoad(img, true);
+            }
+        });
+    }
+
+    enqueueImageLoad(img, preferFront = false) {
+        if (img.dataset.loading === '1' || img.dataset.loaded === '1' || img.dataset.queued === '1') return;
+        // Keep queue ordered by distance to viewport so closer images are loaded first
+        img.dataset.queuedAt = String(performance.now());
+        img.dataset.queued = '1';
+        if (preferFront) {
+            this.lazyQueue.unshift(img);
+        } else {
+            this.lazyQueue.push(img);
+        }
+        this.processLazyQueue();
+    }
+
+    processLazyQueue() {
+        if (this.currentImageLoads >= this.maxConcurrentImageLoads) return;
+        if (this.lazyQueue.length === 0) return;
+
+        // Sort by absolute distance to viewport top for better perceived performance
+        const viewportTop = 0;
+        const viewportBottom = (window.innerHeight || document.documentElement.clientHeight);
+        const viewportCenter = (viewportTop + viewportBottom) / 2;
+        this.lazyQueue.sort((a, b) => {
+            const da = Math.abs((a.getBoundingClientRect().top || 0) - viewportCenter);
+            const db = Math.abs((b.getBoundingClientRect().top || 0) - viewportCenter);
+            return da - db;
+        });
+
+        while (this.currentImageLoads < this.maxConcurrentImageLoads && this.lazyQueue.length > 0) {
+            const nextImg = this.lazyQueue.shift();
+            if (!nextImg) break;
+            if (nextImg.dataset.loading === '1' || nextImg.dataset.loaded === '1') continue;
+            nextImg.dataset.queued = '0';
+            this.loadImageNow(nextImg);
+        }
+    }
+
+    loadImageNow(img, options = {}) {
+        const { eager = false, highPriority = false } = options;
+        if (img.dataset.loading === '1' || img.dataset.loaded === '1') return;
+        const src = img.dataset.src;
+        if (!src) return;
+
+        img.dataset.loading = '1';
+        this.currentImageLoads++;
+
+        // For high priority images, bypass the queue system entirely
+        if (highPriority) {
+            if (eager) img.loading = 'eager';
+            img.setAttribute('fetchpriority', 'high');
+        } else {
+            img.loading = 'lazy';
+        }
+        img.decoding = 'async';
+
+        const finalize = () => {
+            img.dataset.loaded = '1';
+            img.dataset.loading = '0';
+            // Smooth reveal
+            if (!img.style.transition) {
+                img.style.transition = 'opacity 180ms var(--ease-out, ease-out)';
+            }
+            img.style.opacity = '1';
+            this.currentImageLoads = Math.max(0, this.currentImageLoads - 1);
+            // Kick the queue in case more slots free up
+            this.processLazyQueue();
+        };
+
+        const onError = () => {
+            img.dataset.loading = '0';
+            img.style.opacity = '1'; // Show placeholder even on error
+            this.currentImageLoads = Math.max(0, this.currentImageLoads - 1);
+            this.processLazyQueue();
+        };
+
+        // Start the request
+        img.src = src;
+
+        // Prefer decode() for a clean paint if available
+        if (typeof img.decode === 'function') {
+            img.decode().then(finalize).catch(finalize);
+        } else {
+            img.onload = finalize;
+            img.onerror = onError;
         }
     }
 
@@ -617,7 +780,9 @@ class TroughApp {
             };
         }
 
-        (imgs.images || []).forEach((img) => this.createImageCard(img));
+        (imgs.images || []).forEach((img, index) => {
+            setTimeout(() => this.createImageCard(img), index * 80);
+        });
     }
 
     // Gallery/loading functions
@@ -684,6 +849,8 @@ class TroughApp {
         const isAdmin = !!this.currentUser && !!this.currentUser.is_admin;
         const isModerator = !!this.currentUser && !!this.currentUser.is_moderator;
         const canEdit = (onProfile && isOwner) || isAdmin || isModerator;
+        
+        let img = null; // Initialize to null for all code paths
 
         if (isDemo) {
             card.innerHTML = `
@@ -696,15 +863,33 @@ class TroughApp {
                     <div class="image-author">@${image.author}</div>
                 </div>`;
         } else {
-            const img = document.createElement('img');
-            img.src = this.getImageURL(image.filename);
+            img = document.createElement('img');
+            const imgURL = this.getImageURL(image.filename);
+            // Defer actual src assignment to our lazy loader
+            img.dataset.src = imgURL;
             img.alt = image.original_name || image.title || '';
-            img.loading = 'lazy';
+            img.loading = 'lazy'; // native fallback
+            img.style.opacity = '0.001'; // prevent layout shift flashes; cleared on load
+            // Reserve space to avoid layout shifts when dimensions are known
+            if (Number.isFinite(image.width) && Number.isFinite(image.height) && image.width > 0 && image.height > 0) {
+                try { img.width = Math.floor(image.width); img.height = Math.floor(image.height); } catch {}
+                try { img.style.aspectRatio = `${image.width} / ${image.height}`; } catch {}
+            }
+            img.style.background = 'var(--surface)';
             // NSFW blur logic based on current user preference
             const nsfwPref = (this.currentUser?.nsfw_pref || (this.currentUser?.show_nsfw ? 'show' : 'hide'));
             const shouldBlur = image.is_nsfw && nsfwPref === 'blur';
             const shouldHide = image.is_nsfw && (!this.currentUser || nsfwPref === 'hide');
-            if (shouldHide) { return; }
+            if (shouldHide) { 
+                // Don't return early - we still need to append the card but without the image
+                card.innerHTML = `
+                    <div class="image-meta">
+                        <div class="image-title">Content Hidden</div>
+                        <div class="image-author">NSFW content filtered</div>
+                    </div>`;
+                this.gallery.appendChild(card);
+                return; 
+            }
             if (shouldBlur) {
                 // Simple approach: just add the blur class and image
                 card.classList.add('nsfw-blurred');
@@ -824,6 +1009,11 @@ class TroughApp {
             this.openLightbox(image);
         });
         this.gallery.appendChild(card);
+        
+        // Register any real image with the lazy loader after it is in the DOM
+        if (img && img.dataset && img.dataset.src) {
+            this.registerImageForLazyLoad(img);
+        }
     }
 
     async openEditModal(image, cardNode) {
