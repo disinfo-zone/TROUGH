@@ -129,7 +129,7 @@ func TestRegisterSuccess(t *testing.T) {
 	reqBody := map[string]string{
 		"username": "testuser",
 		"email":    "test@example.com",
-		"password": "password123",
+		"password": "Password123!",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -156,7 +156,7 @@ func TestRegisterEmailExists(t *testing.T) {
 	reqBody := map[string]string{
 		"username": "testuser",
 		"email":    "test@example.com",
-		"password": "password123",
+		"password": "Password123!",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -182,13 +182,13 @@ func TestLoginSuccess(t *testing.T) {
 		Username: "testuser",
 		Email:    "test@example.com",
 	}
-	user.HashPassword("password123")
+	user.HashPassword("Password123!")
 
 	mockRepo.On("GetByEmail", "test@example.com").Return(user, nil)
 
 	reqBody := map[string]string{
 		"email":    "test@example.com",
-		"password": "password123",
+		"password": "Password123!",
 	}
 
 	body, _ := json.Marshal(reqBody)

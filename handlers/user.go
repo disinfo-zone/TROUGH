@@ -177,8 +177,11 @@ func (h *UserHandler) UpdatePassword(c *fiber.Ctx) error {
 		NewPassword     string `json:"new_password"`
 	}
 	var body reqBody
-	if err := c.BodyParser(&body); err != nil || body.NewPassword == "" || len(body.NewPassword) < 6 || body.CurrentPassword == "" {
+	if err := c.BodyParser(&body); err != nil || body.NewPassword == "" || body.CurrentPassword == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid password"})
+	}
+	if err := services.ValidatePassword(body.NewPassword); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	user, err := h.userRepo.GetByID(userID)
 	if err != nil {
@@ -472,8 +475,11 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		Password    string `json:"password"`
 		IsModerator bool   `json:"is_moderator"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.Username == "" || req.Email == "" || len(req.Password) < 6 {
+	if err := c.BodyParser(&req); err != nil || req.Username == "" || req.Email == "" || req.Password == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
+	}
+	if err := services.ValidatePassword(req.Password); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	if _, err := h.userRepo.GetByEmail(req.Email); err == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already in use"})
@@ -524,8 +530,11 @@ func (h *UserHandler) AdminSetUserPassword(c *fiber.Ctx) error {
 	var body struct {
 		Password string `json:"password"`
 	}
-	if err := c.BodyParser(&body); err != nil || len(body.Password) < 6 {
+	if err := c.BodyParser(&body); err != nil || body.Password == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid password"})
+	}
+	if err := services.ValidatePassword(body.Password); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	u, err := h.userRepo.GetByID(uid)
 	if err != nil {

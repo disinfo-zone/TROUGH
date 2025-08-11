@@ -71,7 +71,7 @@ func (suite *IntegrationTestSuite) TestUserRegistrationAndLogin() {
 	registerData := map[string]string{
 		"username": "testuser",
 		"email":    "test@example.com",
-		"password": "password123",
+		"password": "Password123!",
 	}
 
 	body, _ := json.Marshal(registerData)
@@ -89,7 +89,7 @@ func (suite *IntegrationTestSuite) TestUserRegistrationAndLogin() {
 
 	loginData := map[string]string{
 		"email":    "test@example.com",
-		"password": "password123",
+		"password": "Password123!",
 	}
 
 	body, _ = json.Marshal(loginData)

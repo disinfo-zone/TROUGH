@@ -26,7 +26,7 @@ type User struct {
 type CreateUserRequest struct {
 	Username string `json:"username" validate:"required,min=3,max=30,alphanum"`
 	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,min=6"`
+	Password string `json:"password" validate:"required,min=8"`
 }
 
 type LoginRequest struct {
@@ -39,7 +39,7 @@ type UpdateUserRequest struct {
 	Bio       *string `json:"bio" validate:"omitempty,max=500"`
 	AvatarURL *string `json:"avatar_url" validate:"omitempty,url"`
 	ShowNSFW  *bool   `json:"show_nsfw"`
-	Password  *string `json:"password" validate:"omitempty,min=6"`
+	Password  *string `json:"password" validate:"omitempty,min=8"`
 	NsfwPref  *string `json:"nsfw_pref" validate:"omitempty,oneof=hide show blur"`
 }
 

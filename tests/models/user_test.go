@@ -9,7 +9,7 @@ import (
 
 func TestUserHashPassword(t *testing.T) {
 	user := &models.User{}
-	password := "testpassword123"
+	password := "Password123!"
 
 	err := user.HashPassword(password)
 	assert.NoError(t, err)
@@ -19,8 +19,8 @@ func TestUserHashPassword(t *testing.T) {
 
 func TestUserCheckPassword(t *testing.T) {
 	user := &models.User{}
-	password := "testpassword123"
-	
+	password := "Password123!"
+
 	err := user.HashPassword(password)
 	assert.NoError(t, err)
 

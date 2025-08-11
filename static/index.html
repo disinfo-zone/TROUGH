@@ -80,7 +80,12 @@
                         <input type="text" id="register-username" placeholder="Username">
                         <input type="email" id="register-email" placeholder="Email address">
                         <input type="password" id="register-password" placeholder="Password">
-                        <div id="password-strength" aria-live="polite"></div>
+                        <div id="password-strength" aria-live="polite" title="Password strength">
+                          <div class="pw-seg"><div class="fill"></div></div>
+                          <div class="pw-seg"><div class="fill"></div></div>
+                          <div class="pw-seg"><div class="fill"></div></div>
+                          <div class="pw-seg"><div class="fill"></div></div>
+                        </div>
                         <input type="password" id="register-password-confirm" placeholder="Confirm password">
                         <button type="button" class="password-toggle" data-for="register-password">Show password</button>
                         <button type="button" class="password-toggle" data-for="register-password-confirm">Show confirm password</button>

@@ -241,8 +241,33 @@ class TroughApp {
         document.querySelectorAll('.password-toggle').forEach(el => el.remove());
 
         const strengthEl = document.getElementById('password-strength');
-        const scorePassword = (pwd) => { let score = 0; if (!pwd) return 0; if (pwd.length >= 8) score += 1; if (/[A-Z]/.test(pwd)) score += 1; if (/[a-z]/.test(pwd)) score += 1; if (/[0-9]/.test(pwd)) score += 1; if (/[^A-Za-z0-9]/.test(pwd)) score += 1; return Math.min(score, 5); };
-        const renderStrength = (pwd) => { const score = scorePassword(pwd); const pct = [0,20,40,60,80,100][score]; const color = score >= 4 ? 'var(--color-ok)' : score >= 3 ? 'var(--color-warn)' : 'var(--color-danger)'; if (strengthEl) { strengthEl.style.setProperty('--strength', pct + '%'); strengthEl.style.setProperty('background', 'var(--border)'); const after = document.createElement('style'); after.innerHTML = `#password-strength::after{background:${color}}`; document.head.appendChild(after);} return score; };
+        const scorePassword = (pwd) => {
+            if (!pwd) return 0;
+            let categories = 0;
+            if (/[a-z]/.test(pwd)) categories++;
+            if (/[A-Z]/.test(pwd)) categories++;
+            if (/[0-9]/.test(pwd)) categories++;
+            if (/[^A-Za-z0-9]/.test(pwd)) categories++;
+            const long = pwd.length >= 8;
+            // 4 levels mapped to 0-4: 0 empty/very weak, 1 weak, 2 fair, 3 good, 4 strong
+            if (!long) return Math.min(categories, 1); // cap to weak if short
+            if (categories <= 1) return 1;
+            if (categories === 2) return 2;
+            if (categories === 3) return 3;
+            return 4;
+        };
+        const renderStrength = (pwd) => {
+            const score = scorePassword(pwd); // 0..4
+            if (strengthEl) {
+                const segs = strengthEl.querySelectorAll('.pw-seg .fill');
+                segs.forEach((seg, i) => {
+                    const active = score >= (i + 1);
+                    seg.style.width = active ? '100%' : '0%';
+                    if (i === 3) seg.classList.toggle('shimmer', score === 4);
+                });
+            }
+            return score;
+        };
 
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
@@ -320,11 +345,19 @@ class TroughApp {
             return;
         }
 
-        const score = (pwd => {
-            let s = 0; if (pwd.length >= 8) s++; if (/[A-Z]/.test(pwd)) s++; if (/[a-z]/.test(pwd)) s++; if (/[0-9]/.test(pwd)) s++; if (/[^A-Za-z0-9]/.test(pwd)) s++; return Math.min(s,5);
+        const score = ((pwd) => {
+            if (!pwd) return 0;
+            let categories = 0;
+            if (/[a-z]/.test(pwd)) categories++;
+            if (/[A-Z]/.test(pwd)) categories++;
+            if (/[0-9]/.test(pwd)) categories++;
+            if (/[^A-Za-z0-9]/.test(pwd)) categories++;
+            const long = pwd.length >= 8;
+            if (!long) return 0;
+            return Math.min(categories, 4);
         })(password);
         if (score < 3) {
-            this.showAuthError('Password too weak. Add length, numbers, symbols.');
+            this.showAuthError('Password too weak. Use at least 8 chars and 3 of: upper, lower, number, symbol.');
             return;
         }
 
@@ -970,8 +1003,8 @@ class TroughApp {
                 </div>
                 <label class="settings-label">Password</label>
                 <input type="password" id="current-password" placeholder="Current password" class="settings-input"/>
-                <input type="password" id="new-password" placeholder="New password" minlength="6" class="settings-input"/>
-                <input type="password" id="new-password-confirm" placeholder="Confirm new password" minlength="6" class="settings-input"/>
+                <input type="password" id="new-password" placeholder="New password" minlength="8" class="settings-input"/>
+                <input type="password" id="new-password-confirm" placeholder="Confirm new password" minlength="8" class="settings-input"/>
                 <div id="pw-strength" style="height:6px;width:100%;background:var(--border);border-radius:999px;overflow:hidden"><div id="pw-bar" style="height:6px;width:0;background:var(--color-danger)"></div></div>
                 <div class="settings-actions"><button id="btn-password" class="nav-btn">Change Password</button></div>
                 <label class="settings-label">NSFW content</label>
@@ -998,8 +1031,31 @@ class TroughApp {
         const pw = document.getElementById('new-password');
         const pwc = document.getElementById('new-password-confirm');
         const bar = document.getElementById('pw-bar');
-        const scorePassword = (pwd) => { let s = 0; if (!pwd) return 0; if (pwd.length >= 8) s++; if (/[A-Z]/.test(pwd)) s++; if (/[a-z]/.test(pwd)) s++; if (/[0-9]/.test(pwd)) s++; if (/[^A-Za-z0-9]/.test(pwd)) s++; return Math.min(s,5); };
-        const renderBar = () => { const score = scorePassword(pw.value); const pct = [0,20,40,60,80,100][score]; const ok = score>=4; bar.style.width = pct+'%'; bar.style.background = ok ? 'var(--color-ok)' : score>=3 ? 'var(--color-warn)' : 'var(--color-danger)'; };
+        // Replace single bar with 4 segments for settings too
+        const pwStrength = document.getElementById('pw-strength');
+        if (pwStrength && !pwStrength.querySelector('.pw-seg')) {
+            pwStrength.innerHTML = '<div class="pw-seg"><div class="fill"></div></div><div class="pw-seg"><div class="fill"></div></div><div class="pw-seg"><div class="fill"></div></div><div class="pw-seg"><div class="fill"></div></div>';
+        }
+        const scorePassword = (pwd) => {
+            if (!pwd) return 0;
+            let categories = 0;
+            if (/[a-z]/.test(pwd)) categories++;
+            if (/[A-Z]/.test(pwd)) categories++;
+            if (/[0-9]/.test(pwd)) categories++;
+            if (/[^A-Za-z0-9]/.test(pwd)) categories++;
+            const long = pwd.length >= 8;
+            if (!long) return 0;
+            return Math.min(categories, 4);
+        };
+        const renderBar = () => {
+            const score = scorePassword(pw.value);
+            const segs = pwStrength ? pwStrength.querySelectorAll('.pw-seg .fill') : [];
+            segs.forEach((seg, i) => {
+                const active = score >= (i + 1);
+                seg.style.width = active ? '100%' : '0%';
+                if (i === 3) seg.classList.toggle('shimmer', score === 4);
+            });
+        };
         pw.addEventListener('input', renderBar); renderBar();
 
         // Back navigation remains unchanged

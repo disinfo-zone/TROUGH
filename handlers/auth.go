@@ -62,6 +62,10 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 	}
+	// Server-side password policy
+	if err := services.ValidatePassword(req.Password); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
 	existingUser, _ := h.userRepo.GetByEmail(req.Email)
 	if existingUser != nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already registered"})
@@ -184,8 +188,11 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 		NewPassword string `json:"new_password"`
 	}
 	var r req
-	if err := c.BodyParser(&r); err != nil || len(r.NewPassword) < 6 || r.Token == "" {
+	if err := c.BodyParser(&r); err != nil || r.Token == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+	if err := services.ValidatePassword(r.NewPassword); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	uid, exp, err := models.GetPasswordReset(r.Token)
 	if err != nil || time.Now().After(exp) {

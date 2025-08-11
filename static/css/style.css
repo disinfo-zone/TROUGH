@@ -791,21 +791,47 @@ input, button {
   opacity: 1;
 }
 
-#password-strength {
-  height: 6px;
+/* Four-segment strength bars (register + settings) */
+#password-strength, #pw-strength {
+  height: 8px;
   width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+#password-strength .pw-seg, #pw-strength .pw-seg {
+  position: relative;
   background: var(--border);
-  border-radius: var(--radius-full);
   overflow: hidden;
 }
-#password-strength::after {
-  content: "";
-  display: block;
-  height: 100%;
-  width: var(--strength, 0%);
-  background: var(--color-danger);
-  transition: width var(--duration-normal) var(--ease-out), background var(--duration-normal) var(--ease-out);
+#password-strength .pw-seg:first-child, #pw-strength .pw-seg:first-child {
+  border-top-left-radius: var(--radius-full);
+  border-bottom-left-radius: var(--radius-full);
 }
+#password-strength .pw-seg:last-child, #pw-strength .pw-seg:last-child {
+  border-top-right-radius: var(--radius-full);
+  border-bottom-right-radius: var(--radius-full);
+}
+#password-strength .pw-seg .fill, #pw-strength .pw-seg .fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0%;
+  transition: width var(--duration-normal) var(--ease-out);
+}
+#password-strength .pw-seg:nth-child(1) .fill, #pw-strength .pw-seg:nth-child(1) .fill { background: #ff0f0f; }
+#password-strength .pw-seg:nth-child(2) .fill, #pw-strength .pw-seg:nth-child(2) .fill { background: #f5740b; }
+#password-strength .pw-seg:nth-child(3) .fill, #pw-strength .pw-seg:nth-child(3) .fill { background: #f3db05; }
+#password-strength .pw-seg:nth-child(4) .fill, #pw-strength .pw-seg:nth-child(4) .fill { background: #10b948; }
+
+/* Shimmer reward on final segment when fully strong */
+#password-strength .pw-seg:nth-child(4) .fill.shimmer,
+#pw-strength .pw-seg:nth-child(4) .fill.shimmer {
+  background: linear-gradient(90deg, #34d399 0%, #10b981 50%, #34d399 100%);
+  background-size: 200% 100%;
+  animation: strengthShimmer 2.2s ease-in-out infinite;
+}
+
+@keyframes strengthShimmer { 0% { background-position: 0% 0; } 50% { background-position: 100% 0; } 100% { background-position: 0% 0; } }
 
 /* Inline bio styling */
 .user-bio { color: var(--text-primary); }
