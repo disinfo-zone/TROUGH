@@ -28,6 +28,8 @@ class TroughApp {
         this._topGuardPx = 16; // legacy; no hard first-image forcing now
         this._lastSnapY = -1;
         this._lastSnapEl = null;
+        this._lastScrollSaveTs = 0;
+        this.isRestoring = false;
         
         // DOM elements
         this.gallery = document.getElementById('gallery');
@@ -81,6 +83,7 @@ class TroughApp {
     async init() {
         await this.checkAuth();
         await this.applyPublicSiteSettings();
+        this.setupHistoryHandler();
         this.setupEventListeners();
         this.setupImageLazyLoader();
 
@@ -127,6 +130,146 @@ class TroughApp {
         }
     }
 
+    // Persist the current list page state (feed or profile) so we can restore on back
+    persistListState(pathnameOverride) {
+        try {
+            const path = pathnameOverride || location.pathname;
+            const key = `trough:list:${path}`;
+            // Find first fully visible image card index for better restoration anchor
+            let firstVisibleIndex = 0;
+            try {
+                const cards = Array.from(document.querySelectorAll('.image-card'));
+                const viewportTop = window.scrollY;
+                const viewportBottom = viewportTop + window.innerHeight;
+                for (let i = 0; i < cards.length; i++) {
+                    const r = cards[i].getBoundingClientRect();
+                    const top = r.top + viewportTop;
+                    const bottom = top + r.height;
+                    const visible = Math.max(0, Math.min(bottom, viewportBottom) - Math.max(top, viewportTop));
+                    if (visible >= Math.min(r.height, window.innerHeight) * 0.75) { firstVisibleIndex = i; break; }
+                }
+            } catch {}
+            const state = {
+                path,
+                page: this.page,
+                hasMore: this.hasMore,
+                scrollY: typeof window !== 'undefined' ? window.scrollY : 0,
+                firstVisibleIndex,
+                savedAt: Date.now(),
+            };
+            console.log('[TROUGH] Persisting list state:', { key, state });
+            sessionStorage.setItem(key, JSON.stringify(state));
+            try {
+                const merged = Object.assign({}, history.state || {}, { troughList: state });
+                history.replaceState(merged, '');
+            } catch {}
+        } catch (e) {
+            console.error('[TROUGH] Error persisting list state:', e);
+        }
+    }
+
+    // Restore a list page by refetching pages up to the saved page and scrolling back
+    async restoreListState(pathnameOverride) {
+        const path = pathnameOverride || location.pathname;
+        const key = `trough:list:${path}`;
+        let state = null;
+        try { state = JSON.parse(sessionStorage.getItem(key) || 'null'); } catch { state = null; }
+        console.log('[TROUGH] Restoring list state:', { key, state, path });
+        if (!state || typeof state.page !== 'number') {
+            console.log('[TROUGH] No valid state found, using default behavior');
+            // Fallback to default behavior
+            if (path === '/') {
+                this.gallery.classList.remove('settings-mode');
+                this.gallery.innerHTML = '';
+                if (this.profileTop) this.profileTop.innerHTML = '';
+                this.page = 1;
+                this.hasMore = true;
+                await this.loadImages();
+            } else if (path.startsWith('/@')) {
+                // Profile pages fetch page 1 only; rendering is handled by caller
+                try { if (typeof state?.scrollY === 'number') window.scrollTo(0, state.scrollY); } catch {}
+            }
+            return;
+        }
+
+        if (path === '/') {
+            // Rebuild the home feed up to the saved page
+            this.gallery.classList.remove('settings-mode');
+            this.gallery.innerHTML = '';
+            if (this.profileTop) this.profileTop.innerHTML = '';
+            this.page = 1;
+            this.hasMore = true;
+            this.isRestoring = true;
+            const targetPage = Math.max(1, state.page);
+            while (this.page <= targetPage && this.hasMore) {
+                await this.loadImages();
+            }
+            this.isRestoring = false;
+            // Prefer anchoring by firstVisibleIndex if available; fallback to scrollY
+            if (Number.isFinite(state.firstVisibleIndex) && state.firstVisibleIndex > 0) {
+                const cards = Array.from(document.querySelectorAll('.image-card'));
+                const targetCard = cards[state.firstVisibleIndex];
+                if (targetCard) {
+                    const rect = targetCard.getBoundingClientRect();
+                    const y = rect.top + window.scrollY - (document.getElementById('nav')?.offsetHeight || 0) - 8;
+                    try { window.scrollTo(0, Math.max(0, y)); } catch {}
+                } else if (typeof state.scrollY === 'number') {
+                    try { window.scrollTo(0, state.scrollY); } catch {}
+                }
+            } else if (typeof state.scrollY === 'number') {
+                try { window.scrollTo(0, state.scrollY); } catch {}
+            }
+        } else if (path.startsWith('/@')) {
+            // For profiles, fetch the page 1 images, then scroll to saved position
+            this.isRestoring = true;
+            try {
+                // Re-render profile (page 1 already fetched by renderProfilePage when navigated via back)
+                // If we are on a fresh load and calling restore explicitly, ensure DOM exists
+                const username = decodeURIComponent(path.slice(2));
+                if (!document.querySelector('.image-card')) {
+                    await this.renderProfilePage(username);
+                }
+            } catch {}
+            this.isRestoring = false;
+            if (typeof state.scrollY === 'number') { try { window.scrollTo(0, state.scrollY); } catch {} }
+        }
+    }
+
+    setupHistoryHandler() {
+        window.onpopstate = async () => {
+            if (location.pathname.startsWith('/i/')) {
+                const id2 = location.pathname.split('/')[2];
+                await this.renderImagePage(id2);
+            } else if (location.pathname.startsWith('/@')) {
+                const u = decodeURIComponent(location.pathname.slice(2));
+                // Render synchronously for restoration to avoid duplicate/staggered inserts
+                this.isRestoring = true;
+                // Ensure multi-column gallery mode for profiles
+                this.gallery.classList.remove('settings-mode');
+                await this.renderProfilePage(u);
+                await this.restoreListState(location.pathname);
+                this.isRestoring = false;
+            } else if (location.pathname === '/settings') {
+                await this.renderSettingsPage();
+            } else if (location.pathname === '/admin') {
+                await this.renderAdminPage();
+            } else {
+                // Home feed: restore saved state if present
+                await this.restoreListState('/');
+            }
+            if (this.magneticScroll && this.magneticScroll.updateEnabledState) {
+                this.magneticScroll.updateEnabledState();
+            }
+
+            // After any route change, normalize gallery mode classes:
+            if (location.pathname.startsWith('/i/')) {
+                this.gallery.classList.add('settings-mode');
+            } else {
+                this.gallery.classList.remove('settings-mode');
+            }
+        };
+    }
+
     // IntersectionObserver + small queue for seamless lazy loading
     setupImageLazyLoader() {
         // Fallback: if no IO, we'll just let native lazy do the work
@@ -139,6 +282,7 @@ class TroughApp {
                     // We observe the card host to avoid zero-area issues; map back to the image
                     const target = entry.target;
                     const img = target._lazyImg || target;
+                    if (this.isRestoring) { continue; }
                     if (entry.isIntersecting) {
                         this.imageObserver.unobserve(target);
                         if (target._lazyImg) delete target._lazyImg;
@@ -163,7 +307,7 @@ class TroughApp {
         
         // Load images that are above the fold immediately with high priority
         // Be generous with "above the fold" to ensure instant visibility
-        if (rect.top < viewportH + 100) {
+        if (rect.top < viewportH + 100 || this.isRestoring) {
             this.loadImageNow(img, { eager: true, highPriority: true });
             return;
         }
@@ -343,9 +487,11 @@ class TroughApp {
 
     setupEventListeners() {
         // Profile button always goes to profile
-        this.authBtn.addEventListener('click', () => {
+        this.authBtn.addEventListener('click', async () => {
             if (this.currentUser) {
-                window.location.href = `/@${encodeURIComponent(this.currentUser.username)}`;
+                try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {}
+                history.pushState({}, '', `/@${encodeURIComponent(this.currentUser.username)}`);
+                await this.renderProfilePage(this.currentUser.username);
             } else {
                 this.showAuthModal();
             }
@@ -361,6 +507,85 @@ class TroughApp {
                 this.closeLightbox();
             }
         });
+
+        // Throttled scroll position persistence for feed/profile
+        window.addEventListener('scroll', () => {
+            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            if (now - this._lastScrollSaveTs < 250) return;
+            this._lastScrollSaveTs = now;
+            if (location.pathname === '/' || location.pathname.startsWith('/@')) {
+                console.log('[TROUGH] Scroll event triggering persistListState');
+                this.persistListState();
+            }
+        }, { passive: true });
+
+        // Persist scroll position before leaving the page (hard nav or refresh)
+        window.addEventListener('pagehide', () => {
+            if (location.pathname === '/' || location.pathname.startsWith('/@')) {
+                console.log('[TROUGH] Pagehide event triggering persistListState');
+                this.persistListState();
+            }
+        });
+
+        // Intercept internal link clicks in gallery/profile areas to SPA-navigate
+        const handleInternalLink = async (e) => {
+            const anchor = e.target.closest('a[href]');
+            if (!anchor) return;
+            const href = anchor.getAttribute('href') || '';
+            if (!href.startsWith('/') || href.startsWith('//')) return; // ignore external/relative
+            e.preventDefault();
+            e.stopPropagation();
+            try { 
+                if (location.pathname === '/' || location.pathname.startsWith('/@')) {
+                    console.log('[TROUGH] Internal link click triggering persistListState');
+                    this.persistListState(); 
+                }
+            } catch {}
+            history.pushState({}, '', href);
+        if (href.startsWith('/i/')) {
+                const id = href.split('/')[2];
+            await this.renderImagePage(id);
+            // Ensure single-image is in single-column mode only
+            this.gallery.classList.add('settings-mode');
+            } else if (href.startsWith('/@')) {
+                const u = decodeURIComponent(href.slice(2));
+                // Explicit navigation to profile should be fresh (no restore)
+                await this.renderProfilePage(u);
+                window.scrollTo(0, 0);
+            } else if (href === '/settings') {
+                await this.renderSettingsPage();
+            } else if (href === '/admin') {
+                await this.renderAdminPage();
+            } else if (href === '/') {
+                // Explicit navigation to home should be fresh (no restore)
+                this.gallery.classList.remove('settings-mode');
+                this.gallery.innerHTML = '';
+                if (this.profileTop) this.profileTop.innerHTML = '';
+                this.page = 1; this.hasMore = true;
+                window.scrollTo(0, 0);
+                await this.loadImages();
+            }
+        };
+        if (this.gallery) this.gallery.addEventListener('click', handleInternalLink, true);
+        if (this.profileTop) this.profileTop.addEventListener('click', handleInternalLink, true);
+
+        // Intercept logo click to SPA-navigate home (fresh)
+        const logo = document.querySelector('.logo');
+        if (logo) {
+            logo.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                history.pushState({}, '', '/');
+                this.gallery.classList.remove('settings-mode');
+                this.gallery.innerHTML = '';
+                if (this.profileTop) this.profileTop.innerHTML = '';
+                this.page = 1; this.hasMore = true;
+                // Scroll to top synchronously before loading, to avoid race with magnetic/IO
+                try { window.scrollTo(0, 0); } catch {}
+                await this.loadImages();
+            }, true);
+        }
     }
 
     // Sign out clears auth and updates UI
@@ -617,8 +842,13 @@ class TroughApp {
     }
 
     async renderProfilePage(username) {
+        // Ensure gallery uses multi-column layout (remove single-column mode from image page)
+        this.gallery.classList.remove('settings-mode');
         if (this.profileTop) this.profileTop.innerHTML = '';
         this.gallery.innerHTML = '';
+        // Ensure we start at page 1 for profile images when rendering fresh
+        this.page = 1;
+        this.hasMore = true;
 
         let user = null; let imgs = { images: [] };
         try {
@@ -687,8 +917,8 @@ class TroughApp {
         `;
         this.profileTop.appendChild(header);
         if (isOwner) {
-            const sBtn = document.getElementById('profile-settings'); if (sBtn) sBtn.onclick = () => { history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
-            const aBtn = document.getElementById('profile-admin'); if (aBtn) aBtn.onclick = () => { history.pushState({}, '', '/admin'); this.renderAdminPage(); };
+            const sBtn = document.getElementById('profile-settings'); if (sBtn) sBtn.onclick = () => { try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
+            const aBtn = document.getElementById('profile-admin'); if (aBtn) aBtn.onclick = () => { try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/admin'); this.renderAdminPage(); };
             const logoutBtn = document.getElementById('profile-logout'); if (logoutBtn) logoutBtn.onclick = () => { this.signOut(); window.location.href = '/'; };
             // Mobile menu wiring
             const toggle = document.getElementById('profile-actions-toggle');
@@ -699,8 +929,8 @@ class TroughApp {
                 toggle.onclick = (e) => { e.stopPropagation(); panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; };
                 document.addEventListener('click', (e) => { if (!panel.contains(e.target) && e.target !== toggle) closePanel(); });
             }
-            const mSettings = document.getElementById('menu-settings'); if (mSettings) mSettings.onclick = () => { closePanel(); history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
-            const mAdmin = document.getElementById('menu-admin'); if (mAdmin) mAdmin.onclick = () => { closePanel(); history.pushState({}, '', '/admin'); this.renderAdminPage(); };
+            const mSettings = document.getElementById('menu-settings'); if (mSettings) mSettings.onclick = () => { closePanel(); try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
+            const mAdmin = document.getElementById('menu-admin'); if (mAdmin) mAdmin.onclick = () => { closePanel(); try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/admin'); this.renderAdminPage(); };
             const mSign = document.getElementById('menu-signout'); if (mSign) mSign.onclick = () => { closePanel(); this.signOut(); window.location.href = '/'; };
         }
 
@@ -780,9 +1010,11 @@ class TroughApp {
             };
         }
 
-        (imgs.images || []).forEach((img, index) => {
-            setTimeout(() => this.createImageCard(img), index * 80);
-        });
+        if (this.isRestoring) {
+            (imgs.images || []).forEach((img) => this.createImageCard(img));
+        } else {
+            (imgs.images || []).forEach((img, index) => setTimeout(() => this.createImageCard(img), index * 80));
+        }
     }
 
     // Gallery/loading functions
@@ -829,19 +1061,28 @@ class TroughApp {
             { id: '9', title: 'Algorithmic Beauty', author: 'MATH_WIZARD', color: '#be185d', width: 400, height: 580 },
             { id: '10', title: 'Machine Dreams', author: 'ROBO_ARTIST', color: '#0d9488', width: 400, height: 520 }
         ];
-        demoImages.forEach((image, index) => {
-            setTimeout(() => this.createImageCard(image), index * 120);
-        });
+        if (this.isRestoring) {
+            demoImages.forEach((image) => this.createImageCard(image));
+        } else {
+            demoImages.forEach((image, index) => {
+                setTimeout(() => this.createImageCard(image), index * 120);
+            });
+        }
     }
 
     renderImages(images) {
-        images.forEach((img, index) => setTimeout(() => this.createImageCard(img), index * 80));
+        if (this.isRestoring) {
+            images.forEach((img) => this.createImageCard(img));
+        } else {
+            images.forEach((img, index) => setTimeout(() => this.createImageCard(img), index * 80));
+        }
     }
 
     createImageCard(image) {
         const card = document.createElement('div');
         card.className = 'image-card';
         card.style.animationDelay = `${Math.random() * 0.5}s`;
+        if (image && image.id) { card.dataset.imageId = String(image.id); }
 
         const isDemo = !image.filename;
         const onProfile = location.pathname.startsWith('/@');
@@ -930,6 +1171,12 @@ class TroughApp {
                 if (a) {
                     e.preventDefault();
                     e.stopPropagation();
+                    try { 
+                        if (location.pathname === '/' || location.pathname.startsWith('/@')) {
+                            console.log('[TROUGH] Image link click triggering persistListState');
+                            this.persistListState(); 
+                        }
+                    } catch {}
                     history.pushState({}, '', a.getAttribute('href'));
                     await this.renderImagePage(image.id);
                     return;
@@ -1067,6 +1314,12 @@ class TroughApp {
         if (link) {
             link.addEventListener('click', async (e) => {
                 e.preventDefault();
+                try { 
+                    if (location.pathname === '/' || location.pathname.startsWith('/@')) {
+                        console.log('[TROUGH] Lightbox link click triggering persistListState');
+                        this.persistListState(); 
+                    }
+                } catch {}
                 history.pushState({}, '', link.getAttribute('href'));
                 this.closeLightbox();
                 await this.renderImagePage(image.id);
@@ -1248,18 +1501,7 @@ class TroughApp {
         };
         pw.addEventListener('input', renderBar); renderBar();
 
-        // Back navigation remains unchanged
-        window.onpopstate = () => {
-            if (location.pathname.startsWith('/@')) {
-                this.gallery.classList.remove('settings-mode');
-                const u = decodeURIComponent(location.pathname.slice(2));
-                this.renderProfilePage(u);
-            } else {
-                this.gallery.classList.remove('settings-mode');
-                this.gallery.innerHTML = ''; if (this.profileTop) this.profileTop.innerHTML=''; this.page=1; this.hasMore=true; this.loadImages();
-            }
-            if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
-        };
+        // Back navigation handled centrally in setupHistoryHandler
 
         // Handlers remain (updated references)
         const authHeader = { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}`, 'Content-Type': 'application/json' };
@@ -2124,24 +2366,6 @@ class TroughApp {
             toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); doToggle(); });
             toggleInsideBtn.addEventListener('click', (e) => { e.stopPropagation(); doToggle(); });
         }
-
-        // Back/forward support
-        window.onpopstate = () => {
-            if (location.pathname.startsWith('/i/')) {
-                const id2 = location.pathname.split('/')[2];
-                this.renderImagePage(id2);
-            } else if (location.pathname.startsWith('/@')) {
-                const u = decodeURIComponent(location.pathname.slice(2));
-                this.renderProfilePage(u);
-            } else if (location.pathname === '/settings') {
-                this.renderSettingsPage();
-            } else if (location.pathname === '/admin') {
-                this.renderAdminPage();
-            } else {
-                this.gallery.classList.remove('settings-mode');
-                this.gallery.innerHTML = ''; if (this.profileTop) this.profileTop.innerHTML=''; this.page=1; this.hasMore=true; this.loadImages();
-            }
-        };
     }
 
     showMigrationModal() {
