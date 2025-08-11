@@ -7,20 +7,21 @@ import (
 )
 
 type SiteSettings struct {
-	ID                       int    `db:"id" json:"id"`
-	SiteName                 string `db:"site_name" json:"site_name"`
-	SiteURL                  string `db:"site_url" json:"site_url"`
-	SEOTitle                 string `db:"seo_title" json:"seo_title"`
-	SEODescription           string `db:"seo_description" json:"seo_description"`
-	SocialImageURL           string `db:"social_image_url" json:"social_image_url"`
-	SMTPHost                 string `db:"smtp_host" json:"smtp_host"`
-	SMTPPort                 int    `db:"smtp_port" json:"smtp_port"`
-	SMTPUsername             string `db:"smtp_username" json:"smtp_username"`
-	SMTPPassword             string `db:"smtp_password" json:"smtp_password"`
-	SMTPFromEmail            string `db:"smtp_from_email" json:"smtp_from_email"`
-	SMTPTLS                  bool   `db:"smtp_tls" json:"smtp_tls"`
-	FaviconPath              string `db:"favicon_path" json:"favicon_path"`
-	RequireEmailVerification bool   `db:"require_email_verification" json:"require_email_verification"`
+	ID                        int    `db:"id" json:"id"`
+	SiteName                  string `db:"site_name" json:"site_name"`
+	SiteURL                   string `db:"site_url" json:"site_url"`
+	SEOTitle                  string `db:"seo_title" json:"seo_title"`
+	SEODescription            string `db:"seo_description" json:"seo_description"`
+	SocialImageURL            string `db:"social_image_url" json:"social_image_url"`
+	SMTPHost                  string `db:"smtp_host" json:"smtp_host"`
+	SMTPPort                  int    `db:"smtp_port" json:"smtp_port"`
+	SMTPUsername              string `db:"smtp_username" json:"smtp_username"`
+	SMTPPassword              string `db:"smtp_password" json:"smtp_password"`
+	SMTPFromEmail             string `db:"smtp_from_email" json:"smtp_from_email"`
+	SMTPTLS                   bool   `db:"smtp_tls" json:"smtp_tls"`
+	FaviconPath               string `db:"favicon_path" json:"favicon_path"`
+	RequireEmailVerification  bool   `db:"require_email_verification" json:"require_email_verification"`
+	PublicRegistrationEnabled bool   `db:"public_registration_enabled" json:"public_registration_enabled"`
 	// Storage configuration (optional). When empty or provider=="local", use local filesystem under /uploads.
 	StorageProvider  string    `db:"storage_provider" json:"storage_provider"`
 	S3Endpoint       string    `db:"s3_endpoint" json:"s3_endpoint"`
@@ -49,7 +50,8 @@ func (r *SiteSettingsRepository) Get() (*SiteSettings, error) {
 	var s SiteSettings
 	err := r.db.Get(&s, `SELECT * FROM site_settings WHERE id = 1`)
 	if err != nil {
-		return &SiteSettings{ID: 1, SiteName: "TROUGH"}, nil
+		// Safe defaults when no settings row exists yet
+		return &SiteSettings{ID: 1, SiteName: "TROUGH", PublicRegistrationEnabled: true}, nil
 	}
 	return &s, nil
 }
@@ -59,13 +61,13 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
         INSERT INTO site_settings (
             id, site_name, site_url, seo_title, seo_description, social_image_url,
             smtp_host, smtp_port, smtp_username, smtp_password, smtp_from_email, smtp_tls,
-            require_email_verification, storage_provider, s3_endpoint, s3_bucket,
+            require_email_verification, public_registration_enabled, storage_provider, s3_endpoint, s3_bucket,
             s3_access_key, s3_secret_key, s3_force_path_style, public_base_url, updated_at
         ) VALUES (
             1, $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10, $11,
-            $12, $13, $14, $15,
-            $16, $17, $18, $19, NOW()
+            $12, $13, $14, $15, $16,
+            $17, $18, $19, $20, NOW()
         )
         ON CONFLICT (id) DO UPDATE SET
             site_name = EXCLUDED.site_name,
@@ -80,6 +82,7 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
             smtp_from_email = EXCLUDED.smtp_from_email,
             smtp_tls = EXCLUDED.smtp_tls,
             require_email_verification = EXCLUDED.require_email_verification,
+            public_registration_enabled = EXCLUDED.public_registration_enabled,
             storage_provider = EXCLUDED.storage_provider,
             s3_endpoint = EXCLUDED.s3_endpoint,
             s3_bucket = EXCLUDED.s3_bucket,
@@ -91,7 +94,7 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
     `,
 		s.SiteName, s.SiteURL, s.SEOTitle, s.SEODescription, s.SocialImageURL,
 		s.SMTPHost, s.SMTPPort, s.SMTPUsername, s.SMTPPassword, s.SMTPFromEmail, s.SMTPTLS,
-		s.RequireEmailVerification, s.StorageProvider, s.S3Endpoint, s.S3Bucket,
+		s.RequireEmailVerification, s.PublicRegistrationEnabled, s.StorageProvider, s.S3Endpoint, s.S3Bucket,
 		s.S3AccessKey, s.S3SecretKey, s.S3ForcePathStyle, s.PublicBaseURL,
 	)
 	return err

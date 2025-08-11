@@ -46,14 +46,15 @@ func (h *AdminHandler) GetPublicSite(c *fiber.Ctx) error {
 	set, _ := h.settingsRepo.Get()
 	emailEnabled := set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != ""
 	return c.JSON(fiber.Map{
-		"site_name":                  set.SiteName,
-		"site_url":                   set.SiteURL,
-		"seo_title":                  set.SEOTitle,
-		"seo_description":            set.SEODescription,
-		"social_image_url":           set.SocialImageURL,
-		"favicon_path":               set.FaviconPath,
-		"email_enabled":              emailEnabled,
-		"require_email_verification": set.RequireEmailVerification,
+		"site_name":                   set.SiteName,
+		"site_url":                    set.SiteURL,
+		"seo_title":                   set.SEOTitle,
+		"seo_description":             set.SEODescription,
+		"social_image_url":            set.SocialImageURL,
+		"favicon_path":                set.FaviconPath,
+		"email_enabled":               emailEnabled,
+		"require_email_verification":  set.RequireEmailVerification,
+		"public_registration_enabled": set.PublicRegistrationEnabled,
 	})
 }
 
@@ -219,7 +220,7 @@ func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 	c.BodyParser(&req) // Optional body
 
 	// The imageRepo is now available as h.imageRepo
-	
+
 	// For now, let's migrate files and provide comprehensive feedback
 	type MigrationResult struct {
 		TotalFiles     int      `json:"total_files"`
@@ -238,7 +239,7 @@ func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 	// Walk uploads dir and collect files
 	root := "uploads"
 	var filesToMigrate []string
-	
+
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -254,7 +255,7 @@ func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 		filesToMigrate = append(filesToMigrate, rel)
 		return nil
 	})
-	
+
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to scan local files", "details": err.Error()})
 	}
@@ -291,7 +292,7 @@ func (h *AdminHandler) ExportLocalUploadsToStorage(c *fiber.Ctx) error {
 
 		uploadedFiles = append(uploadedFiles, filename)
 		result.UploadedFiles++
-		
+
 		// Update database records for images with this filename
 		images, err := h.imageRepo.GetImagesByFilename(filename)
 		if err != nil {

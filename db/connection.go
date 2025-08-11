@@ -113,6 +113,7 @@ func Migrate() error {
 			smtp_tls BOOLEAN DEFAULT FALSE,
 			favicon_path TEXT DEFAULT '',
 			require_email_verification BOOLEAN DEFAULT FALSE,
+			public_registration_enabled BOOLEAN DEFAULT TRUE,
 			-- storage config
 			storage_provider TEXT DEFAULT 'local',
 			s3_endpoint TEXT DEFAULT '',
@@ -151,6 +152,7 @@ func Migrate() error {
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS smtp_tls BOOLEAN DEFAULT FALSE;
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS smtp_from_email TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS favicon_path TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS public_registration_enabled BOOLEAN DEFAULT TRUE;
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS storage_provider TEXT DEFAULT 'local';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_endpoint TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_bucket TEXT DEFAULT '';

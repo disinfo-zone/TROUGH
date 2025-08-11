@@ -434,6 +434,7 @@ class TroughApp {
             if (!r.ok) return;
             const s = await r.json();
             window.__SITE_EMAIL_ENABLED__ = !!s.email_enabled;
+            window.__PUBLIC_REG_ENABLED__ = s.public_registration_enabled !== false; // default true
             if (s.from_email) window.__SITE_FROM_EMAIL__ = s.from_email;
             if (s.site_name) {
                 const logo = document.querySelector('.logo');
@@ -603,6 +604,15 @@ class TroughApp {
         const registerForm = document.getElementById('register-form');
         const submitBtn = document.getElementById('auth-submit');
         const setSubmit = (text, disabled) => { submitBtn.textContent = text; submitBtn.disabled = !!disabled; };
+        // Hide register tab if public registration is disabled
+        const registerTab = Array.from(tabs).find(t => t.dataset.tab === 'register');
+        if (registerTab && window.__PUBLIC_REG_ENABLED__ === false) {
+            registerTab.style.display = 'none';
+            // Ensure login is active
+            const loginTab = Array.from(tabs).find(t => t.dataset.tab === 'login');
+            if (loginTab) { tabs.forEach(t => t.classList.remove('active')); loginTab.classList.add('active'); }
+            if (loginForm && registerForm) { loginForm.style.display = 'block'; registerForm.style.display = 'none'; setSubmit('Sign In', false); }
+        }
 
         // Replace password toggles with inline eye icons
         const ensureEyeToggle = (inputId) => {
@@ -681,6 +691,10 @@ class TroughApp {
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const isLogin = document.querySelector('.auth-tab.active').dataset.tab === 'login';
+            if (!isLogin && window.__PUBLIC_REG_ENABLED__ === false) {
+                this.showAuthError('Registration is currently disabled');
+                return;
+            }
             setSubmit(isLogin ? 'Signing In…' : 'Creating…', true);
             try { if (isLogin) { await this.handleLogin(); } else { await this.handleRegister(); } } finally { setSubmit(isLogin ? 'Sign In' : 'Create Account', false); }
         });
@@ -1992,6 +2006,8 @@ class TroughApp {
                   <button id="btn-test-storage" class="nav-btn">Verify storage</button>
                 </div>
               </div>
+              <div class="settings-label">Registration</div>
+              <label style="display:flex;gap:8px;align-items:center"><input id="public-reg" type="checkbox" ${s.public_registration_enabled!==false?'checked':''}/> Allow public registration</label>
               <div class="settings-actions" style="margin-top:8px;gap:8px;align-items:center">
                 <button id="btn-save-site-top" class="nav-btn">Save</button>
                 <button id="btn-export-upload" class="nav-btn">Migrate to Remote Storage</button>
@@ -2003,7 +2019,7 @@ class TroughApp {
               <input id="smtp-password" class="settings-input" type="password" placeholder="SMTP password" value="${s.smtp_password||''}"/>
               <input id="smtp-from" class="settings-input" placeholder="From email (optional, defaults to username)" value="${s.smtp_from_email||''}"/>
               <label style="display:flex;gap:8px;align-items:center"><input id="smtp-tls" type="checkbox" ${s.smtp_tls?'checked':''}/> Use TLS (465 implicit TLS or 587 STARTTLS)</label>
-              ${smtpConfigured ? `<label style="display:flex;gap:8px;align-items:center"><input id="require-verify" type="checkbox" ${s.require_email_verification?'checked':''}/> Require email verification for new accounts</label>
+              ${smtpConfigured ? `<label style=\"display:flex;gap:8px;align-items:center\"><input id=\"require-verify\" type=\"checkbox\" ${s.require_email_verification?'checked':''}/> Require email verification for new accounts</label>
               <div class="settings-actions" style="gap:8px;align-items:center"><input id="smtp-test-to" class="settings-input" placeholder="Test email to"/><button id="btn-smtp-test" class="nav-btn">Send test</button></div>` : '<small style="color:var(--text-tertiary)">Enter SMTP settings to enable email features</small>'}
               <div class="settings-actions"><button id="btn-save-site" class="nav-btn">Save</button></div>
               <div class="settings-label">Favicon</div>
@@ -2087,6 +2103,7 @@ class TroughApp {
                     smtp_from_email: document.getElementById('smtp-from').value,
                     smtp_tls: document.getElementById('smtp-tls').checked,
                     require_email_verification: document.getElementById('require-verify')?.checked || false,
+                    public_registration_enabled: document.getElementById('public-reg')?.checked !== false,
                 };
                 const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
                 if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }

@@ -14,6 +14,7 @@ An impossibly slick, minimalist web app for AI-generated images. Every pixel mat
 - **User profiles** and image galleries
 - **Responsive design** that works everywhere
 - **Docker deployment** ready
+- **Admin toggle for public registration**; when disabled the Register tab is hidden and `/api/register` returns 403 (invite-based registration can be added on top)
 
 ## Tech Stack
 

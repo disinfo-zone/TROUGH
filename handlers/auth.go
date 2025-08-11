@@ -23,7 +23,7 @@ type AuthHandler struct {
 func NewAuthHandler(userRepo models.UserRepositoryInterface) *AuthHandler {
 	return &AuthHandler{
 		userRepo:      userRepo,
-		settingsRepo:  &inMemorySettingsRepo{settings: models.SiteSettings{SiteName: "TROUGH"}},
+		settingsRepo:  &inMemorySettingsRepo{settings: models.SiteSettings{SiteName: "TROUGH", PublicRegistrationEnabled: true}},
 		validator:     validator.New(),
 		newMailSender: services.NewMailSender,
 	}
@@ -55,6 +55,12 @@ func (r *inMemorySettingsRepo) UpdateSocialImageURL(path string) error {
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
+	// Gate public registration by site setting. Future: allow invites to bypass this check.
+	if set, err := h.settingsRepo.Get(); err == nil {
+		if !set.PublicRegistrationEnabled {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Registration is currently disabled"})
+		}
+	}
 	var req models.CreateUserRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
