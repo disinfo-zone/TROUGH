@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -17,6 +18,7 @@ type AuthHandler struct {
 	settingsRepo  models.SiteSettingsRepositoryInterface
 	validator     *validator.Validate
 	newMailSender func(*models.SiteSettings) services.MailSender
+	inviteRepo    models.InviteRepositoryInterface
 }
 
 // Backwards-compatible constructor used by existing tests
@@ -32,6 +34,31 @@ func NewAuthHandler(userRepo models.UserRepositoryInterface) *AuthHandler {
 // Preferred explicit DI constructor used in main
 func NewAuthHandlerWithRepos(userRepo models.UserRepositoryInterface, settingsRepo models.SiteSettingsRepositoryInterface) *AuthHandler {
 	return &AuthHandler{userRepo: userRepo, settingsRepo: settingsRepo, validator: validator.New(), newMailSender: services.NewMailSender}
+}
+
+// WithInvites provides the invite repository dependency.
+func (h *AuthHandler) WithInvites(r models.InviteRepositoryInterface) *AuthHandler {
+	h.inviteRepo = r
+	return h
+}
+
+// ValidateInvite checks whether an invite code exists and is currently usable (not expired/exhausted).
+func (h *AuthHandler) ValidateInvite(c *fiber.Ctx) error {
+	code := strings.TrimSpace(c.Query("code", ""))
+	if code == "" || h.inviteRepo == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid invite"})
+	}
+	inv, err := h.inviteRepo.GetByCode(code)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid invite"})
+	}
+	if inv.ExpiresAt != nil && time.Now().After(*inv.ExpiresAt) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invite expired"})
+	}
+	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invite exhausted"})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // For tests
@@ -55,15 +82,40 @@ func (r *inMemorySettingsRepo) UpdateSocialImageURL(path string) error {
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
-	// Gate public registration by site setting. Future: allow invites to bypass this check.
+	// Support invite codes which can bypass public registration toggle.
+	inviteCode := strings.TrimSpace(c.Query("invite", ""))
+	mustHaveInvite := false
 	if set, err := h.settingsRepo.Get(); err == nil {
-		if !set.PublicRegistrationEnabled {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Registration is currently disabled"})
-		}
+		mustHaveInvite = !set.PublicRegistrationEnabled
 	}
 	var req models.CreateUserRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	if mustHaveInvite {
+		if inviteCode == "" {
+			// Also allow JSON body field to carry invite
+			if v := strings.TrimSpace(req.Password); v == "" { /* no-op to keep req used */
+			}
+			type rawReq struct {
+				Invite string `json:"invite"`
+			}
+			var rr rawReq
+			_ = c.BodyParser(&rr)
+			if strings.TrimSpace(rr.Invite) != "" {
+				inviteCode = strings.TrimSpace(rr.Invite)
+			}
+		}
+		if inviteCode == "" || h.inviteRepo == nil {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Registration is currently disabled"})
+		}
+	}
+	// Normalize input early
+	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	reserved := map[string]bool{"admin": true, "root": true, "system": true, "support": true, "moderator": true, "owner": true, "undefined": true, "null": true}
+	if reserved[req.Username] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "That username is reserved"})
 	}
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
@@ -80,11 +132,23 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if existingUser != nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
 	}
+	// If an invite is required, consume only after validation and conflict checks
+	var consumedInviteID *uuid.UUID
+	if mustHaveInvite {
+		inv, err := h.inviteRepo.Consume(inviteCode)
+		if err != nil {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid or expired invite"})
+		}
+		consumedInviteID = &inv.ID
+	}
 	user := &models.User{Username: req.Username, Email: req.Email}
 	if err := user.HashPassword(req.Password); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to process password"})
 	}
 	if err := h.userRepo.Create(user); err != nil {
+		if consumedInviteID != nil && h.inviteRepo != nil {
+			_ = h.inviteRepo.RevertConsume(*consumedInviteID)
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 	}
 	set, _ := h.settingsRepo.Get()

@@ -212,7 +212,8 @@ func main() {
 
 	maybeSeedAdmin(userRepo)
 
-	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo)
+	// Build storage from settings or env
+	// Note: inviteRepo will be created after storage since it depends only on DB
 	// Build storage from settings or env
 	stSettings, _ := siteRepo.Get()
 	storage, err := services.NewStorageFromSettings(*stSettings)
@@ -222,7 +223,9 @@ func main() {
 	services.SetCurrentStorage(storage)
 	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage)
 	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage)
-	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage)
+	inviteRepo := models.NewInviteRepository(db.DB)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo)
+	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
 
 	app := fiber.New(fiber.Config{BodyLimit: 10 * 1024 * 1024, ErrorHandler: customErrorHandler})
 
@@ -236,6 +239,7 @@ func main() {
 	app.Get("/@:username", index)
 	app.Get("/settings", index)
 	app.Get("/admin", index)
+	app.Get("/register", index)
 	app.Get("/i/:id", index)
 
 	// Static assets
@@ -258,6 +262,7 @@ func main() {
 	api.Post("/forgot-password", authHandler.ForgotPassword)
 	api.Post("/reset-password", authHandler.ResetPassword)
 	api.Post("/verify-email", authHandler.VerifyEmail)
+	api.Get("/validate-invite", authHandler.ValidateInvite)
 	api.Post("/me/resend-verification", middleware.Protected(), authHandler.ResendVerification)
 	api.Get("/me", middleware.Protected(), authHandler.Me)
 
@@ -288,6 +293,11 @@ func main() {
 	api.Delete("/admin/users/:id", middleware.Protected(), userHandler.AdminDeleteUser)
 	api.Delete("/admin/images/:id", middleware.Protected(), userHandler.AdminDeleteImage)
 	api.Patch("/admin/images/:id/nsfw", middleware.Protected(), userHandler.AdminSetImageNSFW)
+
+	// Admin invite management
+	api.Post("/admin/invites", middleware.Protected(), adminHandler.CreateInvite)
+	api.Get("/admin/invites", middleware.Protected(), adminHandler.ListInvites)
+	api.Delete("/admin/invites/:id", middleware.Protected(), adminHandler.DeleteInvite)
 
 	api.Get("/admin/site", middleware.Protected(), adminHandler.GetSiteSettings)
 	api.Put("/admin/site", middleware.Protected(), adminHandler.UpdateSiteSettings)

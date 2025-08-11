@@ -102,6 +102,47 @@ class TroughApp {
             await this.renderAdminPage();
             return;
         }
+        if (location.pathname === '/register') {
+            // Open auth modal directly on register tab and capture invite
+            const url = new URL(location.href);
+            const invite = url.searchParams.get('invite');
+            this.showAuthModal();
+            const tabs = document.querySelectorAll('.auth-tab');
+            const registerTab = Array.from(tabs).find(t => t.dataset.tab === 'register');
+            const loginTab = Array.from(tabs).find(t => t.dataset.tab === 'login');
+            const proceed = async () => {
+                const allowRegister = window.__PUBLIC_REG_ENABLED__ !== false;
+                if (allowRegister && registerTab) {
+                    tabs.forEach(t => t.classList.remove('active')); registerTab.classList.add('active');
+                    const loginForm = document.getElementById('login-form'); const registerForm = document.getElementById('register-form'); const submitBtn = document.getElementById('auth-submit');
+                    if (loginForm && registerForm && submitBtn) { loginForm.style.display='none'; registerForm.style.display='block'; submitBtn.textContent='Create Account'; }
+                } else if (loginTab) {
+                    tabs.forEach(t => t.classList.remove('active')); loginTab.classList.add('active');
+                }
+            };
+            if (invite) {
+                try {
+                    const r = await fetch(`/api/validate-invite?code=${encodeURIComponent(invite)}`);
+                    if (r.status === 204) {
+                        this._pendingInvite = invite;
+                        if (registerTab) {
+                            tabs.forEach(t => t.classList.remove('active')); registerTab.classList.add('active');
+                            const loginForm = document.getElementById('login-form'); const registerForm = document.getElementById('register-form'); const submitBtn = document.getElementById('auth-submit');
+                            if (loginForm && registerForm && submitBtn) { loginForm.style.display='none'; registerForm.style.display='block'; submitBtn.textContent='Create Account'; }
+                        }
+                    } else {
+                        this.showNotification('Invalid invitation link', 'error');
+                        await proceed();
+                    }
+                } catch {
+                    this.showNotification('Unable to validate invite', 'error');
+                    await proceed();
+                }
+            } else {
+                await proceed();
+            }
+            return;
+        }
         if (location.pathname.startsWith('/i/')) {
             const id = location.pathname.split('/')[2];
             await this.renderImagePage(id);
@@ -603,10 +644,11 @@ class TroughApp {
         const loginForm = document.getElementById('login-form');
         const registerForm = document.getElementById('register-form');
         const submitBtn = document.getElementById('auth-submit');
+        const inviteParam = this._pendingInvite || '';
         const setSubmit = (text, disabled) => { submitBtn.textContent = text; submitBtn.disabled = !!disabled; };
-        // Hide register tab if public registration is disabled
+        // Hide register tab if public registration is disabled (unless invite present)
         const registerTab = Array.from(tabs).find(t => t.dataset.tab === 'register');
-        if (registerTab && window.__PUBLIC_REG_ENABLED__ === false) {
+        if (registerTab && window.__PUBLIC_REG_ENABLED__ === false && !this._pendingInvite) {
             registerTab.style.display = 'none';
             // Ensure login is active
             const loginTab = Array.from(tabs).find(t => t.dataset.tab === 'login');
@@ -669,9 +711,13 @@ class TroughApp {
 
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
+                const tabType = tab.dataset.tab;
+                if (tabType === 'register' && window.__PUBLIC_REG_ENABLED__ === false && !this._pendingInvite) {
+                    this.showAuthError('Registration is currently disabled');
+                    return;
+                }
                 tabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
-                const tabType = tab.dataset.tab;
                 if (tabType === 'login') { loginForm.style.display = 'block'; registerForm.style.display = 'none'; setSubmit('Sign In', false); }
                 else { loginForm.style.display = 'none'; registerForm.style.display = 'block'; setSubmit('Create Account', false); }
                 this.hideAuthError();
@@ -691,7 +737,7 @@ class TroughApp {
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const isLogin = document.querySelector('.auth-tab.active').dataset.tab === 'login';
-            if (!isLogin && window.__PUBLIC_REG_ENABLED__ === false) {
+            if (!isLogin && window.__PUBLIC_REG_ENABLED__ === false && !this._pendingInvite) {
                 this.showAuthError('Registration is currently disabled');
                 return;
             }
@@ -736,6 +782,7 @@ class TroughApp {
         const email = document.getElementById('register-email').value.trim();
         const password = document.getElementById('register-password').value;
         const confirm = document.getElementById('register-password-confirm').value;
+        const invite = this._pendingInvite || new URL(location.href).searchParams.get('invite') || '';
 
         if (!username || !email || !password || !confirm) {
             this.showAuthError('Please fill in all fields');
@@ -767,10 +814,10 @@ class TroughApp {
         this.hideAuthError();
 
         try {
-            const response = await fetch('/api/register', {
+            const response = await fetch('/api/register' + (invite ? ('?invite=' + encodeURIComponent(invite)) : ''), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, email, password })
+                body: JSON.stringify({ username, email, password, invite })
             });
 
             if (response.status === 401) {
@@ -787,6 +834,11 @@ class TroughApp {
                 this.closeAuthModal();
                 this.updateAuthButton();
                 this.showNotification(`Welcome to TROUGH, ${data.user.username}!`, 'success');
+                this._pendingInvite = '';
+                try {
+                    history.pushState({}, '', `/@${encodeURIComponent(data.user.username)}`);
+                    await this.renderProfilePage(data.user.username);
+                } catch {}
             } else {
                 this.showAuthError(data.error || 'Registration failed');
             }
@@ -1981,6 +2033,12 @@ class TroughApp {
               <input id="site-url" class="settings-input" placeholder="Site URL" value="${s.site_url||''}"/>
               <input id="seo-title" class="settings-input" placeholder="SEO title" value="${s.seo_title||''}"/>
               <textarea id="seo-description" class="settings-input" placeholder="SEO description">${s.seo_description||''}</textarea>
+              <div class="settings-label">Favicon</div>
+              <div class="settings-actions" style="gap:8px;align-items:center">
+                <input id="favicon-file" type="file" accept="image/x-icon,image/vnd.microsoft.icon,image/png,image/svg+xml"/>
+                <button id="btn-upload-favicon" class="nav-btn">Upload favicon</button>
+                <img id="favicon-preview" src="${s.favicon_path||''}" alt="Favicon preview" style="height:24px;width:24px;object-fit:contain;border:1px solid var(--border);border-radius:4px;${s.favicon_path?'':'display:none'}"/>
+              </div>
               <div class="settings-label">Social image</div>
               <input id="social-image" class="settings-input" placeholder="Social image URL" value="${s.social_image_url||''}"/>
               <div class="settings-actions" style="gap:8px;align-items:center">
@@ -1988,45 +2046,52 @@ class TroughApp {
                 <button id="btn-upload-social" class="nav-btn">Upload social image</button>
                 <img id="social-image-preview" src="${s.social_image_url||''}" alt="Social image preview" style="height:40px;aspect-ratio:1/1;object-fit:cover;border:1px solid var(--border);border-radius:8px;${s.social_image_url?'':'display:none'}"/>
               </div>
-              <div class="settings-label">Storage</div>
-              <div style="display:grid;gap:8px">
+              <div class="settings-label">Registration</div>
+              <label style="display:flex;gap:8px;align-items:center"><input id="public-reg" type="checkbox" ${s.public_registration_enabled!==false?'checked':''}/> Allow public registration</label>
+              <div class="settings-actions"><button id="btn-save-site-core" class="nav-btn">Save site settings</button></div>
+              <div class="settings-label" style="display:flex;align-items:center;justify-content:space-between">
+                <span>Storage settings (advanced)</span>
+                <button id="toggle-storage" class="link-btn" title="Advanced: change only if you know what you're doing">Show</button>
+              </div>
+              <div id="storage-section" style="display:none;gap:8px">
+                <div style="display:grid;gap:8px">
                 <label class="settings-label">Provider</label>
                 <select id="storage-provider" class="settings-input">
                   <option value="local" ${!s.storage_provider || s.storage_provider==='local' ? 'selected' : ''}>Local</option>
                   <option value="s3" ${s.storage_provider==='s3' || s.storage_provider==='r2' ? 'selected' : ''}>S3 / R2</option>
                 </select>
-                <input id="s3-endpoint" class="settings-input" placeholder="S3/R2 endpoint (https://...)" value="${s.s3_endpoint||''}"/>
-                <input id="s3-bucket" class="settings-input" placeholder="Bucket name" value="${s.s3_bucket||''}"/>
-                <input id="s3-access" class="settings-input" placeholder="Access key" value="${s.s3_access_key||''}"/>
-                <input id="s3-secret" class="settings-input" type="password" placeholder="Secret key" value="${s.s3_secret_key||''}"/>
-                <label style="display:flex;gap:8px;align-items:center"><input id="s3-path" type="checkbox" ${s.s3_force_path_style?'checked':''}/> Force path-style URLs</label>
-                <input id="public-base" class="settings-input" placeholder="Public base URL (e.g., CDN)" value="${s.public_base_url||''}"/>
+                <div id="s3-advanced" style="display:${(s.storage_provider==='s3'||s.storage_provider==='r2')?'grid':'none'};gap:8px">
+                  <input id="s3-endpoint" class="settings-input" placeholder="S3/R2 endpoint (https://...)" value="${s.s3_endpoint||''}"/>
+                  <input id="s3-bucket" class="settings-input" placeholder="Bucket name" value="${s.s3_bucket||''}"/>
+                  <input id="s3-access" class="settings-input" placeholder="Access key" value="${s.s3_access_key||''}"/>
+                  <input id="s3-secret" class="settings-input" type="password" placeholder="Secret key" value="${s.s3_secret_key||''}"/>
+                  <label style="display:flex;gap:8px;align-items:center"><input id="s3-path" type="checkbox" ${s.s3_force_path_style?'checked':''}/> Force path-style URLs</label>
+                  <input id="public-base" class="settings-input" placeholder="Public base URL (e.g., CDN)" value="${s.public_base_url||''}"/>
+                </div>
                 <div class="settings-actions" style="gap:8px;align-items:center">
                   <span id="storage-status" class="meta" style="opacity:.8">Current: ${s.storage_provider||'local'}</span>
                   <button id="btn-test-storage" class="nav-btn">Verify storage</button>
                 </div>
+                <div class="settings-actions" style="gap:8px;align-items:center">
+                  <button id="btn-save-storage" class="nav-btn">Save Storage Settings</button>
+                  <button id="btn-export-upload" class="nav-btn">Migrate to Remote Storage</button>
+                </div>
+                </div>
               </div>
-              <div class="settings-label">Registration</div>
-              <label style="display:flex;gap:8px;align-items:center"><input id="public-reg" type="checkbox" ${s.public_registration_enabled!==false?'checked':''}/> Allow public registration</label>
-              <div class="settings-actions" style="margin-top:8px;gap:8px;align-items:center">
-                <button id="btn-save-site-top" class="nav-btn">Save</button>
-                <button id="btn-export-upload" class="nav-btn">Migrate to Remote Storage</button>
+              <div class="settings-label" style="display:flex;align-items:center;justify-content:space-between">
+                <span>SMTP settings (advanced)</span>
+                <button id="toggle-smtp" class="link-btn" title="Advanced: change only if you know what you're doing">Show</button>
               </div>
-              <div class="settings-label">SMTP</div>
-              <input id="smtp-host" class="settings-input" placeholder="SMTP host (hostname only, no http/https)" value="${s.smtp_host||''}"/>
-              <input id="smtp-port" class="settings-input no-spinner" type="number" placeholder="SMTP port" value="${s.smtp_port||''}"/>
-              <input id="smtp-username" class="settings-input" placeholder="SMTP username (often your full email address)" value="${s.smtp_username||''}"/>
-              <input id="smtp-password" class="settings-input" type="password" placeholder="SMTP password" value="${s.smtp_password||''}"/>
-              <input id="smtp-from" class="settings-input" placeholder="From email (optional, defaults to username)" value="${s.smtp_from_email||''}"/>
-              <label style="display:flex;gap:8px;align-items:center"><input id="smtp-tls" type="checkbox" ${s.smtp_tls?'checked':''}/> Use TLS (465 implicit TLS or 587 STARTTLS)</label>
-              ${smtpConfigured ? `<label style=\"display:flex;gap:8px;align-items:center\"><input id=\"require-verify\" type=\"checkbox\" ${s.require_email_verification?'checked':''}/> Require email verification for new accounts</label>
-              <div class="settings-actions" style="gap:8px;align-items:center"><input id="smtp-test-to" class="settings-input" placeholder="Test email to"/><button id="btn-smtp-test" class="nav-btn">Send test</button></div>` : '<small style="color:var(--text-tertiary)">Enter SMTP settings to enable email features</small>'}
-              <div class="settings-actions"><button id="btn-save-site" class="nav-btn">Save</button></div>
-              <div class="settings-label">Favicon</div>
-              <div class="settings-actions" style="gap:8px;align-items:center">
-                <input id="favicon-file" type="file" accept="image/x-icon,image/vnd.microsoft.icon,image/png,image/svg+xml"/>
-                <button id="btn-upload-favicon" class="nav-btn">Upload favicon</button>
-                <img id="favicon-preview" src="${s.favicon_path||''}" alt="Favicon preview" style="height:24px;width:24px;object-fit:contain;border:1px solid var(--border);border-radius:4px;${s.favicon_path?'':'display:none'}"/>
+              <div id="smtp-section" style="display:none;gap:8px">
+                <input id="smtp-host" class="settings-input" placeholder="SMTP host (hostname only, no http/https)" value="${s.smtp_host||''}"/>
+                <input id="smtp-port" class="settings-input no-spinner" type="number" placeholder="SMTP port" value="${s.smtp_port||''}"/>
+                <input id="smtp-username" class="settings-input" placeholder="SMTP username (often your full email address)" value="${s.smtp_username||''}"/>
+                <input id="smtp-password" class="settings-input" type="password" placeholder="SMTP password" value="${s.smtp_password||''}"/>
+                <input id="smtp-from" class="settings-input" placeholder="From email (optional, defaults to username)" value="${s.smtp_from_email||''}"/>
+                <label style="display:flex;gap:8px;align-items:center"><input id="smtp-tls" type="checkbox" ${s.smtp_tls?'checked':''}/> Use TLS (465 implicit TLS or 587 STARTTLS)</label>
+                ${smtpConfigured ? `<label style=\"display:flex;gap:8px;align-items:center\"><input id=\"require-verify\" type=\"checkbox\" ${s.require_email_verification?'checked':''}/> Require email verification for new accounts</label>
+                <div class="settings-actions" style="gap:8px;align-items:center"><input id="smtp-test-to" class="settings-input" placeholder="Test email to"/><button id="btn-smtp-test" class="nav-btn">Send test</button></div>` : '<small style="color:var(--text-tertiary)">Enter SMTP settings to enable email features</small>'}
+                <div class="settings-actions" style="gap:8px;align-items:center;margin-top:8px"><button id="btn-save-site" class="nav-btn">Save SMTP settings</button></div>
               </div>`;
             // Event handlers will be wired up in the isAdmin block below
 
@@ -2059,6 +2124,30 @@ class TroughApp {
             };
         }
 
+        const invitesSection = document.createElement('section');
+        invitesSection.className = 'settings-group';
+        invitesSection.innerHTML = `
+          <div class="settings-label">Invitations</div>
+          <div style="display:grid;gap:8px;margin-bottom:8px">
+            <div class="meta" style="opacity:.8">Create a new invite code. You can specify the number of uses and/or a validity period. Leave a field empty for no limit.</div>
+            <div style="display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+              <div style="display:grid;gap:6px"><label class="settings-label" for="inv-max-uses">Max uses</label><input id="inv-max-uses" class="settings-input no-spinner" type="number" min="0" placeholder="0 = unlimited"/></div>
+              <div style="display:grid;gap:6px"><label class="settings-label" for="inv-duration">Validity</label><input id="inv-duration" class="settings-input" placeholder="e.g., 24h or 7d (blank = no expiration)"/></div>
+            </div>
+            <div class="settings-actions" style="gap:8px;align-items:center">
+              <button id="btn-create-invite" class="nav-btn">Create invite</button>
+            </div>
+          </div>
+          <div id="invite-list" style="display:grid;gap:8px"></div>
+          <div id="invite-pagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <button id="inv-prev" class="nav-btn" disabled>Prev</button>
+              <button id="inv-next" class="nav-btn" disabled>Next</button>
+            </div>
+            <div id="inv-page-info" class="meta" style="opacity:.8"></div>
+          </div>
+        `;
+
         const usersSection = document.createElement('section');
         usersSection.className = 'settings-group';
         usersSection.innerHTML = `
@@ -2075,6 +2164,7 @@ class TroughApp {
         `;
 
         wrap.appendChild(siteSection);
+        wrap.appendChild(invitesSection);
         wrap.appendChild(usersSection);
         this.gallery.appendChild(wrap);
 
@@ -2109,12 +2199,116 @@ class TroughApp {
                 if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }
                 else { this.showNotification('Save failed','error'); }
             };
+            // Toggle advanced sections visibility
+            const toggleSection = (btnId, sectionId) => {
+                const btn = document.getElementById(btnId);
+                const sec = document.getElementById(sectionId);
+                if (!btn || !sec) return;
+                btn.onclick = () => {
+                    const isHidden = sec.style.display === 'none' || sec.style.display === '';
+                    sec.style.display = isHidden ? 'block' : 'none';
+                    btn.textContent = isHidden ? 'Hide' : 'Show';
+                };
+            };
+            toggleSection('toggle-storage', 'storage-section');
+            toggleSection('toggle-smtp', 'smtp-section');
+
+            // Hide/show storage advanced based on provider
+            const providerSel = document.getElementById('storage-provider');
+            const s3Adv = document.getElementById('s3-advanced');
+            if (providerSel && s3Adv) {
+                providerSel.onchange = () => {
+                    const v = providerSel.value;
+                    s3Adv.style.display = (v === 's3' || v === 'r2') ? 'grid' : 'none';
+                };
+            }
+
+            // Invites management
+            let invPage = 1; const invLimit = 50;
+            const invList = document.getElementById('invite-list');
+            const invPrev = document.getElementById('inv-prev');
+            const invNext = document.getElementById('inv-next');
+            const invInfo = document.getElementById('inv-page-info');
+            const siteURL = (document.getElementById('site-url').value||'').trim();
+            const buildLink = (code) => {
+                const base = siteURL || (location.origin);
+                return base.replace(/\/$/, '') + '/register?invite=' + code;
+            };
+            const copyToClipboard = async (text) => {
+                try { await navigator.clipboard.writeText(text); this.showNotification('Copied'); } catch { this.showNotification('Copy failed','error'); }
+            };
+            const renderInvites = (invites, page, total, limit) => {
+                if (!invList) return;
+                invList.innerHTML = '';
+                if (!Array.isArray(invites) || invites.length === 0) {
+                    invList.innerHTML = '<div class="meta" style="opacity:.8">No invites yet</div>';
+                } else {
+                    invites.forEach(inv => {
+                        const row = document.createElement('div');
+                        row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:8px';
+                        const usesStr = inv.max_uses == null ? `${inv.uses} used (unlimited)` : `${inv.uses}/${inv.max_uses}`;
+                        const expStr = inv.expires_at ? new Date(inv.expires_at).toLocaleString() : 'No expiration';
+                        row.innerHTML = `
+                          <div style="display:grid;gap:4px">
+                            <div style="font-family:var(--font-mono);word-break:break-all">${inv.code}</div>
+                            <div class="meta" style="opacity:.8">Uses: ${usesStr} • Expires: ${expStr}</div>
+                          </div>
+                          <button class="nav-btn" data-act="copy">Copy link</button>
+                          <button class="nav-btn" data-act="copy-code">Copy code</button>
+                          <button class="nav-btn nav-btn-danger" data-act="revoke">Revoke</button>`;
+                        row.querySelector('[data-act="copy"]').onclick = () => copyToClipboard(buildLink(inv.code));
+                        row.querySelector('[data-act="copy-code"]').onclick = () => copyToClipboard(inv.code);
+                        row.querySelector('[data-act="revoke"]').onclick = async () => {
+                            const ok = await this.showConfirm('Revoke this invite?'); if (!ok) return;
+                            const r = await fetch(`/api/admin/invites/${inv.id}`, { method:'DELETE', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                            if (r.status === 204) { this.showNotification('Invite revoked'); await loadInvites(invPage); }
+                            else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Revoke failed','error'); }
+                        };
+                        invList.appendChild(row);
+                    });
+                }
+                const totalPages = Math.max(1, Math.ceil(total/limit));
+                if (invInfo) invInfo.textContent = `Page ${page} of ${totalPages} • ${total} total`;
+                if (invPrev) invPrev.disabled = page <= 1;
+                if (invNext) invNext.disabled = page >= totalPages;
+            };
+            const loadInvites = async (page=1) => {
+                invPage = page;
+                const r = await fetch(`/api/admin/invites?page=${page}&limit=${invLimit}`, { headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                if (!r.ok) { this.showNotification('Failed to load invites','error'); return; }
+                const d = await r.json().catch(()=>({invites:[],total:0}));
+                renderInvites(d.invites||[], d.page||page, d.total||0, d.limit||invLimit);
+            };
+            if (invPrev) invPrev.onclick = () => loadInvites(Math.max(1, invPage-1));
+            if (invNext) invNext.onclick = () => loadInvites(invPage+1);
+            const btnCreateInvite = document.getElementById('btn-create-invite');
+            if (btnCreateInvite) btnCreateInvite.onclick = async (e) => {
+                e.preventDefault();
+                const maxUsesVal = document.getElementById('inv-max-uses').value.trim();
+                const durationVal = document.getElementById('inv-duration').value.trim();
+                const body = {};
+                if (maxUsesVal !== '') { body.max_uses = parseInt(maxUsesVal, 10); }
+                if (durationVal !== '') { body.duration = durationVal; }
+                const r = await fetch('/api/admin/invites', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+                if (r.ok || r.status === 201) {
+                    const d = await r.json().catch(()=>({}));
+                    this.showNotification('Invite created');
+                    if (d.link) { try { await navigator.clipboard.writeText(d.link); this.showNotification('Link copied'); } catch {} }
+                    await loadInvites(1);
+                } else {
+                    const e = await r.json().catch(()=>({}));
+                    this.showNotification(e.error||'Create failed','error');
+                }
+            };
+            await loadInvites(1);
 
             // Wire up all event handlers
             const saveBtnTop = document.getElementById('btn-save-site-top');
             if (saveBtnTop) saveBtnTop.onclick = doSave;
             const saveBtn = document.getElementById('btn-save-site');
             if (saveBtn) saveBtn.onclick = doSave;
+            const saveCore = document.getElementById('btn-save-site-core');
+            if (saveCore) saveCore.onclick = doSave;
 
             // Wire SMTP test
             const btnTest = document.getElementById('btn-smtp-test');
@@ -2153,32 +2347,8 @@ class TroughApp {
             // Wire export uploads
             const exportBtn = document.getElementById('btn-export-upload');
             if (exportBtn) exportBtn.onclick = () => this.showMigrationModal();
-
-            const favInput = document.getElementById('favicon-file');
-            const favPreview = document.getElementById('favicon-preview');
-            if (favInput) favInput.onchange = () => { const f = favInput.files && favInput.files[0]; if (f) { favPreview.src = URL.createObjectURL(f); favPreview.style.display='inline-block'; } };
-
-            const upFavBtn = document.getElementById('btn-upload-favicon');
-            if (upFavBtn) upFavBtn.onclick = async () => {
-                const f = favInput.files[0]; if (!f) { this.showNotification('Choose a favicon file', 'error'); return; }
-                const fd = new FormData(); fd.append('favicon', f);
-                const r = await fetch('/api/admin/site/favicon', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: fd });
-                if (r.ok) { const d = await r.json(); favPreview.src = d.favicon_path || favPreview.src; favPreview.style.display='inline-block'; this.showNotification('Favicon uploaded'); await this.applyPublicSiteSettings(); }
-                else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
-            };
-
-            const socialInput = document.getElementById('social-image-file');
-            const socialPreview = document.getElementById('social-image-preview');
-            if (socialInput) socialInput.onchange = () => { const f = socialInput.files && socialInput.files[0]; if (f) { socialPreview.src = URL.createObjectURL(f); socialPreview.style.display='inline-block'; } };
-
-            const upSocialBtn = document.getElementById('btn-upload-social');
-            if (upSocialBtn) upSocialBtn.onclick = async () => {
-                const f = socialInput.files[0]; if (!f) { this.showNotification('Choose a social image file', 'error'); return; }
-                const fd = new FormData(); fd.append('image', f);
-                const r = await fetch('/api/admin/site/social-image', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: fd });
-                if (r.ok) { const d = await r.json(); document.getElementById('social-image').value = d.social_image_url || ''; socialPreview.src = d.social_image_url || socialPreview.src; socialPreview.style.display='inline-block'; this.showNotification('Social image uploaded'); }
-                else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
-            };
+            const saveStorageBtn = document.getElementById('btn-save-storage');
+            if (saveStorageBtn) saveStorageBtn.onclick = doSave;
         }
 
         // User search (kept) + actions per result

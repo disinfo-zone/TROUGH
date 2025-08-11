@@ -160,6 +160,22 @@ func Migrate() error {
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_secret_key TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_force_path_style BOOLEAN DEFAULT TRUE;
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS public_base_url TEXT DEFAULT '';
+
+		-- Invitation codes for gated registration
+		CREATE TABLE IF NOT EXISTS invites (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			code VARCHAR(64) UNIQUE NOT NULL,
+			max_uses INTEGER,
+			uses INTEGER NOT NULL DEFAULT 0,
+			expires_at TIMESTAMP NULL,
+			created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+			created_at TIMESTAMP DEFAULT NOW(),
+			last_used_at TIMESTAMP NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_code ON invites(code);
+		-- Ensure uses column exists (for upgrades) and constraints reasonable
+		ALTER TABLE invites ADD COLUMN IF NOT EXISTS uses INTEGER DEFAULT 0;
+		ALTER TABLE invites ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP NULL;
 	`
 
 	_, err := DB.Exec(schema)

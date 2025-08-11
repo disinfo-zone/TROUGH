@@ -1,6 +1,8 @@
 package models
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -37,4 +39,13 @@ type LikeRepositoryInterface interface {
 	Create(userID, imageID uuid.UUID) error
 	Delete(userID, imageID uuid.UUID) error
 	GetByUser(userID uuid.UUID, imageID uuid.UUID) (*Like, error)
+}
+
+type InviteRepositoryInterface interface {
+	Create(maxUses *int, expiresAt *time.Time, createdBy *uuid.UUID) (*Invite, error)
+	List(page, limit int) ([]Invite, int, error)
+	GetByCode(code string) (*Invite, error)
+	Consume(code string) (*Invite, error)
+	RevertConsume(id uuid.UUID) error
+	Delete(id uuid.UUID) error
 }

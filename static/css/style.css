@@ -10,6 +10,7 @@
   --color-fg-subtle: #7a7a7a;
   --color-accent:    #7af0ff;
   --color-accent-2:  #b9ff7a;
+  --color-accent-3:  #7aa8ff;
   --color-danger:    #ff5c5c;
   --color-warn:      #f2c94c;
   --color-ok:        #59e38f;
@@ -123,6 +124,11 @@
 }
 
 /* RESET & BASE STYLES */
+/* Harmonize native form controls */
+input[type="checkbox"] {
+  accent-color: var(--color-accent);
+}
+
 
 *, *::before, *::after {
     box-sizing: border-box;

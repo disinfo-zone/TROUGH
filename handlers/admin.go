@@ -7,10 +7,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/yourusername/trough/middleware"
 	"github.com/yourusername/trough/models"
 	"github.com/yourusername/trough/services"
 )
@@ -23,6 +26,7 @@ type AdminHandler struct {
 	imageRepo     models.ImageRepositoryInterface
 	newMailSender func(*models.SiteSettings) services.MailSender
 	storage       services.Storage
+	inviteRepo    models.InviteRepositoryInterface
 }
 
 func NewAdminHandler(settingsRepo models.SiteSettingsRepositoryInterface, userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *AdminHandler {
@@ -41,6 +45,12 @@ func (h *AdminHandler) WithStorage(s services.Storage) *AdminHandler {
 	return h
 }
 
+// WithInvites injects the invite repository.
+func (h *AdminHandler) WithInvites(r models.InviteRepositoryInterface) *AdminHandler {
+	h.inviteRepo = r
+	return h
+}
+
 // Public site settings
 func (h *AdminHandler) GetPublicSite(c *fiber.Ctx) error {
 	set, _ := h.settingsRepo.Get()
@@ -56,6 +66,131 @@ func (h *AdminHandler) GetPublicSite(c *fiber.Ctx) error {
 		"require_email_verification":  set.RequireEmailVerification,
 		"public_registration_enabled": set.PublicRegistrationEnabled,
 	})
+}
+
+// Admin endpoints for invite codes
+// CreateInvite allows an admin to generate an invite with optional max uses and expiration.
+func (h *AdminHandler) CreateInvite(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.inviteRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Invite repository not configured"})
+	}
+	type body struct {
+		MaxUses   *int    `json:"max_uses"`
+		Duration  *string `json:"duration"`   // e.g., "24h", "7d", "3h"
+		ExpiresAt *string `json:"expires_at"` // ISO8601 optional alternative
+	}
+	var b body
+	if err := c.BodyParser(&b); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
+	}
+	var expires *time.Time
+	// Prefer explicit expires_at if provided
+	if b.ExpiresAt != nil && strings.TrimSpace(*b.ExpiresAt) != "" {
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(*b.ExpiresAt)); err == nil {
+			expires = &t
+		} else {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid expires_at (use RFC3339)"})
+		}
+	} else if b.Duration != nil && strings.TrimSpace(*b.Duration) != "" {
+		dstr := strings.ToLower(strings.TrimSpace(*b.Duration))
+		// support Nx where x in h,m,s and also days via 'd'
+		var d time.Duration
+		var err error
+		if strings.HasSuffix(dstr, "d") {
+			num := strings.TrimSuffix(dstr, "d")
+			// parse as integer days
+			if num == "" {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid duration"})
+			}
+			// simple parse
+			var days int
+			_, err = fmt.Sscanf(num, "%d", &days)
+			if err == nil && days > 0 {
+				d = time.Hour * 24 * time.Duration(days)
+			} else {
+				err = fmt.Errorf("invalid days")
+			}
+		} else {
+			d, err = time.ParseDuration(dstr)
+		}
+		if err != nil || d <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid duration"})
+		}
+		t := time.Now().Add(d)
+		expires = &t
+	}
+	// Sanitize max uses: nil => unlimited; 0 or negative => treat as 1
+	if b.MaxUses != nil && *b.MaxUses <= 0 {
+		one := 1
+		b.MaxUses = &one
+	}
+	// creator id
+	var creator *uuid.UUID
+	uid := middleware.GetUserID(c)
+	if uid != uuid.Nil {
+		creator = &uid
+	}
+	inv, err := h.inviteRepo.Create(b.MaxUses, expires, creator)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create invite"})
+	}
+	// Build link based on configured site URL if available
+	set, _ := h.settingsRepo.Get()
+	base := strings.TrimRight(strings.TrimSpace(set.SiteURL), "/")
+	var link string
+	if base != "" {
+		link = base + "/register?invite=" + inv.Code
+	} else {
+		link = "/register?invite=" + inv.Code
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"invite": inv, "link": link})
+}
+
+// ListInvites returns paginated invites for admins
+func (h *AdminHandler) ListInvites(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.inviteRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Invite repository not configured"})
+	}
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.Query("limit", "50"))
+	if limit < 1 {
+		limit = 1
+	} else if limit > 200 {
+		limit = 200
+	}
+	list, total, err := h.inviteRepo.List(page, limit)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to list invites"})
+	}
+	return c.JSON(fiber.Map{"invites": list, "page": page, "limit": limit, "total": total, "total_pages": (total + limit - 1) / limit})
+}
+
+// DeleteInvite removes an invite by id
+func (h *AdminHandler) DeleteInvite(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.inviteRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Invite repository not configured"})
+	}
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid id"})
+	}
+	if err := h.inviteRepo.Delete(id); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // Admin-only full settings
