@@ -48,4 +48,5 @@ type InviteRepositoryInterface interface {
 	Consume(code string) (*Invite, error)
 	RevertConsume(id uuid.UUID) error
 	Delete(id uuid.UUID) error
+	DeleteUsedAndExpired() (int, error)
 }

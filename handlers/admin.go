@@ -193,6 +193,21 @@ func (h *AdminHandler) DeleteInvite(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
+// PruneInvites deletes all fully-used or expired invite codes. Unlimited/time-unlimited active codes are kept.
+func (h *AdminHandler) PruneInvites(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.inviteRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Invite repository not configured"})
+	}
+	n, err := h.inviteRepo.DeleteUsedAndExpired()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clear invites"})
+	}
+	return c.JSON(fiber.Map{"deleted": n})
+}
+
 // Admin-only full settings
 func (h *AdminHandler) GetSiteSettings(c *fiber.Ctx) error {
 	if !checkAdmin(c, h.userRepo) {

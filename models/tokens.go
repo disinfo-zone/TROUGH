@@ -144,6 +144,21 @@ func (r *InviteRepository) Delete(id uuid.UUID) error {
 	return err
 }
 
+// DeleteUsedAndExpired removes invites that are either fully used (uses >= max_uses when max_uses is not NULL)
+// or expired (expires_at in the past). Unlimited invites (max_uses IS NULL) and non-expired invites are preserved.
+func (r *InviteRepository) DeleteUsedAndExpired() (int, error) {
+	res, err := r.db.Exec(`
+        DELETE FROM invites
+        WHERE (expires_at IS NOT NULL AND NOW() >= expires_at)
+           OR (max_uses IS NOT NULL AND uses >= max_uses)
+    `)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // RevertConsume attempts to undo a previous consumption, used when downstream operations fail after consuming.
 // This is best-effort and may not perfectly restore last_used_at for historical accuracy, but keeps uses correct.
 func (r *InviteRepository) RevertConsume(id uuid.UUID) error {

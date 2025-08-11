@@ -2266,6 +2266,20 @@ class TroughApp {
                         };
                         invList.appendChild(row);
                     });
+                    // Add prune link when invites exist
+                    const prune = document.createElement('div');
+                    prune.style.cssText = 'margin-top:8px;display:flex;justify-content:flex-end';
+                    prune.innerHTML = '<button id="inv-prune" class="link-btn">Clear Used and Expired codes</button>';
+                    invList.appendChild(prune);
+                    const pruneBtn = document.getElementById('inv-prune');
+                    if (pruneBtn) pruneBtn.onclick = async (e) => {
+                        e.preventDefault();
+                        const ok = await this.showConfirm('Clear all used and expired invites?');
+                        if (!ok) return;
+                        const r = await fetch('/api/admin/invites/prune', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                        if (r.ok) { this.showNotification('Cleared'); await loadInvites(invPage); }
+                        else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed to clear','error'); }
+                    };
                 }
                 const totalPages = Math.max(1, Math.ceil(total/limit));
                 if (invInfo) invInfo.textContent = `Page ${page} of ${totalPages} • ${total} total`;

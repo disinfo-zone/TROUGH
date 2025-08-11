@@ -298,6 +298,7 @@ func main() {
 	api.Post("/admin/invites", middleware.Protected(), adminHandler.CreateInvite)
 	api.Get("/admin/invites", middleware.Protected(), adminHandler.ListInvites)
 	api.Delete("/admin/invites/:id", middleware.Protected(), adminHandler.DeleteInvite)
+	api.Post("/admin/invites/prune", middleware.Protected(), adminHandler.PruneInvites)
 
 	api.Get("/admin/site", middleware.Protected(), adminHandler.GetSiteSettings)
 	api.Put("/admin/site", middleware.Protected(), adminHandler.UpdateSiteSettings)
