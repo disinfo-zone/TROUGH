@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -64,13 +65,22 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 	// Precompile regexes once
 	titleRe := regexp.MustCompile(`(?is)<title>.*?</title>`)
 	descRe := regexp.MustCompile(`(?is)<meta\s+name=["']description["'][^>]*>`)
+
+	// Cache base HTML to avoid disk reads on every request
+	var baseHTMLOnce sync.Once
+	var baseHTML string
+	loadBase := func() {
+		if b, err := os.ReadFile("./static/index.html"); err == nil {
+			baseHTML = string(b)
+		}
+	}
 	return func(c *fiber.Ctx) error {
-		b, err := os.ReadFile("./static/index.html")
-		if err != nil {
-			// Fallback to static file if read fails
+		baseHTMLOnce.Do(loadBase)
+		htmlStr := baseHTML
+		if htmlStr == "" {
+			// Fallback to static file if cache missing or read failed
 			return c.SendFile("./static/index.html")
 		}
-		htmlStr := string(b)
 
 		set, _ := siteRepo.Get()
 
@@ -89,23 +99,25 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 			baseURL = strings.TrimRight(baseURL, "/")
 		}
 		path := c.OriginalURL()
-		fullURL := baseURL
-		if fullURL == "" {
+		// Compute origin (scheme + host) to make absolute URLs when needed
+		origin := baseURL
+		if origin == "" {
 			proto := c.Protocol()
 			if proto == "" {
 				proto = "https"
 			}
-			fullURL = proto + "://" + c.Hostname() + path
-		} else {
-			fullURL = baseURL + path
+			origin = proto + "://" + c.Hostname()
 		}
+		fullURL := origin + path
 		imageURL := strings.TrimSpace(set.SocialImageURL)
+		ogType := "website"
 
 		// If this is an image page, override meta using the image
 		if strings.HasPrefix(c.Path(), "/i/") {
 			if idStr := c.Params("id"); idStr != "" {
 				if imgID, err := uuid.Parse(idStr); err == nil {
 					if img, err := imageRepo.GetByID(imgID); err == nil && img != nil {
+						ogType = "article"
 						// Compute site title for format "IMAGE TITLE - SITE TITLE"
 						siteTitle := strings.TrimSpace(set.SiteName)
 						if siteTitle == "" {
@@ -123,22 +135,28 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 						if img.Caption != nil {
 							cap = strings.TrimSpace(*img.Caption)
 						}
+						// Provide a subtle ASCII fallback when caption is missing
+						asciiFallback := "~ artificial reverie ~"
 						if author != "" && cap != "" {
 							description = "by @" + author + " — " + cap
-						} else if author != "" {
-							description = "by @" + author
-						} else if cap != "" {
+						} else if author != "" && cap == "" {
+							description = "by @" + author + " — " + asciiFallback
+						} else if author == "" && cap != "" {
 							description = cap
+						} else { // neither author nor caption
+							description = asciiFallback
 						}
 						if len(description) > 280 {
 							description = description[:280]
 						}
 						if img.Filename != "" {
-							// Prefer absolute URL when baseURL is configured
-							if baseURL != "" {
-								imageURL = baseURL + "/uploads/" + img.Filename
+							// If Filename is already an absolute URL (remote storage), use as-is
+							lowerFn := strings.ToLower(img.Filename)
+							if strings.HasPrefix(lowerFn, "http://") || strings.HasPrefix(lowerFn, "https://") {
+								imageURL = img.Filename
 							} else {
-								imageURL = "/uploads/" + img.Filename
+								// Local filename
+								imageURL = origin + "/uploads/" + img.Filename
 							}
 						}
 					}
@@ -160,10 +178,11 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 		if description != "" {
 			ogTags.WriteString(`    <meta property="og:description" content="` + html.EscapeString(description) + `">\n`)
 		}
-		ogTags.WriteString(`    <meta property="og:type" content="website">\n`)
+		ogTags.WriteString(`    <meta property="og:type" content="` + ogType + `">\n`)
 		ogTags.WriteString(`    <meta property="og:url" content="` + html.EscapeString(fullURL) + `">\n`)
 		if imageURL != "" {
 			ogTags.WriteString(`    <meta property="og:image" content="` + html.EscapeString(imageURL) + `">\n`)
+			ogTags.WriteString(`    <meta property="og:image:alt" content="` + html.EscapeString(title) + `">\n`)
 		}
 		// Twitter
 		card := "summary"
@@ -177,6 +196,8 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 		}
 		if imageURL != "" {
 			ogTags.WriteString(`    <meta name="twitter:image" content="` + html.EscapeString(imageURL) + `">\n`)
+			// Add alt text for accessibility using the title
+			ogTags.WriteString(`    <meta name="twitter:image:alt" content="` + html.EscapeString(title) + `">\n`)
 		}
 
 		insertion := ogTags.String()

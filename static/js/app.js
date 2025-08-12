@@ -90,7 +90,9 @@ class TroughApp {
                 if (s && s.site_name) {
                     const logo = document.querySelector('.logo');
                     if (logo) { logo.textContent = s.site_name; logo.setAttribute('data-text', s.site_name); }
-                    document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
+                    if (!location.pathname.startsWith('/i/')) {
+                        document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
+                    }
                 }
             }
         } catch {}
@@ -495,7 +497,9 @@ class TroughApp {
             if (s.site_name) {
                 const logo = document.querySelector('.logo');
                 if (logo) { logo.textContent = s.site_name; logo.setAttribute('data-text', s.site_name); }
-                document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
+                if (!location.pathname.startsWith('/i/')) {
+                    document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
+                }
             }
             if (s.favicon_path) {
                 let link = document.querySelector('link[rel="icon"]') || document.createElement('link');
@@ -508,7 +512,9 @@ class TroughApp {
                 if (!m) { m = document.createElement('meta'); m.setAttribute('name', name); document.head.appendChild(m); }
                 m.setAttribute('content', content);
             };
-            setMeta('description', s.seo_description || '');
+            if (!location.pathname.startsWith('/i/')) {
+                setMeta('description', s.seo_description || '');
+            }
         } catch {}
     }
 
@@ -2735,6 +2741,15 @@ class TroughApp {
         wrap.style.cssText = 'margin:0 auto 16px;max-width:980px;padding:16px;color:var(--text-primary)';
         const title = ((data.title && String(data.title).trim()) || data.original_name || 'Untitled');
         const username = data.username || 'unknown';
+        const asciiFallback = '~ artificial reverie ~';
+        const captionText = (data.caption && String(data.caption).trim()) || '';
+        const description = (username && captionText)
+            ? `by @${username} — ${captionText}`
+            : (username && !captionText)
+                ? `by @${username} — ${asciiFallback}`
+                : (!username && captionText)
+                    ? captionText
+                    : asciiFallback;
         const captionHtml = data.caption ? `<div class="image-caption" id="single-caption" style="margin-top:8px;color:var(--text-secondary);position:relative">${this.sanitizeAndRenderMarkdown(data.caption)}</div>` : '';
         wrap.innerHTML = `
           <div style="display:grid;gap:12px">
@@ -2746,6 +2761,52 @@ class TroughApp {
             ${captionHtml}
           </div>`;
         this.gallery.appendChild(wrap);
+
+        // Update document title and meta description on client-side navigation
+        try {
+            const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || 'TROUGH';
+            document.title = `${String(title)} - ${siteTitle}`;
+            const ensureMeta = (name) => {
+                let m = document.querySelector(`meta[name="${name}"]`);
+                if (!m) {
+                    m = document.createElement('meta');
+                    m.setAttribute('name', name);
+                    document.head.appendChild(m);
+                }
+                return m;
+            };
+            ensureMeta('description').setAttribute('content', description);
+
+            // Also update OpenGraph and Twitter tags for SPA navigations
+            const ensureProp = (prop) => {
+                let m = document.querySelector(`meta[property="${prop}"]`);
+                if (!m) { m = document.createElement('meta'); m.setAttribute('property', prop); document.head.appendChild(m); }
+                return m;
+            };
+            const ensureName = (n) => ensureMeta(n);
+
+            const imgURL = this.getImageURL(data.filename);
+            const imgAbs = imgURL && imgURL.startsWith('/') ? (location.origin + imgURL) : imgURL;
+            const ogType = 'article';
+            ensureProp('og:site_name').setAttribute('content', siteTitle);
+            ensureProp('og:title').setAttribute('content', String(title));
+            ensureProp('og:description').setAttribute('content', description);
+            ensureProp('og:type').setAttribute('content', ogType);
+            ensureProp('og:url').setAttribute('content', location.href);
+            if (imgAbs) {
+                ensureProp('og:image').setAttribute('content', imgAbs);
+                ensureProp('og:image:alt').setAttribute('content', String(title));
+            }
+
+            const twCard = imgAbs ? 'summary_large_image' : 'summary';
+            ensureName('twitter:card').setAttribute('content', twCard);
+            ensureName('twitter:title').setAttribute('content', String(title));
+            ensureName('twitter:description').setAttribute('content', description);
+            if (imgAbs) {
+                ensureName('twitter:image').setAttribute('content', imgAbs);
+                ensureName('twitter:image:alt').setAttribute('content', String(title));
+            }
+        } catch {}
 
         // Allow expanding long titles on click (toggle multi-line clamp)
         const titleEl = wrap.querySelector('.single-title');
