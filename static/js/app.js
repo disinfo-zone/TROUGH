@@ -30,6 +30,10 @@ class TroughApp {
         this._lastSnapEl = null;
         this._lastScrollSaveTs = 0;
         this.isRestoring = false;
+        // Rendering control to avoid stale inserts across route changes
+        this.renderEpoch = 0;
+        this.pendingTimers = new Set();
+        this.routeMode = 'home';
         
         // DOM elements
         this.gallery = document.getElementById('gallery');
@@ -106,14 +110,17 @@ class TroughApp {
         if (location.pathname === '/verify') { await this.renderVerifyPage(); return; }
         if (location.pathname.startsWith('/@')) {
             const username = decodeURIComponent(location.pathname.slice(2));
+            this.beginRender('profile');
             await this.renderProfilePage(username);
             return;
         }
         if (location.pathname === '/settings') {
+            this.beginRender('settings');
             await this.renderSettingsPage();
             return;
         }
         if (location.pathname === '/admin') {
+            this.beginRender('admin');
             await this.renderAdminPage();
             return;
         }
@@ -159,12 +166,14 @@ class TroughApp {
             return;
         }
         if (location.pathname.startsWith('/i/')) {
+            this.beginRender('image');
             const id = location.pathname.split('/')[2];
             await this.renderImagePage(id);
             return;
         }
         // Not a profile/settings page, clear profileTop
         if (this.profileTop) this.profileTop.innerHTML = '';
+        this.beginRender('home');
         await this.loadImages();
         this.setupInfiniteScroll();
         // Ensure logo data-text mirrors current text for blend-mode rendering
@@ -293,6 +302,12 @@ class TroughApp {
 
     setupHistoryHandler() {
         window.onpopstate = async () => {
+            // Bump epoch at the start of any history-driven navigation
+            this.beginRender(
+                location.pathname === '/' ? 'home' :
+                location.pathname.startsWith('/@') ? 'profile' :
+                (location.pathname === '/settings' ? 'settings' : (location.pathname === '/admin' ? 'admin' : 'image'))
+            );
             if (location.pathname.startsWith('/i/')) {
                 const id2 = location.pathname.split('/')[2];
                 await this.renderImagePage(id2);
@@ -325,6 +340,30 @@ class TroughApp {
             }
         };
     }
+
+    // Begin a new render epoch and cleanup any pending async UI work
+    beginRender(mode) {
+        try {
+            this.renderEpoch++;
+            this.routeMode = mode || this.routeMode || 'home';
+            // Cancel any staggered timers from previous view
+            if (this.pendingTimers && this.pendingTimers.size) {
+                for (const id of this.pendingTimers) { try { clearTimeout(id); } catch {} }
+                this.pendingTimers.clear();
+            }
+            // Remove infinite scroll listener if present
+            if (this._infiniteScrollCleanup) { try { this._infiniteScrollCleanup(); } catch {} this._infiniteScrollCleanup = null; }
+            // Reset lazy loading pipeline
+            try { if (this.imageObserver) this.imageObserver.disconnect(); } catch {}
+            this.lazyQueue = [];
+            this.currentImageLoads = 0;
+            // Stop any in-flight scroll animations
+            if (this._activeScrollAnim) { this._activeScrollAnim.cancelled = true; this._activeScrollAnim = null; }
+        } catch {}
+    }
+
+    trackTimeout(id) { try { if (id) this.pendingTimers.add(id); } catch {} return id; }
+    untrackTimeout(id) { try { if (id) this.pendingTimers.delete(id); } catch {} }
 
     // IntersectionObserver + small queue for seamless lazy loading
     setupImageLazyLoader() {
@@ -627,7 +666,9 @@ class TroughApp {
                 if (this.profileTop) this.profileTop.innerHTML = '';
                 this.page = 1; this.hasMore = true;
                 window.scrollTo(0, 0);
+                this.beginRender('home');
                 await this.loadImages();
+                this.setupInfiniteScroll();
             }
         };
         if (this.gallery) this.gallery.addEventListener('click', handleInternalLink, true);
@@ -647,7 +688,9 @@ class TroughApp {
                 this.page = 1; this.hasMore = true;
                 // Scroll to top synchronously before loading, to avoid race with magnetic/IO
                 try { window.scrollTo(0, 0); } catch {}
+                this.beginRender('home');
                 await this.loadImages();
+                this.setupInfiniteScroll();
             }, true);
         }
     }
@@ -967,6 +1010,7 @@ class TroughApp {
     }
 
     async renderProfilePage(username) {
+        this.beginRender('profile');
         // Ensure gallery uses multi-column layout (remove single-column mode from image page)
         this.gallery.classList.remove('settings-mode');
         if (this.profileTop) this.profileTop.innerHTML = '';
@@ -1197,15 +1241,20 @@ class TroughApp {
             };
         }
 
+        const epoch = this.renderEpoch;
         if (this.isRestoring) {
             (imgs.images || []).forEach((img) => this.createImageCard(img));
         } else {
-            (imgs.images || []).forEach((img, index) => setTimeout(() => this.createImageCard(img), index * 80));
+            (imgs.images || []).forEach((img, index) => {
+                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, index * 80));
+            });
         }
     }
 
     // Gallery/loading functions
     async loadImages() {
+        // Only load the home feed in the feed route
+        if (this.routeMode !== 'home') return;
         if (this.loading || !this.hasMore) return;
         this.loading = true;
         this.showLoader();
@@ -1236,6 +1285,7 @@ class TroughApp {
     }
 
     renderDemoImages() {
+        const epoch = this.renderEpoch;
         const demoImages = [
             { id: '1', title: 'Neural Genesis', author: 'AI_PROPHET', color: '#2563eb', width: 400, height: 600 },
             { id: '2', title: 'Digital Dreams', author: 'CODE_MYSTIC', color: '#7c3aed', width: 400, height: 500 },
@@ -1252,20 +1302,28 @@ class TroughApp {
             demoImages.forEach((image) => this.createImageCard(image));
         } else {
             demoImages.forEach((image, index) => {
-                setTimeout(() => this.createImageCard(image), index * 120);
+                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(image); }, index * 120));
             });
         }
     }
 
     renderImages(images) {
+        const epoch = this.renderEpoch;
         if (this.isRestoring) {
             images.forEach((img) => this.createImageCard(img));
         } else {
-            images.forEach((img, index) => setTimeout(() => this.createImageCard(img), index * 80));
+            images.forEach((img, index) => {
+                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, index * 80));
+            });
         }
     }
 
     createImageCard(image) {
+        // Skip duplicates by image id if already present
+        if (image && image.id) {
+            const existing = this.gallery && this.gallery.querySelector(`.image-card[data-image-id="${String(image.id)}"]`);
+            if (existing) return;
+        }
         const card = document.createElement('div');
         card.className = 'image-card';
         card.style.animationDelay = `${Math.random() * 0.5}s`;
@@ -1858,6 +1916,8 @@ class TroughApp {
     escapeHTML(s){ return (s||'').replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 
     setupInfiniteScroll() {
+        // Ensure only one scroll listener is attached at a time
+        if (this._infiniteScrollCleanup) { try { this._infiniteScrollCleanup(); } catch {} this._infiniteScrollCleanup = null; }
         let ticking = false;
         
         const handleScroll = () => {
@@ -1876,7 +1936,9 @@ class TroughApp {
             }
         };
         
-        window.addEventListener('scroll', handleScroll, { passive: true });
+        const onScroll = handleScroll;
+        window.addEventListener('scroll', onScroll, { passive: true });
+        this._infiniteScrollCleanup = () => window.removeEventListener('scroll', onScroll, { passive: true });
     }
 
     // MOBILE-ONLY: Magnetic kinetic scroll that snaps to each image card on low-velocity stops
