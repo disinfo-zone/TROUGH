@@ -55,6 +55,7 @@ class TroughApp {
             try { this.currentUser = JSON.parse(cachedUser); } catch {}
             if (this.currentUser?.username) {
                 this.authBtn.textContent = `@${this.currentUser.username}`;
+                this.authBtn.title = `@${this.currentUser.username}`;
                 this.authBtn.style.fontFamily = 'var(--font-mono)';
             }
         }
@@ -534,6 +535,7 @@ class TroughApp {
     updateAuthButton() {
         if (this.currentUser) {
             this.authBtn.textContent = `@${this.currentUser.username}`;
+            this.authBtn.title = `@${this.currentUser.username}`;
             this.authBtn.style.fontFamily = 'var(--font-mono)';
         } else {
             this.authBtn.textContent = 'ENTER';
@@ -951,7 +953,7 @@ class TroughApp {
                 <div style="font-weight:800;letter-spacing:-0.02em">User not found</div>
                 <span style="opacity:.6;font-family:var(--font-mono);font-size:12px">error: profile_missing</span>
               </div>
-              <div style="color:var(--text-secondary);font-family:var(--font-mono);line-height:1.6">The profile <strong>@${username}</strong> does not exist.</div>
+              <div style="color:var(--text-secondary);font-family:var(--font-mono);line-height:1.6">The profile <strong>@${this.escapeHTML(String(username))}</strong> does not exist.</div>
               <div style="margin-top:12px"><a href="/" class="nav-btn" style="text-decoration:none">Back to river</a></div>
             `;
             this.gallery.appendChild(wrap);
@@ -971,15 +973,15 @@ class TroughApp {
         const header = document.createElement('section');
         header.className = 'mono-col';
         header.style.cssText = 'padding:16px 0;color:var(--text-primary);display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 auto;position:relative';
-        const avatar = `<div class="avatar-preview" style="background-image:url('${user.avatar_url || ''}');"></div>`;
+        const avatar = `<div class="avatar-preview" style="flex:0 0 auto;background-image:url('${user.avatar_url || ''}');"></div>`;
         const adminBtn = (isOwner && (isAdmin || isModerator)) ? '<button id="profile-admin" class="link-btn">Admin</button>' : '';
         header.innerHTML = `
-          <div style="display:flex;gap:12px;align-items:center">
+          <div class="profile-left" style="display:flex;gap:12px;align-items:center;min-width:0;flex:1">
             ${avatar}
-            <div style="font-weight:700;font-size:1.1rem;font-family:var(--font-mono)">@${user.username}</div>
+            <div class="profile-username" style="font-weight:700;font-size:1.1rem;font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">@${this.escapeHTML(String(user.username))}</div>
           </div>
           ${isOwner ? `
-          <div class="profile-actions" style="display:flex;gap:8px;align-items:center">
+          <div class="profile-actions" style="display:flex;gap:8px;align-items:center;flex-shrink:0">
             <div class="profile-actions-inline" style="display:flex;gap:8px;align-items:center">
               <button id="profile-logout" class="nav-btn">Sign out</button>
               ${adminBtn}
@@ -987,7 +989,7 @@ class TroughApp {
             </div>
             <div class="profile-actions-menu" style="display:none;position:relative">
               <button id="profile-actions-toggle" class="nav-btn">Options</button>
-              <div id="profile-actions-panel" class="profile-menu" style="display:none;position:absolute;right:0;top:calc(100% + 8px);min-width:180px;background:var(--surface-elevated);border:1px solid var(--border);border-radius:10px;padding:6px;box-shadow:var(--shadow-2xl);z-index:50">
+               <div id="profile-actions-panel" class="profile-menu" style="display:none;position:absolute;right:0;top:calc(100% + 8px);min-width:180px;background:var(--surface-elevated);border:1px solid var(--border);border-radius:10px;padding:6px;box-shadow:var(--shadow-2xl);z-index:2500">
                 <button id="menu-settings" class="profile-item link-btn" style="display:block;width:100%;text-align:left;padding:8px 10px">Settings</button>
                 ${(isAdmin || isModerator) ? '<button id="menu-admin" class="profile-item link-btn" style="display:block;width:100%;text-align:left;padding:8px 10px">Admin</button>' : ''}
                 <button id="menu-signout" class="profile-item link-btn" style="display:block;width:100%;text-align:left;padding:8px 10px;color:#ff6666">Sign out</button>
@@ -1003,6 +1005,29 @@ class TroughApp {
             // Mobile menu wiring
             const toggle = document.getElementById('profile-actions-toggle');
             const panel = document.getElementById('profile-actions-panel');
+            const inline = header.querySelector('.profile-actions-inline');
+            const menuWrap = header.querySelector('.profile-actions-menu');
+            const applyLayout = () => {
+                if (!inline || !menuWrap) return;
+                // Prefer showing inline actions; if screen narrow or header overflows, switch to menu
+                const narrow = window.innerWidth < 640;
+                const overflow = header.scrollWidth > header.clientWidth + 1;
+                if (narrow || overflow) {
+                    inline.style.display = 'none';
+                    menuWrap.style.display = 'block';
+                } else {
+                    inline.style.display = 'flex';
+                    menuWrap.style.display = 'none';
+                    if (panel) panel.style.display = 'none';
+                }
+            };
+            // Initial layout and responsive handler (replace previous handler if any)
+            applyLayout();
+            if (this._profileResizeHandler) {
+                window.removeEventListener('resize', this._profileResizeHandler);
+            }
+            this._profileResizeHandler = () => applyLayout();
+            window.addEventListener('resize', this._profileResizeHandler);
             const openPanel = () => { if (panel) panel.style.display = 'block'; };
             const closePanel = () => { if (panel) panel.style.display = 'none'; };
             if (toggle && panel) {
@@ -1241,7 +1266,7 @@ class TroughApp {
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                   <div style="min-width:0">
                     <div class="image-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${(image.title || image.original_name || 'Untitled').trim()}</a></div>
-                    <div class="image-author" style="font-family:var(--font-mono)"><a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${username}</a></div>
+                    <div class="image-author" style="font-family:var(--font-mono)"><a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${this.escapeHTML(String(username))}</a></div>
                   </div>
                   ${actions}
                 </div>
@@ -1405,7 +1430,7 @@ class TroughApp {
                 await this.renderImagePage(image.id);
             });
         }
-        lightboxAuthor.innerHTML = `<a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${username}</a>`;
+        lightboxAuthor.innerHTML = `<a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${this.escapeHTML(String(username))}</a>`;
         lightboxAuthor.style.fontFamily = 'var(--font-mono)';
         lightboxLike.classList.remove('liked');
         lightboxLike.onclick = () => this.toggleLike(image.id);
@@ -1516,7 +1541,7 @@ class TroughApp {
               <div class="avatar-preview" id="avatar-preview" style="background-image:url('${avatarURL}')"></div>
               <div style="display:grid;gap:10px;flex:1;min-width:0;overflow:hidden">
                 <label class="settings-label">Username</label>
-                <input type="text" id="settings-username" value="${this.currentUser.username}" minlength="3" maxlength="30" class="settings-input"/>
+                <input type="text" id="settings-username" value="${this.escapeHTML(String(this.currentUser.username))}" minlength="3" maxlength="30" pattern="[a-z0-9]+" title="3–30 lowercase letters or numbers" class="settings-input"/>
                 <div class="settings-actions"><button id="btn-username" class="nav-btn">Change Username</button></div>
                 <label class="settings-label">Avatar</label>
                 <div class="settings-actions" style="gap:8px;align-items:center;min-width:0"><input type="file" id="avatar-file" accept="image/*" style="min-width:0"/><button id="avatar-upload" class="nav-btn">Upload</button></div>
@@ -2392,7 +2417,7 @@ class TroughApp {
                 const row = document.createElement('div');
                 row.className = 'user-row';
                 const left = document.createElement('div'); left.className = 'left'; left.style.minWidth='0';
-                left.innerHTML = `<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">@${u.username}</div><div class="id">${u.id}</div>`;
+                left.innerHTML = `<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">@${this.escapeHTML(String(u.username))}</div><div class="id">${this.escapeHTML(String(u.id))}</div>`;
                 const right = document.createElement('div'); right.className='actions';
                 const modBtn = document.createElement('button'); modBtn.className='nav-btn'; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod';
                 modBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify({ is_moderator: !u.is_moderator }) }); if (r.ok) { u.is_moderator = !u.is_moderator; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod'; } };
@@ -2598,7 +2623,7 @@ class TroughApp {
           <div style="display:grid;gap:12px">
             <div class="single-header">
               <h1 class="single-title" title="${this.escapeHTML(title)}">${this.escapeHTML(title)}</h1>
-              <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${username}</a>
+              <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
             </div>
             <div style="display:flex;justify-content:center"><img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>
             ${captionHtml}

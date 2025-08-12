@@ -36,6 +36,8 @@ func maybeSeedAdmin(userRepo models.UserRepositoryInterface) {
 	if adminEmail == "" || adminUser == "" || adminPass == "" {
 		return
 	}
+	// Normalize admin username to match username policy (lowercase, trimmed)
+	adminUser = strings.ToLower(strings.TrimSpace(adminUser))
 	if _, err := userRepo.GetByEmail(adminEmail); err == nil {
 		log.Printf("Admin seed: user %s already exists", adminEmail)
 		return

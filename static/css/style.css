@@ -191,6 +191,17 @@ input, button {
     align-items: center;
 }
 
+/* Prevent auth button text from pushing the logo or causing overflow */
+#auth-btn {
+  max-width: 50vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 640px) {
+  #auth-btn { max-width: 40vw; }
+}
+
 .logo {
     font-size: 1.25rem;
     font-weight: 800;
@@ -376,6 +387,21 @@ input, button {
 @media (max-width: 600px) {
   .single-header { align-items: flex-start; gap: 8px; }
   .single-username { order: 2; }
+
+/* Prevent horizontal overflow due to long usernames on profile header */
+.profile-username {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Ensure the profile header doesn't cause horizontal scroll on small screens */
+@media (max-width: 640px) {
+  .nav, .mono-col, .gallery {
+    overflow-x: hidden;
+  }
+}
   .single-title { order: 1; }
 }
 

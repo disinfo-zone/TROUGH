@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/yourusername/trough/middleware"
@@ -25,14 +26,15 @@ type UserHandler struct {
 	userRepo  models.UserRepositoryInterface
 	imageRepo models.ImageRepositoryInterface
 	storage   services.Storage
+	validator *validator.Validate
 }
 
 func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface, storage services.Storage) *UserHandler {
-	return &UserHandler{userRepo: userRepo, imageRepo: imageRepo, storage: storage}
+	return &UserHandler{userRepo: userRepo, imageRepo: imageRepo, storage: storage, validator: validator.New()}
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
-	username := c.Params("username")
+	username := normalizeUsername(c.Params("username"))
 	if username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Username required",
@@ -50,7 +52,7 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) GetUserImages(c *fiber.Ctx) error {
-	username := c.Params("username")
+	username := normalizeUsername(c.Params("username"))
 	if username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Username required",
@@ -108,15 +110,18 @@ func (h *UserHandler) UpdateMyProfile(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// If changing username, ensure it is not taken and not reserved
+	// If changing username, ensure it is valid, not reserved, and not taken
 	if req.Username != nil {
-		uname := strings.ToLower(strings.TrimSpace(*req.Username))
+		uname := normalizeUsername(*req.Username)
 		if uname == "" || len(uname) < 3 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Username too short"})
 		}
-		reserved := map[string]bool{"admin": true, "root": true, "system": true, "support": true, "moderator": true, "owner": true, "undefined": true, "null": true}
-		if reserved[uname] {
+		if isReservedUsername(uname) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "That username is reserved"})
+		}
+		// Validate against struct tags (alphanum, max=30)
+		if err := h.validator.Struct(models.UpdateUserRequest{Username: &uname}); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 		}
 		if existing, err := h.userRepo.GetByUsername(uname); err == nil && existing != nil {
 			if existing.ID != userID {
@@ -478,13 +483,32 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil || req.Username == "" || req.Email == "" || req.Password == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
 	}
+	// Normalize
+	req.Username = normalizeUsername(req.Username)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
+	// Reserved usernames
+	if isReservedUsername(req.Username) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "That username is reserved"})
+	}
+
+	// Validate using existing model rules
+	if err := h.validator.Struct(models.CreateUserRequest{Username: req.Username, Email: req.Email, Password: req.Password}); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
+	}
+
 	if err := services.ValidatePassword(req.Password); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	if _, err := h.userRepo.GetByEmail(req.Email); err == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already in use"})
 	}
-	u := &models.User{Username: strings.ToLower(req.Username), Email: strings.ToLower(req.Email)}
+	// Username conflict check (graceful instead of relying on DB constraint)
+	if _, err := h.userRepo.GetByUsername(req.Username); err == nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
+	}
+
+	u := &models.User{Username: req.Username, Email: req.Email}
 	if err := u.HashPassword(req.Password); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
 	}

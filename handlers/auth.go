@@ -110,11 +110,10 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Registration is currently disabled"})
 		}
 	}
-	// Normalize input early
+	// Normalize input early and validate path params consistently
 	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	reserved := map[string]bool{"admin": true, "root": true, "system": true, "support": true, "moderator": true, "owner": true, "undefined": true, "null": true}
-	if reserved[req.Username] {
+	if isReservedUsername(req.Username) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "That username is reserved"})
 	}
 	if err := h.validator.Struct(req); err != nil {
