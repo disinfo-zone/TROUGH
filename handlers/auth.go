@@ -246,7 +246,23 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	}
 	sender := h.newMailSender(set)
 	link := set.SiteURL + "/reset?token=" + token
-	if err := sender.Send(u.Email, "Reset your password", "Use this link to reset your password: "+link); err != nil {
+	// Plain-text, ASCII-styled message with clear instructions and expiry notice
+	body := "" +
+		"============================\n" +
+		"  PASSWORD RESET REQUEST\n" +
+		"============================\n\n" +
+		"We received a request to reset your password.\n\n" +
+		"If you made this request, use the link below to set a new password.\n" +
+		"If you did NOT request this, you can safely ignore this email.\n\n" +
+		">>> RESET LINK (valid for 1 hour, single-use) <<<\n" +
+		link + "\n\n" +
+		"Tips for a strong password:\n" +
+		"- 8+ characters\n" +
+		"- mix of UPPER/lower case, numbers, symbols\n\n" +
+		"This link expires in 1 hour or after it is used once.\n" +
+		"For security, never share this link.\n\n" +
+		"— TROUGH\n"
+	if err := sender.Send(u.Email, "Reset your password", body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
 	}
 	return c.SendStatus(fiber.StatusNoContent)
@@ -279,7 +295,12 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
 	_ = models.DeletePasswordReset(r.Token)
-	return c.SendStatus(fiber.StatusNoContent)
+	// Issue a fresh token so client can auto-login
+	tokenStr, err := middleware.GenerateToken(u.ID, u.Username)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
+	}
+	return c.JSON(fiber.Map{"user": u.ToResponse(), "token": tokenStr})
 }
 
 func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {

@@ -81,6 +81,18 @@ class TroughApp {
     }
 
     async init() {
+        // Initialize logo/site name from cache first to avoid flash
+        try {
+            const cached = localStorage.getItem('site_settings');
+            if (cached) {
+                const s = JSON.parse(cached);
+                if (s && s.site_name) {
+                    const logo = document.querySelector('.logo');
+                    if (logo) { logo.textContent = s.site_name; logo.setAttribute('data-text', s.site_name); }
+                    document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
+                }
+            }
+        } catch {}
         await this.checkAuth();
         await this.applyPublicSiteSettings();
         this.setupHistoryHandler();
@@ -474,6 +486,8 @@ class TroughApp {
             const r = await fetch('/api/site');
             if (!r.ok) return;
             const s = await r.json();
+            // Cache for next load to avoid logo/name flash
+            try { localStorage.setItem('site_settings', JSON.stringify(s)); } catch {}
             window.__SITE_EMAIL_ENABLED__ = !!s.email_enabled;
             window.__PUBLIC_REG_ENABLED__ = s.public_registration_enabled !== false; // default true
             if (s.from_email) window.__SITE_FROM_EMAIL__ = s.from_email;
@@ -672,7 +686,7 @@ class TroughApp {
             eye.setAttribute('aria-label', 'Toggle password visibility');
             eye.textContent = '👁';
             eye.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-tertiary);opacity:.8;';
-            eye.onclick = () => { const isPass = input.type === 'password'; input.type = isPass ? 'text' : 'password'; eye.textContent = isPass ? '🙈' : '👁'; };
+            eye.onclick = () => { const isPass = input.type === 'password'; input.type = isPass ? 'text' : 'password'; /* keep same icon; avoid monkey emoji */ };
             wrap.appendChild(eye);
         };
 
@@ -1488,6 +1502,8 @@ class TroughApp {
 
         this.gallery.innerHTML = '';
         if (this.profileTop) this.profileTop.innerHTML = '';
+        // Ensure reset page uses centered settings layout
+        this.gallery.className = 'gallery settings-mode';
         this.gallery.classList.add('settings-mode');
         const wrap = document.createElement('div');
         wrap.className = 'settings-wrap';
@@ -2428,22 +2444,91 @@ class TroughApp {
 
     async renderResetPage() {
         const token = new URLSearchParams(location.search).get('token') || '';
+        if (!token) { this.showNotification('Invalid reset link','error'); history.replaceState({}, '', '/'); await this.init(); return; }
         this.gallery.innerHTML = '';
+        // Ensure reset page uses centered settings layout
+        if (this.gallery) {
+            this.gallery.className = 'gallery settings-mode';
+        }
         if (this.profileTop) this.profileTop.innerHTML = '';
         const wrap = document.createElement('div'); wrap.className='settings-wrap';
         wrap.innerHTML = `
           <section class="settings-group">
             <div class="settings-label">Reset password</div>
-            <input type="password" id="rp-new" class="settings-input" placeholder="New password"/>
-            <input type="password" id="rp-confirm" class="settings-input" placeholder="Confirm new password"/>
+            <input type="password" id="rp-new" class="settings-input" placeholder="New password" autocomplete="new-password"/>
+            <div id="pw-strength" aria-live="polite" title="Password strength" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+              <div class="pw-seg"><div class="fill" style="height:6px;width:0%;transition:width .25s"></div></div>
+              <div class="pw-seg"><div class="fill" style="height:6px;width:0%;transition:width .25s"></div></div>
+              <div class="pw-seg"><div class="fill" style="height:6px;width:0%;transition:width .25s"></div></div>
+              <div class="pw-seg"><div class="fill" style="height:6px;width:0%;transition:width .25s"></div></div>
+            </div>
+            <input type="password" id="rp-confirm" class="settings-input" placeholder="Confirm new password" autocomplete="new-password"/>
             <div class="settings-actions"><button id="rp-save" class="nav-btn">Save</button></div>
           </section>`;
         this.gallery.appendChild(wrap);
+        const pw = document.getElementById('rp-new');
+        const pwc = document.getElementById('rp-confirm');
+        const meter = wrap.querySelector('#pw-strength');
+        // Eye toggles for reveal/hide on both password fields
+        const ensureEyeToggle = (input) => {
+            if (!input) return;
+            if (input.parentElement?.classList?.contains('pw-wrap')) return;
+            const wrap = document.createElement('div');
+            wrap.className = 'pw-wrap';
+            wrap.style.position = 'relative';
+            input.parentNode.insertBefore(wrap, input);
+            wrap.appendChild(input);
+            input.style.paddingRight = '40px';
+            const eye = document.createElement('button');
+            eye.type = 'button'; eye.className = 'pw-eye';
+            eye.setAttribute('aria-label', 'Toggle password visibility');
+            eye.textContent = '👁';
+            eye.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-tertiary);opacity:.8;';
+            eye.onclick = () => { const isPass = input.type === 'password'; input.type = isPass ? 'text' : 'password'; };
+            wrap.appendChild(eye);
+        };
+        ensureEyeToggle(pw);
+        ensureEyeToggle(pwc);
+        const scorePassword = (pwd) => {
+            if (!pwd) return 0;
+            let categories = 0;
+            if (/[a-z]/.test(pwd)) categories++;
+            if (/[A-Z]/.test(pwd)) categories++;
+            if (/[0-9]/.test(pwd)) categories++;
+            if (/[^A-Za-z0-9]/.test(pwd)) categories++;
+            const long = pwd.length >= 8;
+            if (!long) return Math.min(categories, 1);
+            if (categories <= 1) return 1;
+            if (categories === 2) return 2;
+            if (categories === 3) return 3;
+            return 4;
+        };
+        const renderStrength = (pwd) => {
+            const score = scorePassword(pwd);
+            if (meter) {
+                const segs = meter.querySelectorAll('.pw-seg .fill');
+                segs.forEach((seg, i) => { const active = score >= (i + 1); seg.style.width = active ? '100%' : '0%'; seg.classList.toggle('shimmer', score === 4 && i === 3); });
+            }
+            return score;
+        };
+        pw.addEventListener('input', (e)=>renderStrength(e.target.value));
         document.getElementById('rp-save').onclick = async () => {
-            const a = document.getElementById('rp-new').value, b = document.getElementById('rp-confirm').value; if (a.length<6 || a!==b) { this.showNotification('Passwords must match and be 6+ chars','error'); return; }
+            const a = pw.value.trim(); const b = pwc.value.trim();
+            if (renderStrength(a) < 2) { this.showNotification('Password too weak','error'); return; }
+            if (a !== b) { this.showNotification('Passwords do not match','error'); return; }
             const r = await fetch('/api/reset-password', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token, new_password:a }) });
-            if (r.status===204) { this.showNotification('Password updated'); history.pushState({}, '', '/'); this.init(); }
-            else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Reset failed','error'); }
+            const d = await r.json().catch(()=>({}));
+            if (r.ok && d && d.token && d.user) {
+                localStorage.setItem('token', d.token);
+                localStorage.setItem('user', JSON.stringify(d.user));
+                this.currentUser = d.user;
+                this.showNotification('Password updated. You are now signed in.', 'success');
+                const username = d.user?.username || '';
+                history.pushState({}, '', username ? `/@${encodeURIComponent(username)}` : '/');
+                this.init();
+            } else {
+                const e = d || {}; this.showNotification(e.error||'Reset failed','error');
+            }
         };
     }
 
@@ -2459,7 +2544,30 @@ class TroughApp {
         panel.innerHTML = `<div class="settings-label">Reset your password</div><input id="fp-email" type="email" class="settings-input" placeholder="Email"/><div class="settings-actions"><button id="fp-send" class="nav-btn">Send reset link</button></div>`;
         overlay.appendChild(panel); document.body.appendChild(overlay);
         overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
-        panel.querySelector('#fp-send').onclick = async () => { const email = panel.querySelector('#fp-email').value.trim(); if(!email){ this.showNotification('Enter your email','error'); return; } const r = await fetch('/api/forgot-password',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) }); if (r.status===204){ this.showNotification('Check your email'); overlay.remove(); } else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } };
+        panel.querySelector('#fp-send').onclick = async () => {
+            const email = panel.querySelector('#fp-email').value.trim();
+            if (!email) { this.showNotification('Enter your email','error'); return; }
+            const btn = panel.querySelector('#fp-send');
+            btn.disabled = true;
+            const prevText = btn.textContent;
+            btn.textContent = 'Sending…';
+            try {
+                const r = await fetch('/api/forgot-password', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) });
+                if (r.status===204) {
+                    this.showNotification('Check your email');
+                    overlay.remove();
+                } else {
+                    const e = await r.json().catch(()=>({}));
+                    this.showNotification(e.error||'Unable to send','error');
+                    btn.disabled = false;
+                    btn.textContent = prevText;
+                }
+            } catch {
+                this.showNotification('Unable to send','error');
+                btn.disabled = false;
+                btn.textContent = prevText;
+            }
+        };
     }
 
     async renderImagePage(id) {

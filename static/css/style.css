@@ -891,6 +891,17 @@ input, button {
 .settings-group { display: grid; gap: 10px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-2xl); padding: var(--space-lg); box-shadow: var(--shadow-md); }
 .settings-label { color: var(--text-secondary); font-size: 0.9rem; }
 
+/* Global settings input styling so fields outside settings groups (e.g., bio editor, forgot password) are dark themed */
+.settings-input {
+  width: 100%;
+  max-width: 100%;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+}
+
 /* Inputs: strong contrast + fluid width */
 .settings-group .settings-input,
 .settings-group input[type="text"],
@@ -1095,6 +1106,17 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 }
 
 /* Password input eye toggle */
-.pw-wrap input[type="password"], .pw-wrap input[type="text"] { padding-right: 40px; }
-.pw-eye { color: var(--text-tertiary); transition: opacity var(--duration-fast) var(--ease-out); }
-.pw-eye:hover { opacity: 1; }
+.pw-wrap input[type="password"], .pw-wrap input[type="text"] { padding-right: 48px; }
+.pw-eye {
+  color: var(--text-tertiary);
+  transition: opacity var(--duration-fast) var(--ease-out);
+  font-size: 18px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+}
+.pw-eye:hover { opacity: 1; background: var(--surface); }

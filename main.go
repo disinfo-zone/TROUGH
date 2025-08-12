@@ -240,6 +240,8 @@ func main() {
 	app.Get("/settings", index)
 	app.Get("/admin", index)
 	app.Get("/register", index)
+	app.Get("/reset", index)
+	app.Get("/verify", index)
 	app.Get("/i/:id", index)
 
 	// Static assets
