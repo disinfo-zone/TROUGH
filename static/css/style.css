@@ -357,6 +357,10 @@ input, button {
 /* Caption clamp + expand */
 .image-caption { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .image-caption.expanded { -webkit-line-clamp: unset; line-clamp: unset; }
+/* Caption links: inherit caption color and use subtle underline */
+.image-caption a { color: inherit; text-decoration: underline; }
+.image-caption a:visited { color: inherit; }
+.image-caption a:hover { opacity: 0.85; }
 
 /* Single image page header: keep image centered; title should not push layout */
 .single-header { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; min-width:0; flex-wrap: wrap; }

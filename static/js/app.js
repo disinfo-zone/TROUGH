@@ -1466,7 +1466,11 @@ class TroughApp {
                 // Also allow toggling by clicking the caption itself
                 meta.addEventListener('click', (ev) => {
                     const capEl = ev.target.closest('.image-caption');
-                    if (capEl) { toggleCaption(ev); }
+                    if (!capEl) return;
+                    // If a real link inside caption was clicked, allow navigation but prevent lightbox
+                    const link = ev.target.closest('a');
+                    if (link) { ev.stopPropagation(); return; }
+                    toggleCaption(ev);
                 });
             }
         }
