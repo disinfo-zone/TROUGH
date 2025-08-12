@@ -2212,6 +2212,29 @@ class TroughApp {
               </div>
               <div class="settings-label">Registration</div>
               <label style="display:flex;gap:8px;align-items:center"><input id="public-reg" type="checkbox" ${s.public_registration_enabled!==false?'checked':''}/> Allow public registration</label>
+              <div class="settings-label" style="margin-top:8px">Analytics</div>
+              <label style="display:flex;gap:8px;align-items:center;margin-bottom:4px"><input id="analytics-enabled" type="checkbox" ${s.analytics_enabled?'checked':''}/> Enable site analytics</label>
+              <div id="analytics-config" style="display:${s.analytics_enabled?'grid':'none'};gap:8px">
+                <div style="display:grid;gap:6px"><label class="settings-label">Provider</label>
+                  <select id="analytics-provider" class="settings-input">
+                    <option value="" ${!s.analytics_provider? 'selected':''}>Select provider</option>
+                    <option value="ga4" ${s.analytics_provider==='ga4'?'selected':''}>Google Analytics 4</option>
+                    <option value="umami" ${s.analytics_provider==='umami'?'selected':''}>Umami (self-hosted)</option>
+                    <option value="plausible" ${s.analytics_provider==='plausible'?'selected':''}>Plausible (self-hosted)</option>
+                  </select>
+                </div>
+                <div id="ga4-fields" style="display:${s.analytics_provider==='ga4'?'grid':'none'};gap:8px">
+                  <input id="ga4-id" class="settings-input" placeholder="GA4 Measurement ID (e.g., G-XXXXXXX)" value="${s.ga4_measurement_id||''}"/>
+                </div>
+                <div id="umami-fields" style="display:${s.analytics_provider==='umami'?'grid':'none'};gap:8px">
+                  <input id="umami-src" class="settings-input" placeholder="Umami script URL (https://domain/script.js)" value="${s.umami_src||''}"/>
+                  <input id="umami-website-id" class="settings-input" placeholder="Website ID (UUID)" value="${s.umami_website_id||''}"/>
+                </div>
+                <div id="plausible-fields" style="display:${s.analytics_provider==='plausible'?'grid':'none'};gap:8px">
+                  <input id="plausible-src" class="settings-input" placeholder="Plausible script URL (https://domain/js/script.js)" value="${s.plausible_src||''}"/>
+                  <input id="plausible-domain" class="settings-input" placeholder="Your site domain (example.com)" value="${s.plausible_domain||''}"/>
+                </div>
+              </div>
               <div class="settings-actions"><button id="btn-save-site-core" class="nav-btn">Save site settings</button></div>
               <div class="settings-label" style="display:flex;align-items:center;justify-content:space-between">
                 <span>Storage settings (advanced)</span>
@@ -2286,6 +2309,24 @@ class TroughApp {
                 if (r.ok) { const d = await r.json(); document.getElementById('social-image').value = d.social_image_url || ''; socialPreview.src = d.social_image_url || socialPreview.src; socialPreview.style.display='inline-block'; this.showNotification('Social image uploaded'); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
+
+            // Analytics dynamic UI (bind before attachment by scoping to siteSection)
+            const analyticsEnabled = siteSection.querySelector('#analytics-enabled');
+            const analyticsConfig = siteSection.querySelector('#analytics-config');
+            const analyticsProviderSel = siteSection.querySelector('#analytics-provider');
+            const showByProvider = () => {
+                const p = (analyticsProviderSel?.value||'').toLowerCase();
+                const show = (id, on) => { const el = siteSection.querySelector('#'+id); if (el) el.style.display = on ? 'grid' : 'none'; };
+                show('ga4-fields', p==='ga4');
+                show('umami-fields', p==='umami');
+                show('plausible-fields', p==='plausible');
+            };
+            if (analyticsEnabled) analyticsEnabled.onchange = () => {
+                if (analyticsConfig) analyticsConfig.style.display = analyticsEnabled.checked ? 'grid' : 'none';
+                if (analyticsEnabled.checked && analyticsProviderSel && !analyticsProviderSel.value) analyticsProviderSel.focus();
+            };
+            if (analyticsProviderSel) analyticsProviderSel.onchange = showByProvider;
+            showByProvider();
         }
 
         const invitesSection = document.createElement('section');
@@ -2358,8 +2399,15 @@ class TroughApp {
                     smtp_tls: document.getElementById('smtp-tls').checked,
                     require_email_verification: document.getElementById('require-verify')?.checked || false,
                     public_registration_enabled: document.getElementById('public-reg')?.checked !== false,
+                    analytics_enabled: document.getElementById('analytics-enabled')?.checked || false,
+                    analytics_provider: document.getElementById('analytics-provider')?.value || '',
+                    ga4_measurement_id: document.getElementById('ga4-id')?.value || '',
+                    umami_src: document.getElementById('umami-src')?.value || '',
+                    umami_website_id: document.getElementById('umami-website-id')?.value || '',
+                    plausible_src: document.getElementById('plausible-src')?.value || '',
+                    plausible_domain: document.getElementById('plausible-domain')?.value || '',
                 };
-                const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+                const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, credentials: 'include', body: JSON.stringify(body) });
                 if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }
                 else { this.showNotification('Save failed','error'); }
             };

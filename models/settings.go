@@ -31,6 +31,14 @@ type SiteSettings struct {
 	S3ForcePathStyle bool      `db:"s3_force_path_style" json:"s3_force_path_style"`
 	PublicBaseURL    string    `db:"public_base_url" json:"public_base_url"`
 	UpdatedAt        time.Time `db:"updated_at" json:"updated_at"`
+	// Analytics / tracking configuration
+	AnalyticsEnabled  bool   `db:"analytics_enabled" json:"analytics_enabled"`
+	AnalyticsProvider string `db:"analytics_provider" json:"analytics_provider"`
+	GA4MeasurementID  string `db:"ga4_measurement_id" json:"ga4_measurement_id"`
+	UmamiSrc          string `db:"umami_src" json:"umami_src"`
+	UmamiWebsiteID    string `db:"umami_website_id" json:"umami_website_id"`
+	PlausibleSrc      string `db:"plausible_src" json:"plausible_src"`
+	PlausibleDomain   string `db:"plausible_domain" json:"plausible_domain"`
 }
 
 type SiteSettingsRepository struct{ db *sqlx.DB }
@@ -62,12 +70,18 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
             id, site_name, site_url, seo_title, seo_description, social_image_url,
             smtp_host, smtp_port, smtp_username, smtp_password, smtp_from_email, smtp_tls,
             require_email_verification, public_registration_enabled, storage_provider, s3_endpoint, s3_bucket,
-            s3_access_key, s3_secret_key, s3_force_path_style, public_base_url, updated_at
+            s3_access_key, s3_secret_key, s3_force_path_style, public_base_url,
+            analytics_enabled, analytics_provider, ga4_measurement_id, umami_src, umami_website_id,
+            plausible_src, plausible_domain,
+            updated_at
         ) VALUES (
             1, $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10, $11,
             $12, $13, $14, $15, $16,
-            $17, $18, $19, $20, NOW()
+            $17, $18, $19, $20,
+            $21, $22, $23, $24, $25,
+            $26, $27,
+            NOW()
         )
         ON CONFLICT (id) DO UPDATE SET
             site_name = EXCLUDED.site_name,
@@ -90,12 +104,21 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
             s3_secret_key = EXCLUDED.s3_secret_key,
             s3_force_path_style = EXCLUDED.s3_force_path_style,
             public_base_url = EXCLUDED.public_base_url,
+            analytics_enabled = EXCLUDED.analytics_enabled,
+            analytics_provider = EXCLUDED.analytics_provider,
+            ga4_measurement_id = EXCLUDED.ga4_measurement_id,
+            umami_src = EXCLUDED.umami_src,
+            umami_website_id = EXCLUDED.umami_website_id,
+            plausible_src = EXCLUDED.plausible_src,
+            plausible_domain = EXCLUDED.plausible_domain,
             updated_at = NOW()
     `,
 		s.SiteName, s.SiteURL, s.SEOTitle, s.SEODescription, s.SocialImageURL,
 		s.SMTPHost, s.SMTPPort, s.SMTPUsername, s.SMTPPassword, s.SMTPFromEmail, s.SMTPTLS,
 		s.RequireEmailVerification, s.PublicRegistrationEnabled, s.StorageProvider, s.S3Endpoint, s.S3Bucket,
 		s.S3AccessKey, s.S3SecretKey, s.S3ForcePathStyle, s.PublicBaseURL,
+		s.AnalyticsEnabled, s.AnalyticsProvider, s.GA4MeasurementID, s.UmamiSrc, s.UmamiWebsiteID,
+		s.PlausibleSrc, s.PlausibleDomain,
 	)
 	return err
 }

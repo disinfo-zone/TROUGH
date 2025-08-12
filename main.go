@@ -65,6 +65,11 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 	// Precompile regexes once
 	titleRe := regexp.MustCompile(`(?is)<title>.*?</title>`)
 	descRe := regexp.MustCompile(`(?is)<meta\s+name=["']description["'][^>]*>`)
+	// Validation helpers
+	gaIDRe := regexp.MustCompile(`^G-[A-Z0-9]{6,}`)
+	uuidRe := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+	httpsJSRe := regexp.MustCompile(`^https://[A-Za-z0-9.-]+(?::\d{2,5})?/.+\.js(\?.*)?$`)
+	domainRe := regexp.MustCompile(`^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
 
 	// Cache base HTML to avoid disk reads on every request
 	var baseHTMLOnce sync.Once
@@ -200,7 +205,41 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 			ogTags.WriteString(`    <meta name="twitter:image:alt" content="` + html.EscapeString(title) + `">\n`)
 		}
 
-		insertion := ogTags.String()
+		// Build analytics snippet if configured and valid, and avoid tracking admins via cookie flag
+		var analytics strings.Builder
+		if set.AnalyticsEnabled && c.Cookies("trough_admin") != "1" {
+			switch strings.ToLower(strings.TrimSpace(set.AnalyticsProvider)) {
+			case "ga4":
+				mid := strings.ToUpper(strings.TrimSpace(set.GA4MeasurementID))
+				if gaIDRe.MatchString(mid) {
+					// Use standard GA4 snippet with IP anonymization
+					analytics.WriteString("\n    <!-- Analytics: Google Analytics 4 -->\n")
+					analytics.WriteString("    <script async src=\"https://www.googletagmanager.com/gtag/js?id=" + html.EscapeString(mid) + "\"></script>\n")
+					analytics.WriteString("    <script>\n")
+					analytics.WriteString("      window.dataLayer = window.dataLayer || [];\n")
+					analytics.WriteString("      function gtag(){dataLayer.push(arguments);}\n")
+					analytics.WriteString("      gtag('js', new Date());\n")
+					analytics.WriteString("      gtag('config', '" + html.EscapeString(mid) + "', { 'anonymize_ip': true });\n")
+					analytics.WriteString("    </script>\n")
+				}
+			case "umami":
+				src := strings.TrimSpace(set.UmamiSrc)
+				wid := strings.TrimSpace(set.UmamiWebsiteID)
+				if httpsJSRe.MatchString(src) && uuidRe.MatchString(wid) {
+					analytics.WriteString("\n    <!-- Analytics: Umami -->\n")
+					analytics.WriteString("    <script async src=\"" + html.EscapeString(src) + "\" data-website-id=\"" + html.EscapeString(strings.ToLower(wid)) + "\"></script>\n")
+				}
+			case "plausible":
+				src := strings.TrimSpace(set.PlausibleSrc)
+				dom := strings.TrimSpace(set.PlausibleDomain)
+				if httpsJSRe.MatchString(src) && domainRe.MatchString(dom) {
+					analytics.WriteString("\n    <!-- Analytics: Plausible -->\n")
+					analytics.WriteString("    <script defer data-domain=\"" + html.EscapeString(strings.ToLower(dom)) + "\" src=\"" + html.EscapeString(src) + "\"></script>\n")
+				}
+			}
+		}
+
+		insertion := ogTags.String() + analytics.String()
 		lower := strings.ToLower(htmlStr)
 		if idx := strings.Index(lower, "</head>"); idx != -1 {
 			htmlStr = htmlStr[:idx] + insertion + htmlStr[idx:]

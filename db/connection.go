@@ -122,6 +122,14 @@ func Migrate() error {
 			s3_secret_key TEXT DEFAULT '',
 			s3_force_path_style BOOLEAN DEFAULT TRUE,
 			public_base_url TEXT DEFAULT '',
+			-- analytics/tracking config
+			analytics_enabled BOOLEAN DEFAULT FALSE,
+			analytics_provider TEXT DEFAULT '', -- '', 'ga4', 'umami', 'plausible'
+			ga4_measurement_id TEXT DEFAULT '',
+			umami_src TEXT DEFAULT '',
+			umami_website_id TEXT DEFAULT '',
+			plausible_src TEXT DEFAULT '',
+			plausible_domain TEXT DEFAULT '',
 			updated_at TIMESTAMP DEFAULT NOW()
 		);
 
@@ -160,6 +168,15 @@ func Migrate() error {
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_secret_key TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS s3_force_path_style BOOLEAN DEFAULT TRUE;
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS public_base_url TEXT DEFAULT '';
+
+		-- Analytics columns (safe defaults)
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS analytics_enabled BOOLEAN DEFAULT FALSE;
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS analytics_provider TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS ga4_measurement_id TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS umami_src TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS umami_website_id TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS plausible_src TEXT DEFAULT '';
+		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS plausible_domain TEXT DEFAULT '';
 
 		-- Invitation codes for gated registration
 		CREATE TABLE IF NOT EXISTS invites (

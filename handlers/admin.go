@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,14 @@ import (
 	"github.com/yourusername/trough/middleware"
 	"github.com/yourusername/trough/models"
 	"github.com/yourusername/trough/services"
+)
+
+// Precompiled regex validators for analytics settings
+var (
+	gaIDRe    = regexp.MustCompile(`^G-[A-Z0-9]{6,}`)
+	uuidRe    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+	httpsJSRe = regexp.MustCompile(`^https://[A-Za-z0-9.-]+(?::\d{2,5})?/.+\.js(\?.*)?$`)
+	domainRe  = regexp.MustCompile(`^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
 )
 
 var checkAdmin = func(c *fiber.Ctx, repo models.UserRepositoryInterface) bool { return isAdmin(c, repo) }
@@ -213,6 +222,8 @@ func (h *AdminHandler) GetSiteSettings(c *fiber.Ctx) error {
 	if !checkAdmin(c, h.userRepo) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
+	// Mark admin session with a non-sensitive cookie to allow analytics suppression in SSR
+	c.Cookie(&fiber.Cookie{Name: "trough_admin", Value: "1", Path: "/", HTTPOnly: true, Secure: true, SameSite: "Lax"})
 	set, err := h.settingsRepo.Get()
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load settings"})
@@ -235,9 +246,52 @@ func (h *AdminHandler) UpdateSiteSettings(c *fiber.Ctx) error {
 	if !checkAdmin(c, h.userRepo) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
+	// Reinforce admin cookie on update
+	c.Cookie(&fiber.Cookie{Name: "trough_admin", Value: "1", Path: "/", HTTPOnly: true, Secure: true, SameSite: "Lax"})
 	var body models.SiteSettings
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
+	}
+	// Trim basic fields
+	body.SiteName = strings.TrimSpace(body.SiteName)
+	body.SiteURL = strings.TrimSpace(body.SiteURL)
+	body.SEOTitle = strings.TrimSpace(body.SEOTitle)
+	body.SEODescription = strings.TrimSpace(body.SEODescription)
+	body.SocialImageURL = strings.TrimSpace(body.SocialImageURL)
+
+	// Validate analytics config conservatively
+	provider := strings.ToLower(strings.TrimSpace(body.AnalyticsProvider))
+	if provider != "ga4" && provider != "umami" && provider != "plausible" {
+		provider = ""
+	}
+	body.AnalyticsProvider = provider
+	// If a provider is selected, validate its fields; otherwise allow enabled state to persist without error
+	switch body.AnalyticsProvider {
+	case "ga4":
+		body.GA4MeasurementID = strings.ToUpper(strings.TrimSpace(body.GA4MeasurementID))
+		if !gaIDRe.MatchString(body.GA4MeasurementID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid GA4 measurement ID"})
+		}
+		// Clear other providers to prevent stale injection when switching providers
+		body.UmamiSrc, body.UmamiWebsiteID, body.PlausibleSrc, body.PlausibleDomain = "", "", "", ""
+	case "umami":
+		body.UmamiSrc = strings.TrimSpace(body.UmamiSrc)
+		body.UmamiWebsiteID = strings.TrimSpace(body.UmamiWebsiteID)
+		if !httpsJSRe.MatchString(body.UmamiSrc) || !uuidRe.MatchString(body.UmamiWebsiteID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid Umami src or website id"})
+		}
+		body.GA4MeasurementID, body.PlausibleSrc, body.PlausibleDomain = "", "", ""
+	case "plausible":
+		body.PlausibleSrc = strings.TrimSpace(body.PlausibleSrc)
+		body.PlausibleDomain = strings.ToLower(strings.TrimSpace(body.PlausibleDomain))
+		if !httpsJSRe.MatchString(body.PlausibleSrc) || !domainRe.MatchString(body.PlausibleDomain) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid Plausible src or domain"})
+		}
+		body.GA4MeasurementID, body.UmamiSrc, body.UmamiWebsiteID = "", "", ""
+	default:
+		// No provider selected: keep enabled flag as-is, but ensure no injection will occur
+		// by keeping provider empty; do not erase any fields the admin may be editing.
+		// Nothing to do.
 	}
 	// If access/secret are masked or empty, preserve existing stored values
 	existing, _ := h.settingsRepo.Get()
@@ -253,8 +307,9 @@ func (h *AdminHandler) UpdateSiteSettings(c *fiber.Ctx) error {
 		}
 	}
 	body.UpdatedAt = time.Now()
-	log.Printf("Admin: updating site settings: provider=%s, s3_endpoint=%s, bucket=%s, public_base=%s, smtp_host=%s, smtp_port=%d, tls=%v",
-		strings.TrimSpace(body.StorageProvider), strings.TrimSpace(body.S3Endpoint), strings.TrimSpace(body.S3Bucket), strings.TrimSpace(body.PublicBaseURL), strings.TrimSpace(body.SMTPHost), body.SMTPPort, body.SMTPTLS)
+	log.Printf("Admin: updating site settings: provider=%s, s3_endpoint=%s, bucket=%s, public_base=%s, smtp_host=%s, smtp_port=%d, tls=%v, analytics=%v/%s",
+		strings.TrimSpace(body.StorageProvider), strings.TrimSpace(body.S3Endpoint), strings.TrimSpace(body.S3Bucket), strings.TrimSpace(body.PublicBaseURL), strings.TrimSpace(body.SMTPHost), body.SMTPPort, body.SMTPTLS,
+		body.AnalyticsEnabled, body.AnalyticsProvider)
 	if err := h.settingsRepo.Upsert(&body); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save settings"})
 	}
