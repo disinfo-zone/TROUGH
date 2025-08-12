@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"image"
-	"image/jpeg"
 	_ "image/png"
 	"io"
 	"os"
@@ -88,7 +87,20 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 	defer src.Close()
 
-	// Decode image for processing
+	// Quick dimension guard using DecodeConfig to avoid decompressing huge images
+	if _, err := src.Seek(0, 0); err == nil {
+		if cfg, _, err := image.DecodeConfig(src); err == nil {
+			maxDim := 20000 // hard safety guard against decompression bombs
+			maxPixels := 100 * 1024 * 1024
+			if cfg.Width > maxDim || cfg.Height > maxDim || (cfg.Width > 0 && cfg.Height > 0 && cfg.Width*cfg.Height > maxPixels) {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Image dimensions too large"})
+			}
+		}
+	}
+	// Decode image for processing (register webp in services/image.go init via blank import)
+	if _, err := src.Seek(0, 0); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploaded file"})
+	}
 	img, _, err := image.Decode(src)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to decode image"})
@@ -154,32 +166,58 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		}
 		filename = uuid.New().String() + originalExt
 	} else {
-		// Re-encode to JPEG, preserving XMP if present
-		xmp := xmpOriginal
-		if len(xmp) > 0 {
-			tempOut := filepath.Join("uploads", "tmp-out-"+uuid.New().String()+".jpg")
-			if err := services.WriteJPEGWithXMP(img, 90, tempOut, xmp); err != nil {
-				os.Remove(tmpPath)
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save image"})
-			}
-			b, err := os.ReadFile(tempOut)
+		// If the image has transparency, preserve the original bytes to keep alpha and any metadata intact.
+		// This avoids flattening artifacts and respects original authoring.
+		if !services.IsOpaque(img) {
+			b, err := os.ReadFile(tmpPath)
 			if err != nil {
-				os.Remove(tempOut)
 				os.Remove(tmpPath)
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read image"})
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploaded file"})
 			}
 			finalBytes = b
-			os.Remove(tempOut)
+			switch originalExt {
+			case ".png":
+				contentType = "image/png"
+			case ".webp":
+				contentType = "image/webp"
+			case ".jpg", ".jpeg":
+				contentType = "image/jpeg"
+			default:
+				contentType = "image/png"
+			}
+			if originalExt == "" {
+				originalExt = ".png"
+			}
+			filename = uuid.New().String() + originalExt
 		} else {
-			var buf bytes.Buffer
-			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+			// Opaque images: optionally resize (disabled by default via config), adaptive quality, and inject EXIF/XMP.
+			resized := img
+			if h.config.Aesthetic.MaxWidth > 0 {
+				resized = services.ResizeIfNeeded(img, h.config.Aesthetic.MaxWidth)
+			}
+			// Ensure DB width/height reflect the stored master
+			rb := resized.Bounds()
+			imageMeta.Width = rb.Dx()
+			imageMeta.Height = rb.Dy()
+			// Complexity score to choose quality bucket
+			complexity := services.EstimateComplexity(resized)
+			quality := 82
+			if complexity < 0.5 {
+				quality = 78
+			} else if complexity > 1.5 {
+				quality = 86
+			}
+			// Extract raw EXIF to reattach if available
+			exifRaw := services.ExtractExifRaw(tmpPath)
+			out, err := services.EncodeJPEGWithMetadata(resized, quality, xmpOriginal, exifRaw)
+			if err != nil {
 				os.Remove(tmpPath)
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to encode image"})
 			}
-			finalBytes = buf.Bytes()
+			finalBytes = out
+			filename = uuid.New().String() + ".jpg"
+			contentType = "image/jpeg"
 		}
-		filename = uuid.New().String() + ".jpg"
-		contentType = "image/jpeg"
 	}
 	// Save to storage (local or remote) under top-level key = filename
 	st := services.GetCurrentStorage()
@@ -238,7 +276,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 
 	originalName := file.Filename
-	fileSize := int(file.Size)
+	fileSize := len(finalBytes)
 
 	imageModel := &models.Image{
 		UserID:        userID,

@@ -57,7 +57,10 @@ func (s *s3Storage) Save(ctx context.Context, key string, r io.Reader, contentTy
 	if br, ok := r.(*bytes.Reader); ok {
 		size = int64(br.Len())
 	}
-	_, err := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType})
+	_, err := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
+		ContentType:  contentType,
+		CacheControl: "public, max-age=31536000, immutable",
+	})
 	if err != nil {
 		return "", err
 	}

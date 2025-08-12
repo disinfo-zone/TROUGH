@@ -62,3 +62,14 @@ func ExtractExifJSON(imagePath string) json.RawMessage {
 	}
 	return json.RawMessage(b)
 }
+
+// ExtractExifRaw returns the raw TIFF EXIF payload if present, or nil if not found.
+// The returned bytes are suitable to be placed after the "Exif\x00\x00" header
+// inside a JPEG APP1 segment.
+func ExtractExifRaw(imagePath string) []byte {
+	rawExif, err := exif.SearchFileAndExtractExif(imagePath)
+	if err != nil || len(rawExif) == 0 {
+		return nil
+	}
+	return rawExif
+}
