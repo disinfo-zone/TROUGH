@@ -267,18 +267,41 @@ input, button {
     column-fill: balance;
 }
 
+/* Managed masonry mode: explicit columns for better lazy-loading behavior on desktop */
+.gallery.masonry-managed {
+    /* disable CSS multi-column behavior */
+    columns: initial;
+    column-gap: 0;
+    /* use grid to host explicit column containers */
+    display: grid;
+    grid-template-columns: repeat(var(--masonry-cols, 4), 1fr);
+    gap: var(--space-xl);
+}
+.gallery.masonry-managed .masonry-col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xl);
+    min-width: 0;
+}
+/* Full-width utility blocks inside managed grid */
+.gallery.masonry-managed .mono-col { grid-column: 1 / -1; }
+/* avoid double vertical spacing inside managed columns */
+.gallery.masonry-managed .image-card { margin-bottom: 0; }
+
 @media (max-width: 1400px) {
     .gallery {
         columns: 3;
         padding-left: var(--space-lg);
         padding-right: var(--space-lg);
     }
+    .gallery.masonry-managed { --masonry-cols: 3; }
 }
 
 @media (max-width: 900px) {
     .gallery {
         columns: 2;
     }
+    .gallery.masonry-managed { --masonry-cols: 2; }
 }
 
 @media (max-width: 600px) {
@@ -287,10 +310,13 @@ input, button {
         padding-left: var(--space-md);
         padding-right: var(--space-md);
     }
+    .gallery.masonry-managed { --masonry-cols: 1; }
 }
 
 /* Settings page: single centered column (override gallery columns) */
 .gallery.settings-mode { columns: 1; max-width: 720px; margin: 0 auto; column-gap: 0; padding: 0 var(--space-lg) var(--space-3xl); }
+/* Ensure managed masonry does not interfere with settings mode */
+.gallery.settings-mode.masonry-managed { display: block; grid-template-columns: none; gap: 0; }
 @media (max-width: 768px) { .gallery.settings-mode { padding-left: var(--space-md); padding-right: var(--space-md); } }
 @media (max-width: 480px) { .gallery.settings-mode { padding-left: var(--space-sm); padding-right: var(--space-sm); } }
 

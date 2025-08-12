@@ -11,6 +11,17 @@ class TroughApp {
         this.lazyQueue = [];
         this.currentImageLoads = 0;
         this.maxConcurrentImageLoads = 4; // cap concurrent downloads to reduce server stress
+        // Managed masonry layout state
+        this.masonry = {
+            enabled: false,
+            columnCount: 0,
+            columns: [],
+            nextColumnIndex: 0,
+            appendedCount: 0,
+            estimatedHeights: [],
+            columnWidth: 0,
+            rowHeightHint: 0,
+        };
         // (legacy magnetic scroll state removed)
         this._lastScrollSaveTs = 0;
         this.isRestoring = false;
@@ -168,6 +179,7 @@ class TroughApp {
         // Not a profile/settings page, clear profileTop
         if (this.profileTop) this.profileTop.innerHTML = '';
         this.beginRender('home');
+        this.enableManagedMasonry();
         await this.loadImages();
         this.setupInfiniteScroll();
         // Ensure logo data-text mirrors current text for blend-mode rendering
@@ -186,8 +198,9 @@ class TroughApp {
         try {
             const path = pathnameOverride || location.pathname;
             const key = `trough:list:${path}`;
-            // Find first fully visible image card index for better restoration anchor
+            // Find first fully visible image card for restoration anchor (prefer id)
             let firstVisibleIndex = 0;
+            let firstVisibleId = null;
             try {
                 const cards = Array.from(document.querySelectorAll('.image-card'));
                 const viewportTop = window.scrollY;
@@ -199,6 +212,8 @@ class TroughApp {
                     const visible = Math.max(0, Math.min(bottom, viewportBottom) - Math.max(top, viewportTop));
                     if (visible >= Math.min(r.height, window.innerHeight) * 0.75) { firstVisibleIndex = i; break; }
                 }
+                const anchor = cards[firstVisibleIndex];
+                if (anchor && anchor.dataset && anchor.dataset.imageId) firstVisibleId = anchor.dataset.imageId;
             } catch {}
             const state = {
                 path,
@@ -206,6 +221,7 @@ class TroughApp {
                 hasMore: this.hasMore,
                 scrollY: typeof window !== 'undefined' ? window.scrollY : 0,
                 firstVisibleIndex,
+                firstVisibleId,
                 savedAt: Date.now(),
             };
             console.log('[TROUGH] Persisting list state:', { key, state });
@@ -256,17 +272,19 @@ class TroughApp {
                 await this.loadImages();
             }
             this.isRestoring = false;
-            // Prefer anchoring by firstVisibleIndex if available; fallback to scrollY
-            if (Number.isFinite(state.firstVisibleIndex) && state.firstVisibleIndex > 0) {
+            // Prefer anchoring by id, then index; fallback to scrollY
+            let targetCard = null;
+            if (state.firstVisibleId) {
+                targetCard = document.querySelector(`.image-card[data-image-id="${CSS.escape(String(state.firstVisibleId))}"]`);
+            }
+            if (!targetCard && Number.isFinite(state.firstVisibleIndex) && state.firstVisibleIndex > 0) {
                 const cards = Array.from(document.querySelectorAll('.image-card'));
-                const targetCard = cards[state.firstVisibleIndex];
-                if (targetCard) {
-                    const rect = targetCard.getBoundingClientRect();
-                    const y = rect.top + window.scrollY - (document.getElementById('nav')?.offsetHeight || 0) - 8;
-                    try { window.scrollTo(0, Math.max(0, y)); } catch {}
-                } else if (typeof state.scrollY === 'number') {
-                    try { window.scrollTo(0, state.scrollY); } catch {}
-                }
+                targetCard = cards[state.firstVisibleIndex] || null;
+            }
+            if (targetCard) {
+                const rect = targetCard.getBoundingClientRect();
+                const y = rect.top + window.scrollY - (document.getElementById('nav')?.offsetHeight || 0) - 8;
+                try { window.scrollTo(0, Math.max(0, y)); } catch {}
             } else if (typeof state.scrollY === 'number') {
                 try { window.scrollTo(0, state.scrollY); } catch {}
             }
@@ -323,6 +341,12 @@ class TroughApp {
                 this.gallery.classList.add('settings-mode');
             } else {
                 this.gallery.classList.remove('settings-mode');
+            // Ensure managed masonry on list-like pages
+            if (this.routeMode === 'home' || this.routeMode === 'profile') {
+                this.enableManagedMasonry();
+            } else {
+                this.disableManagedMasonry();
+            }
             }
         };
     }
@@ -343,6 +367,8 @@ class TroughApp {
             try { if (this.imageObserver) this.imageObserver.disconnect(); } catch {}
             this.lazyQueue = [];
             this.currentImageLoads = 0;
+            // Reset managed masonry layout
+            this.disableManagedMasonry();
             // Stop any in-flight scroll animations
             if (this._activeScrollAnim) { this._activeScrollAnim.cancelled = true; this._activeScrollAnim = null; }
         } catch {}
@@ -393,15 +419,27 @@ class TroughApp {
             return;
         }
         
-        // Also prioritize the first few images regardless of position (for fast initial paint)
-        const cardIndex = Array.from(this.gallery.children).indexOf(host);
-        if (cardIndex < 4) {
+        // Also prioritize the first row regardless of position (for fast initial paint)
+        // Use seqIndex when available; fallback to DOM index otherwise
+        let visualIndex = Number.isFinite(Number(host?.dataset?.seqIndex)) ? Number(host.dataset.seqIndex) : -1;
+        if (visualIndex < 0) {
+            if (this.masonry && this.masonry.enabled && this.masonry.columns?.length) {
+                const all = [];
+                for (const col of this.masonry.columns) all.push(...Array.from(col.children));
+                visualIndex = all.indexOf(host);
+            } else {
+                visualIndex = Array.from(this.gallery.children).indexOf(host);
+            }
+        }
+        const eagerThreshold = (this.masonry && this.masonry.enabled && this.masonry.columnCount) ? this.masonry.columnCount : 4;
+        if (visualIndex > -1 && visualIndex < eagerThreshold) {
             this.loadImageNow(img, { eager: true, highPriority: true });
             return;
         }
 
         // Load images just below the fold (buffer zone) with normal priority
-        if (rect.top < viewportH + 600) {
+        const buffer = this.computeLazyBuffer();
+        if (rect.top < viewportH + buffer) {
             this.enqueueImageLoad(img, /*preferFront*/ true);
             return;
         }
@@ -417,7 +455,8 @@ class TroughApp {
             const r = h.getBoundingClientRect();
             const vh = window.innerHeight || document.documentElement.clientHeight;
             // If now in buffer zone, add to queue
-            if (r.top < vh + 900) {
+            const buf = this.computeLazyBuffer();
+            if (r.top < vh + buf) {
                 this.enqueueImageLoad(img, true);
             }
         });
@@ -640,6 +679,7 @@ class TroughApp {
                 const u = decodeURIComponent(href.slice(2));
                 // Explicit navigation to profile should be fresh (no restore)
                 await this.renderProfilePage(u);
+                this.enableManagedMasonry();
                 window.scrollTo(0, 0);
             } else if (href === '/settings') {
                 await this.renderSettingsPage();
@@ -653,6 +693,7 @@ class TroughApp {
                 this.page = 1; this.hasMore = true;
                 window.scrollTo(0, 0);
                 this.beginRender('home');
+                this.enableManagedMasonry();
                 await this.loadImages();
                 this.setupInfiniteScroll();
             }
@@ -1001,6 +1042,8 @@ class TroughApp {
         this.gallery.classList.remove('settings-mode');
         if (this.profileTop) this.profileTop.innerHTML = '';
         this.gallery.innerHTML = '';
+        // Enable managed masonry after clearing content
+        this.enableManagedMasonry();
         // Ensure we start at page 1 for profile images when rendering fresh
         this.page = 1;
         this.hasMore = true;
@@ -1237,7 +1280,8 @@ class TroughApp {
             (imgs.images || []).forEach((img) => this.createImageCard(img));
         } else {
             (imgs.images || []).forEach((img, index) => {
-                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, index * 80));
+                const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
+                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
             });
         }
     }
@@ -1293,20 +1337,22 @@ class TroughApp {
             demoImages.forEach((image) => this.createImageCard(image));
         } else {
             demoImages.forEach((image, index) => {
-                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(image); }, index * 120));
+                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(image); }, index * 80));
             });
         }
     }
 
     renderImages(images) {
         const epoch = this.renderEpoch;
-        if (this.isRestoring) {
-            images.forEach((img) => this.createImageCard(img));
-        } else {
-            images.forEach((img, index) => {
-                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, index * 80));
-            });
-        }
+        // When managed masonry is enabled, we still stagger a bit but avoid long delays
+        images.forEach((img, index) => {
+            const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
+            if (this.isRestoring) {
+                this.createImageCard(img);
+            } else {
+                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
+            }
+        });
     }
 
     createImageCard(image) {
@@ -1364,7 +1410,7 @@ class TroughApp {
                         <div class="image-title">Content Hidden</div>
                         <div class="image-author">NSFW content filtered</div>
                     </div>`;
-                this.gallery.appendChild(card);
+                this.appendCardToMasonry(card);
                 return; 
             }
             if (shouldBlur) {
@@ -1495,7 +1541,7 @@ class TroughApp {
             // Open lightbox (happens for all clicks)
             this.openLightbox(image);
         });
-        this.gallery.appendChild(card);
+        this.appendCardToMasonry(card);
         
         // Register any real image with the lazy loader after it is in the DOM
         if (img && img.dataset && img.dataset.src) {
@@ -1934,6 +1980,136 @@ class TroughApp {
         const onScroll = handleScroll;
         window.addEventListener('scroll', onScroll, { passive: true });
         this._infiniteScrollCleanup = () => window.removeEventListener('scroll', onScroll, { passive: true });
+    }
+
+    // Managed masonry: explicit column containers for efficient initial load
+    enableManagedMasonry() {
+        const g = this.gallery;
+        if (!g) return;
+        // On mobile, keep single column and native flow
+        const mobile = window.innerWidth <= 600;
+        if (mobile) { this.disableManagedMasonry(); return; }
+        // Compute column count based on viewport
+        let cols = 4;
+        if (window.innerWidth <= 1400) cols = 3;
+        if (window.innerWidth <= 900) cols = 2;
+        if (window.innerWidth <= 600) cols = 1;
+        // If already enabled and column count unchanged, do nothing
+        if (this.masonry.enabled && this.masonry.columnCount === cols && g.classList.contains('masonry-managed')) {
+            return;
+        }
+        // Collect existing cards regardless of current structure
+        const existingCards = Array.from(g.querySelectorAll('.image-card'));
+        g.classList.add('masonry-managed');
+        g.style.setProperty('--masonry-cols', String(cols));
+        // Initialize masonry state
+        this.masonry = { enabled: true, columnCount: cols, columns: [], nextColumnIndex: 0, appendedCount: 0 };
+        // Rebuild columns
+        const fragment = document.createDocumentFragment();
+        for (let i = 0; i < cols; i++) {
+            const col = document.createElement('div');
+            col.className = 'masonry-col';
+            fragment.appendChild(col);
+            this.masonry.columns.push(col);
+        }
+        g.innerHTML = '';
+        g.appendChild(fragment);
+        // Re-append any existing cards using smart placement
+        existingCards.forEach((card) => {
+            this.placeCardSmart(card);
+        });
+        // Reset nextColumnIndex to the next column after a full first row fill
+        this.masonry.nextColumnIndex = this.masonry.appendedCount % this.masonry.columnCount;
+        // Handle resize to adjust columns (debounced)
+        if (this._masonryResizeHandler) window.removeEventListener('resize', this._masonryResizeHandler);
+        this._masonryResizeHandler = () => {
+            if (this._masonryResizeTimer) { clearTimeout(this._masonryResizeTimer); this._masonryResizeTimer = null; }
+            this._masonryResizeTimer = setTimeout(() => {
+                const prevCols = this.masonry.columnCount;
+                let newCols = 4;
+                if (window.innerWidth <= 1400) newCols = 3;
+                if (window.innerWidth <= 900) newCols = 2;
+                if (window.innerWidth <= 600) newCols = 1;
+                if (newCols !== prevCols) {
+                    this.enableManagedMasonry();
+                }
+            }, 120);
+        };
+        window.addEventListener('resize', this._masonryResizeHandler);
+    }
+
+    disableManagedMasonry() {
+        const g = this.gallery;
+        if (!g) return;
+        if (!this.masonry?.enabled) return;
+        // Move children cards back to gallery root in visual order
+        const cards = [];
+        for (const col of this.masonry.columns || []) {
+            cards.push(...Array.from(col.children));
+        }
+        g.classList.remove('masonry-managed');
+        if (this._masonryResizeHandler) { window.removeEventListener('resize', this._masonryResizeHandler); this._masonryResizeHandler = null; }
+        g.innerHTML = '';
+        for (const c of cards) g.appendChild(c);
+        this.masonry = { enabled: false, columnCount: 0, columns: [], nextColumnIndex: 0, appendedCount: 0 };
+    }
+
+    appendCardToMasonry(card) {
+        if (this.masonry && this.masonry.enabled && this.masonry.columns?.length > 0) {
+            this.placeCardSmart(card);
+            // Update row-height hint from the first row for smarter buffer sizing
+            if (this.masonry.appendedCount <= this.masonry.columnCount) {
+                const cr = card.getBoundingClientRect();
+                if (cr && cr.height && Number.isFinite(cr.height)) {
+                    this.masonry.rowHeightHint = Math.max(this.masonry.rowHeightHint || 0, cr.height);
+                }
+            }
+        } else {
+            this.gallery.appendChild(card);
+        }
+    }
+
+    // Place first row round-robin, then append to shortest column for balance
+    placeCardSmart(card) {
+        // Assign sequential index for cheap eager check
+        if (this.masonry.appendedCount == null) this.masonry.appendedCount = 0;
+        const seq = this.masonry.appendedCount;
+        try { card.dataset.seqIndex = String(seq); } catch {}
+        this.masonry.appendedCount++;
+        // First row: one per column left->right
+        if (seq < this.masonry.columnCount) {
+            const idx = this.masonry.nextColumnIndex % this.masonry.columnCount;
+            this.masonry.columns[idx].appendChild(card);
+            this.masonry.nextColumnIndex = (idx + 1) % this.masonry.columnCount;
+            return;
+        }
+        // After first row: choose the shortest column (tie-breaker: round-robin)
+        let minIdx = 0;
+        let minH = Number.POSITIVE_INFINITY;
+        let maxH = 0;
+        for (let i = 0; i < this.masonry.columns.length; i++) {
+            const h = this.masonry.columns[i].offsetHeight || 0;
+            if (h < minH) { minH = h; minIdx = i; }
+            if (h > maxH) { maxH = h; }
+        }
+        const nearlyEqual = (maxH - minH) <= 2; // px tolerance when images not yet loaded
+        if (nearlyEqual) {
+            const idx = this.masonry.nextColumnIndex % this.masonry.columnCount;
+            this.masonry.columns[idx].appendChild(card);
+            this.masonry.nextColumnIndex = (idx + 1) % this.masonry.columnCount;
+        } else {
+            this.masonry.columns[minIdx].appendChild(card);
+        }
+    }
+
+    // Compute lazy buffer height: aim for ~two rows in managed mode, otherwise fallback
+    computeLazyBuffer() {
+        if (this.masonry && this.masonry.enabled) {
+            const rowH = this.masonry.rowHeightHint || 400;
+            // Two rows plus some breathing room
+            return Math.min(1600, Math.max(600, Math.round(rowH * 2.25)));
+        }
+        return 600;
     }
 
     // (legacy mobile magnetic snap system removed)
