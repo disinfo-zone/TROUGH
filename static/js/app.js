@@ -800,6 +800,18 @@ class TroughApp {
         const confirm = document.getElementById('register-password-confirm').value;
         const invite = this._pendingInvite || new URL(location.href).searchParams.get('invite') || '';
 
+        // Client-side reserved usernames (mirrors server policy) to provide instant feedback
+        const RESERVED = new Set([
+            'admin','administrator','adminteam','admins','root','system','sysadmin','superadmin','superuser',
+            'support','help','helpdesk','moderator','mod','mods','staff','team','security','official',
+            'noreply','no-reply','postmaster','abuse','report','reports','owner','undefined','null'
+        ]);
+        if (RESERVED.has(username.toLowerCase())) {
+            this.showAuthError('Username unavailable');
+            this.showNotification('Username unavailable', 'error');
+            return;
+        }
+
         if (!username || !email || !password || !confirm) {
             this.showAuthError('Please fill in all fields');
             return;
@@ -829,6 +841,17 @@ class TroughApp {
         this.showLoader();
         this.hideAuthError();
 
+        // Preflight: if username already exists, short-circuit with friendly error
+        try {
+            const existsResp = await fetch(`/api/users/${encodeURIComponent(username)}`);
+            if (existsResp && existsResp.ok) {
+                this.hideLoader();
+                this.showAuthError('Username unavailable');
+                this.showNotification('Username unavailable', 'error');
+                return;
+            }
+        } catch {}
+
         try {
             const response = await fetch('/api/register' + (invite ? ('?invite=' + encodeURIComponent(invite)) : ''), {
                 method: 'POST',
@@ -856,7 +879,21 @@ class TroughApp {
                     await this.renderProfilePage(data.user.username);
                 } catch {}
             } else {
-                this.showAuthError(data.error || 'Registration failed');
+                const err = (data && typeof data.error === 'string') ? data.error : '';
+                if (response.status === 409) {
+                    if (/email/i.test(err)) {
+                        this.showAuthError('Email already registered');
+                        this.showNotification('Email already registered', 'error');
+                    } else {
+                        this.showAuthError('Username unavailable');
+                        this.showNotification('Username unavailable', 'error');
+                    }
+                } else if (response.status === 400 && /\busername\b/i.test(err) && /(reserved|taken|unavailable)/i.test(err)) {
+                    this.showAuthError('Username unavailable');
+                    this.showNotification('Username unavailable', 'error');
+                } else {
+                    this.showAuthError(err || 'Registration failed');
+                }
             }
         } catch (error) {
             console.error('Registration error:', error);
@@ -1028,11 +1065,50 @@ class TroughApp {
             }
             this._profileResizeHandler = () => applyLayout();
             window.addEventListener('resize', this._profileResizeHandler);
-            const openPanel = () => { if (panel) panel.style.display = 'block'; };
-            const closePanel = () => { if (panel) panel.style.display = 'none'; };
+            // Render the menu as a fixed-position overlay anchored to the toggle so it appears above all content
+            let panelOpen = false;
+            let cleanupFns = [];
+            const originalParent = menuWrap;
+            const positionPanel = () => {
+                const rect = toggle.getBoundingClientRect();
+                panel.style.position = 'fixed';
+                panel.style.minWidth = '180px';
+                panel.style.top = `${Math.round(rect.bottom + 8)}px`;
+                panel.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
+                panel.style.left = 'auto';
+                panel.style.zIndex = '5000';
+                panel.style.display = 'block';
+            };
+            const openPanel = () => {
+                if (panelOpen) return;
+                panelOpen = true;
+                // Move to body to escape any stacking/overflow contexts
+                document.body.appendChild(panel);
+                positionPanel();
+                const onDocClick = (ev) => { if (!panel.contains(ev.target) && ev.target !== toggle) closePanel(); };
+                const onKey = (ev) => { if (ev.key === 'Escape') closePanel(); };
+                const onScroll = () => positionPanel();
+                const onResize = () => positionPanel();
+                document.addEventListener('click', onDocClick, true);
+                document.addEventListener('keydown', onKey);
+                window.addEventListener('scroll', onScroll, true);
+                window.addEventListener('resize', onResize);
+                cleanupFns.push(() => document.removeEventListener('click', onDocClick, true));
+                cleanupFns.push(() => document.removeEventListener('keydown', onKey));
+                cleanupFns.push(() => window.removeEventListener('scroll', onScroll, true));
+                cleanupFns.push(() => window.removeEventListener('resize', onResize));
+            };
+            const closePanel = () => {
+                if (!panelOpen) return;
+                panelOpen = false;
+                try { originalParent.appendChild(panel); } catch {}
+                panel.style.display = 'none';
+                // run and clear listeners
+                cleanupFns.forEach(fn => { try { fn(); } catch {} });
+                cleanupFns = [];
+            };
             if (toggle && panel) {
-                toggle.onclick = (e) => { e.stopPropagation(); panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; };
-                document.addEventListener('click', (e) => { if (!panel.contains(e.target) && e.target !== toggle) closePanel(); });
+                toggle.onclick = (e) => { e.stopPropagation(); if (panelOpen) closePanel(); else openPanel(); };
             }
             const mSettings = document.getElementById('menu-settings'); if (mSettings) mSettings.onclick = () => { closePanel(); try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
             const mAdmin = document.getElementById('menu-admin'); if (mAdmin) mAdmin.onclick = () => { closePanel(); try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/admin'); this.renderAdminPage(); };
@@ -1542,7 +1618,10 @@ class TroughApp {
               <div style="display:grid;gap:10px;flex:1;min-width:0;overflow:hidden">
                 <label class="settings-label">Username</label>
                 <input type="text" id="settings-username" value="${this.escapeHTML(String(this.currentUser.username))}" minlength="3" maxlength="30" pattern="[a-z0-9]+" title="3–30 lowercase letters or numbers" class="settings-input"/>
-                <div class="settings-actions"><button id="btn-username" class="nav-btn">Change Username</button></div>
+                <div class="settings-actions" style="gap:8px;align-items:center">
+                  <button id="btn-username" class="nav-btn">Change Username</button>
+                  <small id="err-username" style="color:#ff5c5c"></small>
+                </div>
                 <label class="settings-label">Avatar</label>
                 <div class="settings-actions" style="gap:8px;align-items:center;min-width:0"><input type="file" id="avatar-file" accept="image/*" style="min-width:0"/><button id="avatar-upload" class="nav-btn">Upload</button></div>
                 <label class="settings-label">Email</label>
@@ -1619,8 +1698,46 @@ class TroughApp {
             try { const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ nsfw_pref: sel }) }); if (!resp.ok) throw await resp.json(); const u = await resp.json(); this.currentUser = u; localStorage.setItem('user', JSON.stringify(u)); this.showNotification('NSFW preference saved'); } catch (e) { document.getElementById('err-nsfw').textContent = e.error || 'Failed'; }
         };
         document.getElementById('btn-username').onclick = async () => {
-            const username = document.getElementById('settings-username').value.trim();
-            try { const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ username }) }); if (!resp.ok) throw await resp.json(); const userResp = await resp.json(); this.currentUser=userResp; localStorage.setItem('user', JSON.stringify(userResp)); this.updateAuthButton(); this.showNotification('Username changed'); } catch (e) { document.getElementById('err-username').textContent = e.error || 'Failed'; }
+            const inputEl = document.getElementById('settings-username');
+            const errEl = document.getElementById('err-username');
+            errEl.textContent = '';
+            const raw = (inputEl.value || '').trim();
+            const username = raw.toLowerCase();
+            const current = (this.currentUser?.username || '').toLowerCase();
+            // Reserved list (mirror server)
+            const RESERVED = new Set([
+                'admin','administrator','adminteam','admins','root','system','sysadmin','superadmin','superuser',
+                'support','help','helpdesk','moderator','mod','mods','staff','team','security','official',
+                'noreply','no-reply','postmaster','abuse','report','reports','owner','undefined','null'
+            ]);
+            if (!username) { errEl.textContent = 'Enter a username'; return; }
+            if (RESERVED.has(username)) { errEl.textContent = 'Username unavailable'; this.showNotification('Username unavailable', 'error'); return; }
+            if (username === current) { errEl.textContent = 'This is already your username'; return; }
+            // Preflight existence check to provide immediate feedback
+            try {
+                const r = await fetch(`/api/users/${encodeURIComponent(username)}`);
+                if (r && r.ok) { errEl.textContent = 'Username unavailable'; this.showNotification('Username unavailable', 'error'); return; }
+            } catch {}
+            try {
+                const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ username }) });
+                if (!resp.ok) {
+                    let data = {};
+                    try { data = await resp.json(); } catch {}
+                    const msg = (data && data.error) ? String(data.error) : '';
+                    if (resp.status === 409 || (/\busername\b/i.test(msg) && /(taken|reserved|unavailable)/i.test(msg))) {
+                        errEl.textContent = 'Username unavailable';
+                        this.showNotification('Username unavailable', 'error');
+                        return;
+                    }
+                    errEl.textContent = msg || 'Failed';
+                    return;
+                }
+                const userResp = await resp.json();
+                this.currentUser=userResp;
+                localStorage.setItem('user', JSON.stringify(userResp));
+                this.updateAuthButton();
+                this.showNotification('Username changed');
+            } catch (e) { errEl.textContent = e.error || 'Failed'; }
         };
         document.getElementById('btn-email').onclick = async () => {
             const v = document.getElementById('settings-email').value.trim();
