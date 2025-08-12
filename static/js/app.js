@@ -11,23 +11,7 @@ class TroughApp {
         this.lazyQueue = [];
         this.currentImageLoads = 0;
         this.maxConcurrentImageLoads = 4; // cap concurrent downloads to reduce server stress
-        // Mobile magnetic scroll state
-        this.magneticEnabled = false;
-        this.magneticListenersAttached = false;
-        this.magnetOffset = 10; // px distance from viewport top (updated dynamically)
-        this.magnetSkipNextSnap = false;
-        this.magnetMaxVelocity = 0;
-        this.magnetVelocityThreshold = 1.2; // px/ms ~1200px/s counts as a fast flick
-        this._magnetSnapTimer = null;
-        this._lastTouchY = 0;
-        this._lastTouchTime = 0;
-        this._activeScrollAnim = null;
-        this._lastScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
-        this._magnetDirection = 1; // 1 = down, -1 = up
-        this._epsilonBackward = 24; // px allowed to snap slightly backwards
-        this._topGuardPx = 16; // legacy; no hard first-image forcing now
-        this._lastSnapY = -1;
-        this._lastSnapEl = null;
+        // (legacy magnetic scroll state removed)
         this._lastScrollSaveTs = 0;
         this.isRestoring = false;
         // Rendering control to avoid stale inserts across route changes
@@ -53,6 +37,16 @@ class TroughApp {
                 this.gallery.parentNode.insertBefore(this.profileTop, this.gallery);
             }
         }
+
+        // Initialize drift-based MagneticScroll once for the whole app lifecycle
+        this.magneticScroll = new MagneticScroll({
+            minCardIndex: 0,
+            attractionStrength: 0.012,
+            damping: 0.94,
+            maxDriftSpeed: 0.6,
+            settleDelay: 100,
+            effectiveRange: 250,
+        });
 
         const cachedUser = localStorage.getItem('user');
         if (cachedUser) {
@@ -181,15 +175,7 @@ class TroughApp {
         if (logo && !logo.getAttribute('data-text')) {
             logo.setAttribute('data-text', logo.textContent || '');
         }
-        // Initialize new drift-based MagneticScroll
-        this.magneticScroll = new MagneticScroll({
-            minCardIndex: 2,
-            attractionStrength: 0.012,
-            damping: 0.94,
-            maxDriftSpeed: 0.6,
-            settleDelay: 200,
-            effectiveRange: 250,
-        });
+        // Ensure MagneticScroll is enabled for the home feed
         if (this.magneticScroll && this.magneticScroll.updateEnabledState) {
             this.magneticScroll.updateEnabledState();
         }
@@ -1018,6 +1004,11 @@ class TroughApp {
         // Ensure we start at page 1 for profile images when rendering fresh
         this.page = 1;
         this.hasMore = true;
+
+        // Ensure MagneticScroll is enabled for profile pages
+        if (this.magneticScroll && this.magneticScroll.updateEnabledState) {
+            this.magneticScroll.updateEnabledState();
+        }
 
         let user = null; let imgs = { images: [] };
         try {
@@ -1941,204 +1932,7 @@ class TroughApp {
         this._infiniteScrollCleanup = () => window.removeEventListener('scroll', onScroll, { passive: true });
     }
 
-    // MOBILE-ONLY: Magnetic kinetic scroll that snaps to each image card on low-velocity stops
-    setupMobileMagneticScroll() {
-        this._evaluateMagnetEnabled();
-        this._computeMagnetOffset();
-
-        if (!this.magneticListenersAttached) {
-            this.magneticListenersAttached = true;
-            // Track touch velocity
-            window.addEventListener('touchstart', (e) => {
-                this._evaluateMagnetEnabled();
-                if (!this.magneticEnabled) return;
-                const t = e.touches && e.touches[0];
-                if (!t) return;
-                this._lastTouchY = t.clientY;
-                this._lastTouchTime = performance.now();
-                this.magnetMaxVelocity = 0;
-            }, { passive: true });
-            window.addEventListener('touchmove', (e) => {
-                this._evaluateMagnetEnabled();
-                if (!this.magneticEnabled) return;
-                const t = e.touches && e.touches[0];
-                if (!t) return;
-                const now = performance.now();
-                const dy = t.clientY - this._lastTouchY;
-                const dt = now - this._lastTouchTime;
-                if (dt > 0) {
-                    const v = Math.abs(dy / dt); // px/ms
-                    if (v > this.magnetMaxVelocity) this.magnetMaxVelocity = v;
-                }
-                this._lastTouchY = t.clientY;
-                this._lastTouchTime = now;
-            }, { passive: true });
-            window.addEventListener('touchend', () => {
-                this._evaluateMagnetEnabled();
-                if (!this.magneticEnabled) return;
-                // Fast flick? Skip the next snap
-                if (this.magnetMaxVelocity >= this.magnetVelocityThreshold) {
-                    this.magnetSkipNextSnap = true;
-                } else {
-                    // Snap very soon after release for quicker response, but give inertia a tick
-                    setTimeout(() => { if (!this._activeScrollAnim) this._snapToNearestCard(); }, 20);
-                }
-            }, { passive: true });
-
-            // Debounced snap after scrolling idles
-            window.addEventListener('scroll', () => {
-                this._evaluateMagnetEnabled();
-                if (!this.magneticEnabled) return;
-                // Track direction by scroll delta
-                const y = window.scrollY;
-                const dy = y - this._lastScrollY;
-                if (Math.abs(dy) > 0.5) this._magnetDirection = dy > 0 ? 1 : -1;
-                this._lastScrollY = y;
-                this._scheduleMagnetSnap();
-            }, { passive: true });
-
-            // Re-evaluate on resize/orientation
-            window.addEventListener('resize', () => { this._evaluateMagnetEnabled(); this._computeMagnetOffset(); });
-            window.addEventListener('orientationchange', () => { this._evaluateMagnetEnabled(); this._computeMagnetOffset(); });
-        }
-    }
-
-    _scheduleMagnetSnap() {
-        if (this._magnetSnapTimer) clearTimeout(this._magnetSnapTimer);
-        if (this._activeScrollAnim) return; // avoid fighting active animation
-        // If a fast flick happened, consume the skip once then return
-        if (this.magnetSkipNextSnap) {
-            this.magnetSkipNextSnap = false;
-            return;
-        }
-        this._magnetSnapTimer = setTimeout(() => this._snapToNearestCard(), 35);
-    }
-
-    _snapToNearestCard() {
-        if (!this.magneticEnabled) return;
-        // Do not interfere with modals/lightbox
-        if (document.body.style.overflow === 'hidden') return;
-        const cards = Array.from(document.querySelectorAll('.image-card'));
-        if (cards.length === 0) return;
-
-        const sel = this._selectSnapTarget(cards);
-        if (!sel) return;
-        const { node: bestEl, snapY } = sel;
-        let snapTo = snapY;
-        const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-        if (snapTo < 0) snapTo = 0; else if (snapTo > maxScroll) snapTo = maxScroll;
-        if (Math.abs(window.scrollY - snapTo) < 1) return;
-        if (this._lastSnapEl === bestEl && Math.abs(this._lastSnapY - snapTo) < 2) return; // stable target, skip
-
-        // Luxe animation: dynamic duration based on distance and easing
-        const distance = Math.abs(window.scrollY - snapTo);
-        const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const duration = prefersReduced ? 0 : Math.min(820, Math.max(260, 260 + distance * 0.32));
-        this._animateScrollTo(snapTo, duration);
-
-        // Highlight the focused card container
-        const focusedCard = bestEl.closest ? (bestEl.closest('.image-card') || bestEl) : bestEl;
-        document.querySelectorAll('.image-card.focused').forEach(el => el.classList.remove('focused'));
-        if (focusedCard) focusedCard.classList.add('focused');
-        this._lastSnapEl = bestEl;
-        this._lastSnapY = snapTo;
-    }
-
-    _animateScrollTo(targetY, durationMs = 400) {
-        if (this._activeScrollAnim) { this._activeScrollAnim.cancelled = true; this._activeScrollAnim = null; }
-        if (durationMs <= 0) { window.scrollTo(0, targetY); return; }
-        const startY = window.scrollY;
-        const delta = targetY - startY;
-        const startTime = performance.now();
-        const anim = { cancelled: false };
-        this._activeScrollAnim = anim;
-        // Smooth blend between ease-out-sine at start and ease-out-cubic at end
-        const easeOutSine = (t) => Math.sin((t * Math.PI) / 2);
-        const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
-        const ease = (t) => {
-            const mid = 0.35; // earlier acceleration, longer gentle settle
-            if (t < mid) {
-                const nt = t / mid;
-                return easeOutSine(nt) * mid;
-            } else {
-                const nt = (t - mid) / (1 - mid);
-                return mid + easeOutCubic(nt) * (1 - mid);
-            }
-        };
-        const step = () => {
-            if (anim.cancelled) return;
-            const now = performance.now();
-            const t = Math.min(1, (now - startTime) / durationMs);
-            const y = startY + delta * ease(t);
-            window.scrollTo(0, Math.round(y));
-            if (t < 1) requestAnimationFrame(step);
-            else this._activeScrollAnim = null;
-        };
-        requestAnimationFrame(step);
-        // Cancel animation on user input
-        const cancelOnInput = () => { if (this._activeScrollAnim) this._activeScrollAnim.cancelled = true; this._activeScrollAnim = null; cleanup(); };
-        const cleanup = () => {
-            window.removeEventListener('wheel', cancelOnInput, { passive: true });
-            window.removeEventListener('touchstart', cancelOnInput, { passive: true });
-            window.removeEventListener('keydown', cancelOnInput);
-        };
-        window.addEventListener('wheel', cancelOnInput, { passive: true });
-        window.addEventListener('touchstart', cancelOnInput, { passive: true });
-        window.addEventListener('keydown', cancelOnInput);
-    }
-
-    _selectSnapTarget(cards) {
-        const viewportTop = window.scrollY;
-        const viewportBottom = viewportTop + window.innerHeight;
-        const viewportCenter = viewportTop + (window.innerHeight / 2);
-        const dir = this._magnetDirection >= 0 ? 1 : -1;
-
-        const candidates = [];
-        for (const card of cards) {
-            const node = card.querySelector('img') || card;
-            const r = node.getBoundingClientRect();
-            if (r.height <= 0) continue;
-            const elTop = r.top + window.scrollY;
-            const elBottom = elTop + r.height;
-            const elCenter = elTop + r.height / 2;
-            const overlapPx = Math.max(0, Math.min(viewportBottom, elBottom) - Math.max(viewportTop, elTop));
-            const viewportOverlapRatio = overlapPx / window.innerHeight;
-            const elementOverlapRatio = overlapPx / Math.max(1, r.height);
-            const hasExpandedCaption = !!card.querySelector('.image-caption.expanded');
-            const captionHeight = (() => { const cap = card.querySelector('.image-caption'); return cap ? cap.getBoundingClientRect().height : 0; })();
-            const snapDisabled = hasExpandedCaption && captionHeight > window.innerHeight * 0.45; // disable if caption dominates view
-            candidates.push({ node, elTop, elBottom, elCenter, viewportOverlapRatio, elementOverlapRatio });
-        }
-        if (!candidates.length) return null;
-
-        // If a tall or currently dominant element occupies most of the viewport, favor it
-        const dominant = candidates.find(c => c.viewportOverlapRatio >= 0.6 || c.elementOverlapRatio >= 0.7);
-        if (dominant) {
-            const snapY = Math.round(dominant.elCenter - (window.innerHeight / 2));
-            return { node: dominant.node, snapY };
-        }
-
-        // Direction-aware: pick nearest in the scroll direction based on edge proximity
-        if (dir > 0) {
-            // Down: find the first element whose top is at or below current top (with small epsilon)
-            const forward = candidates
-                .filter(c => c.elTop >= (viewportTop - this._epsilonBackward))
-                .sort((a, b) => (a.elTop - viewportTop) - (b.elTop - viewportTop));
-            let chosen = forward.find(c => !((c.snapDisabled===true))) || forward[0];
-            if (!chosen) chosen = candidates.sort((a,b)=>Math.abs(a.elCenter-viewportCenter)-Math.abs(b.elCenter-viewportCenter))[0];
-            const snapY = Math.round(chosen.elCenter - (window.innerHeight / 2));
-            return { node: chosen.node, snapY };
-        } else {
-            // Up: find the last element whose bottom is at or above current bottom (with small epsilon)
-            const backward = candidates
-                .filter(c => c.elBottom <= (viewportBottom + this._epsilonBackward))
-                .sort((a, b) => (viewportBottom - b.elBottom) - (viewportBottom - a.elBottom));
-            let chosen = backward.find(c => !((c.snapDisabled===true))) || backward[0];
-            if (!chosen) chosen = candidates.sort((a,b)=>Math.abs(a.elCenter-viewportCenter)-Math.abs(b.elCenter-viewportCenter))[0];
-            const snapY = Math.round(chosen.elCenter - (window.innerHeight / 2));
-            return { node: chosen.node, snapY };
-        }
-    }
+    // (legacy mobile magnetic snap system removed)
 
     _evaluateMagnetEnabled() {
         const isMobile = window.matchMedia('(max-width: 600px)').matches;
@@ -3201,17 +2995,25 @@ class MagneticScroll {
     constructor(options = {}) {
         // Configuration for drift-based oozing feel
         this.config = {
-            settleDelay: 150,
+            // Base debounce before attempting drift (ms). Actual delay becomes dynamic.
+            settleDelay: 280,
             driftCheckInterval: 16,
             maxDriftSpeed: 0.8,
             minDriftSpeed: 0.05,
             attractionStrength: 0.015,
             damping: 0.92,
             effectiveRange: 200,
-            minCardIndex: 2,
+            // Allow attraction to the first and second posts as well
+            minCardIndex: 0,
             captionMaxHeight: 0.4,
             velocityMemory: 5,
             highVelocityThreshold: 8,
+            // New tuning levers for user-friendliness
+            idleBeforeDriftMs: 280,              // required quiet time after last input
+            lowVelocityThreshold: 0.06,          // px/ms; must be below to engage
+            mediumVelocityThreshold: 0.2,        // px/ms; affects settle delay
+            wheelSettleMs: 450,                  // ms after wheel input
+            minDistanceToDrift: 18,              // px minimum distance to bother drifting
             ...options
         };
 
@@ -3224,7 +3026,8 @@ class MagneticScroll {
             lastScrollY: 0,
             lastScrollTime: 0,
             settleTimer: null,
-            driftAnimationId: null
+            driftAnimationId: null,
+            lastUserInputTime: 0
         };
 
         // Velocity tracking
@@ -3244,6 +3047,7 @@ class MagneticScroll {
         this.handleTouchMove = this.handleTouchMove.bind(this);
         this.handleTouchEnd = this.handleTouchEnd.bind(this);
         this.handleWheel = this.handleWheel.bind(this);
+        this.handleKeydown = this.handleKeydown.bind(this);
         this.updateDrift = this.updateDrift.bind(this);
 
         this.init();
@@ -3256,6 +3060,7 @@ class MagneticScroll {
         window.addEventListener('touchmove', this.handleTouchMove, { passive: true });
         window.addEventListener('touchend', this.handleTouchEnd, { passive: true });
         window.addEventListener('wheel', this.handleWheel, { passive: true });
+        window.addEventListener('keydown', this.handleKeydown, { passive: true });
         window.addEventListener('resize', () => this.updateEnabledState());
         window.addEventListener('orientationchange', () => this.updateEnabledState());
         // Inject optional CSS once
@@ -3279,6 +3084,7 @@ class MagneticScroll {
         window.removeEventListener('touchmove', this.handleTouchMove);
         window.removeEventListener('touchend', this.handleTouchEnd);
         window.removeEventListener('wheel', this.handleWheel);
+        window.removeEventListener('keydown', this.handleKeydown);
     }
 
     updateEnabledState() {
@@ -3286,7 +3092,9 @@ class MagneticScroll {
         const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia('(pointer: coarse)').matches;
         const hasModalOpen = document.body.style.overflow === 'hidden';
         const isSpecialPage = /^\/(settings|admin|reset|verify)/.test(location.pathname);
-        this.state.enabled = isMobileWidth && hasTouch && !hasModalOpen && !isSpecialPage;
+        const isListPage = (location.pathname === '/' || location.pathname.startsWith('/@'));
+        // Force enable on main feed and profile pages when conditions allow (mobile + touch + no modal)
+        this.state.enabled = isMobileWidth && hasTouch && !hasModalOpen && !isSpecialPage && isListPage;
         
         // Debug logging (can be removed in production)
         // console.log('MagneticScroll.updateEnabledState:', { enabled: this.state.enabled });
@@ -3304,6 +3112,7 @@ class MagneticScroll {
         if (dt > 0 && dt < 100) this.trackVelocity((scrollY - this.state.lastScrollY) / dt);
         this.state.lastScrollY = scrollY;
         this.state.lastScrollTime = now;
+        this.state.lastUserInputTime = now;
         this.scheduleSettle();
     }
 
@@ -3312,6 +3121,7 @@ class MagneticScroll {
         const t = e.touches[0]; if (!t) return;
         this.touch = { active: true, startY: t.clientY, startTime: performance.now(), velocities: [] };
         this.stopDrift();
+        this.state.lastUserInputTime = performance.now();
     }
 
     handleTouchMove(e) {
@@ -3323,17 +3133,19 @@ class MagneticScroll {
             this.touch.velocities.push(v); if (this.touch.velocities.length > 5) this.touch.velocities.shift();
             this.touch.startY = t.clientY; this.touch.startTime = now;
         }
+        this.state.lastUserInputTime = now;
     }
 
     handleTouchEnd() {
         if (!this.state.enabled || !this.touch.active) return;
         this.touch.active = false;
+        this.state.lastUserInputTime = performance.now();
         if (this.touch.velocities.length > 0) {
             const avg = this.touch.velocities.reduce((a,b)=>a+b,0) / this.touch.velocities.length;
             // Convert px/frame to px/ms (assuming 60fps = 16.67ms per frame)
             const threshold = this.config.highVelocityThreshold / 16.67;
             // console.log('MagneticScroll.handleTouchEnd velocity check:', { avg, threshold, velocities: this.touch.velocities });
-            if (Math.abs(avg) > threshold) this.scheduleSettle(400);
+            if (Math.abs(avg) > threshold) this.scheduleSettle(this.config.wheelSettleMs);
             else this.scheduleSettle(this.config.settleDelay);
         } else {
             this.scheduleSettle(this.config.settleDelay);
@@ -3343,7 +3155,17 @@ class MagneticScroll {
     handleWheel() {
         if (!this.state.enabled) return;
         this.stopDrift();
-        this.scheduleSettle(200);
+        this.state.lastUserInputTime = performance.now();
+        this.scheduleSettle(this.config.wheelSettleMs);
+    }
+
+    handleKeydown(e) {
+        if (!this.state.enabled) return;
+        // Any keyboard input should immediately cancel drift for accessibility
+        this.stopDrift();
+        clearTimeout(this.state.settleTimer);
+        // Give user a moment; then allow a gentle settle if they stop interacting
+        this.scheduleSettle(300);
     }
 
     trackVelocity(position) {
@@ -3368,9 +3190,17 @@ class MagneticScroll {
 
     scheduleSettle(delay = null) {
         clearTimeout(this.state.settleTimer);
-        const d = delay ?? this.config.settleDelay;
-        // console.log('MagneticScroll.scheduleSettle:', { delay: d, enabled: this.state.enabled });
-        this.state.settleTimer = setTimeout(() => this.beginDrift(), d);
+        const now = performance.now();
+        const timeSinceInput = now - this.state.lastUserInputTime;
+        // Dynamic settle based on average user velocity and idle time
+        const avgV = Math.abs(this.getAverageVelocity());
+        let baseDelay = delay ?? this.config.settleDelay;
+        if (avgV > this.config.mediumVelocityThreshold) baseDelay = Math.max(baseDelay, this.config.wheelSettleMs);
+        else if (avgV > this.config.lowVelocityThreshold) baseDelay = Math.max(baseDelay, this.config.idleBeforeDriftMs);
+        const minIdle = delay ?? this.config.idleBeforeDriftMs;
+        const remainingIdle = Math.max(0, minIdle - timeSinceInput);
+        const finalDelay = Math.max(remainingIdle, baseDelay);
+        this.state.settleTimer = setTimeout(() => this.beginDrift(), finalDelay);
     }
 
     hasExpandedCaptionInView() {
@@ -3406,13 +3236,27 @@ class MagneticScroll {
             return;
         }
         
+        // Accessibility: if user has prefers-reduced-motion, avoid auto-drift entirely
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+        // If we're at the very top, do not skip initial cards/profile header
+        if (window.scrollY < 24) return;
+
+        // Do not fight the user: if average velocity recently indicates medium movement, skip drift
+        const avgV = Math.abs(this.getAverageVelocity());
+        if (avgV > this.config.mediumVelocityThreshold) return;
+
         const point = this.findAttractionPoint();
         // console.log('MagneticScroll.beginDrift attraction point:', point);
         if (!point) return;
         const currentY = window.scrollY; const distance = Math.abs(point.position - currentY);
         // console.log('MagneticScroll.beginDrift distance check:', { currentY, targetY: point.position, distance });
-        if (distance < 3) return; // Increased threshold to prevent micro-adjustments
-        this.state.targetPosition = point.position; this.state.currentVelocity = 0; this.state.isDrifting = true;
+        if (distance < this.config.minDistanceToDrift) return; // avoid micro-adjustments
+        this.state.targetPosition = point.position;
+        // Start with a small initial velocity toward the target to create an ease-in feel
+        const direction = Math.sign(point.position - currentY) || 1;
+        this.state.currentVelocity = direction * Math.max(this.config.minDriftSpeed * 1.5, 0.08);
+        this.state.isDrifting = true;
         // console.log('MagneticScroll.beginDrift starting drift to:', point.position);
         this.highlightCard(point.card);
         this.updateDrift();
@@ -3426,20 +3270,21 @@ class MagneticScroll {
         
         // Smooth stop when very close
         if (Math.abs(distance) < 1) { 
-            this.smoothScrollTo(targetY, 150);
+            this.smoothScrollTo(targetY, 220);
             this.stopDrift(); 
             return; 
         }
         
         // Dynamic attraction force - stronger when closer, with smooth falloff
         const normalizedDistance = Math.min(1, Math.abs(distance) / this.config.effectiveRange);
-        const attractionCurve = Math.pow(1 - normalizedDistance, 1.5); // Smooth curve
+        // Use a gentle S-curve so force ramps in smoothly and never spikes
+        const attractionCurve = 0.5 - 0.5 * Math.cos(Math.PI * (1 - normalizedDistance));
         const baseForce = this.config.attractionStrength * attractionCurve;
         
         // Prevent overshoot by reducing force when velocity is in same direction as distance
         const velocityDirection = Math.sign(this.state.currentVelocity);
         const distanceDirection = Math.sign(distance);
-        const overshootDamping = (velocityDirection === distanceDirection && Math.abs(this.state.currentVelocity) > 0.3) ? 0.5 : 1;
+        const overshootDamping = (velocityDirection === distanceDirection && Math.abs(this.state.currentVelocity) > 0.35) ? 0.55 : 1;
         
         const force = distanceDirection * baseForce * overshootDamping * Math.min(Math.abs(distance), 30);
         
@@ -3452,7 +3297,7 @@ class MagneticScroll {
         
         // Smooth stop when velocity gets very low
         if (Math.abs(this.state.currentVelocity) < this.config.minDriftSpeed) { 
-            this.smoothScrollTo(targetY, 200);
+            this.smoothScrollTo(targetY, 260);
             this.stopDrift(); 
             return; 
         }
@@ -3477,12 +3322,13 @@ class MagneticScroll {
         if (Math.abs(distance) < 1) return;
         
         const startTime = performance.now();
-        const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+        // Ease-in-out cubic for a gentle start and smooth stop
+        const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
         
         const animate = () => {
             const elapsed = performance.now() - startTime;
             const progress = Math.min(1, elapsed / duration);
-            const easedProgress = easeOutCubic(progress);
+            const easedProgress = easeInOutCubic(progress);
             const currentY = startY + (distance * easedProgress);
             
             window.scrollTo(0, Math.round(currentY));
@@ -3527,7 +3373,8 @@ class MagneticScroll {
                 
                 // Calculate ideal scroll position to center the image nicely
                 const navHeight = document.getElementById('nav')?.offsetHeight || 0;
-                const offset = (viewportHeight / 2) - navHeight * 0.25;
+                // Keep some space for the fixed nav; bias a bit lower to ensure top UI remains reachable
+                const offset = (viewportHeight / 2) - Math.min(navHeight, 80) * 0.5;
                 let idealScrollY = imgCenter - offset;
                 idealScrollY = Math.max(0, Math.min(maxScroll, idealScrollY));
                 
@@ -3547,7 +3394,7 @@ class MagneticScroll {
                     const visibility = cardRect.height > 0 ? visibleHeight / cardRect.height : 0;
                     
                     // Prefer cards that are partially visible and close to ideal position
-                    const visibilityBonus = visibility > 0.1 ? (1 - visibility * 0.5) : 1.5; // Slight penalty for fully visible
+                    const visibilityBonus = visibility > 0.1 ? (1 - visibility * 0.5) : 1.25; // Reduce penalty to ease into early posts
                     const score = distance * visibilityBonus;
                     
                     if (score < bestInRangeScore) { 
