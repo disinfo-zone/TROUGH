@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -168,12 +169,18 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
 	// Also set HttpOnly auth cookie alongside JSON token for progressive migration
+	// Secure flag dynamic: enable on HTTPS or when behind a proxy that sets X-Forwarded-Proto
+	// Allows local/mobile HTTP testing while keeping production secure.
+	secure := strings.EqualFold(c.Protocol(), "https") || strings.EqualFold(strings.TrimSpace(c.Get("X-Forwarded-Proto")), "https")
+	if os.Getenv("FORCE_SECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("FORCE_SECURE_COOKIES"), "true") {
+		secure = true
+	}
 	c.Cookie(&fiber.Cookie{
 		Name:     "auth_token",
 		Value:    token,
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: "Lax",
 		MaxAge:   24 * 60 * 60,
 	})
@@ -216,12 +223,19 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
 	// Also set HttpOnly cookie for auth
+	secure := strings.EqualFold(c.Protocol(), "https")
+	if os.Getenv("FORCE_SECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("FORCE_SECURE_COOKIES"), "true") {
+		secure = true
+	}
+	if os.Getenv("ALLOW_INSECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("ALLOW_INSECURE_COOKIES"), "true") {
+		secure = false
+	}
 	c.Cookie(&fiber.Cookie{
 		Name:     "auth_token",
 		Value:    token,
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: "Lax",
 		MaxAge:   24 * 60 * 60,
 	})
@@ -245,7 +259,14 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 // Logout clears the auth cookie for the current session
 func (h *AuthHandler) Logout(c *fiber.Ctx) error {
 	// Overwrite cookie with empty value and immediate expiry
-	c.Cookie(&fiber.Cookie{Name: "auth_token", Value: "", Path: "/", HTTPOnly: true, Secure: true, SameSite: "Lax", MaxAge: -1})
+	secure := strings.EqualFold(c.Protocol(), "https")
+	if os.Getenv("FORCE_SECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("FORCE_SECURE_COOKIES"), "true") {
+		secure = true
+	}
+	if os.Getenv("ALLOW_INSECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("ALLOW_INSECURE_COOKIES"), "true") {
+		secure = false
+	}
+	c.Cookie(&fiber.Cookie{Name: "auth_token", Value: "", Path: "/", HTTPOnly: true, Secure: secure, SameSite: "Lax", MaxAge: -1})
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -333,12 +354,17 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
+	// Secure flag dynamic: enable on HTTPS or when behind a proxy that sets X-Forwarded-Proto
+	secure := strings.EqualFold(c.Protocol(), "https") || strings.EqualFold(strings.TrimSpace(c.Get("X-Forwarded-Proto")), "https")
+	if os.Getenv("FORCE_SECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("FORCE_SECURE_COOKIES"), "true") {
+		secure = true
+	}
 	c.Cookie(&fiber.Cookie{
 		Name:     "auth_token",
 		Value:    tokenStr,
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: "Lax",
 		MaxAge:   24 * 60 * 60,
 	})

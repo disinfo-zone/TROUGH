@@ -1036,13 +1036,14 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(135deg, 
-    rgba(0,0,0,0.6) 0%, 
-    rgba(0,0,0,0.4) 50%, 
-    rgba(0,0,0,0.6) 100%);
+  /* Use backdrop-filter for native blur without extra image layer; add glaze */
+  background: linear-gradient(135deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.18) 50%, rgba(0,0,0,0.25) 100%);
+  backdrop-filter: blur(16px) saturate(0.6) brightness(0.9);
+  -webkit-backdrop-filter: blur(16px) saturate(0.6) brightness(0.9);
   pointer-events: none;
   z-index: 2;
-  clip-path: inset(0% 0% 0% 0%);
+  /* Default fully covered; reveal handled via mask or opacity (fallback) */
+  opacity: 1;
 }
 
 /* NO hover effects on blurred images - they should remain static */
@@ -1052,12 +1053,7 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
   border-color: var(--border);
 }
 
-.nsfw-blurred img {
-  filter: blur(25px) saturate(0.4) brightness(0.5);
-  transform: scale(1) !important;
-  transition: filter 1200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  animation: none !important;
-}
+.nsfw-blurred img { filter: none; transform: scale(1) !important; animation: none !important; }
 
 /* Hover effects ONLY work after blur is revealed */
 .nsfw-revealed:hover {
@@ -1071,51 +1067,40 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
   animation: troughFlash var(--duration-slow) var(--ease-out) 1;
 }
 
-/* Sick melting/dissolving animation from top-left corner */
-.nsfw-blurred.revealing::before {
-  animation: meltAway 1200ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
-}
+/* Default fallback: fade overlay away if masking unsupported */
+.nsfw-blurred.revealing::before { animation: nsfwRevealFade 1800ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards; }
 
-.nsfw-blurred.revealing img {
-  filter: blur(0px) saturate(1) brightness(1);
-  transition: filter 1200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
+/* Keep base image sharp during reveal; overlay provides the blur */
 
-/* Melting animation - like burning paper from top-left */
-@keyframes meltAway {
-  0% { 
-    clip-path: inset(0% 0% 0% 0%);
+@keyframes nsfwRevealFade { to { opacity: 0; } }
+
+/* Prefer mask-based circular reveal from top-left when supported */
+@supports ((-webkit-mask-image: radial-gradient(circle at 0 0, transparent 0, black 0)) or (mask-image: radial-gradient(circle at 0 0, transparent 0, black 0))) {
+  @property --reveal {
+    syntax: '<length-percentage>';
+    inherits: false;
+    initial-value: 0%;
   }
-  15% {
-    clip-path: inset(5% 95% 95% 5%);
+  .nsfw-blurred::before {
+    --reveal: 0%;
+    -webkit-mask-image: radial-gradient(
+      circle at 0 0,
+      rgba(0,0,0,0) clamp(0%, calc(var(--reveal) - 10%), 100%),
+      rgba(255,255,255,1) clamp(0%, calc(var(--reveal) + 10%), 100%)
+    );
+    mask-image: radial-gradient(
+      circle at 0 0,
+      rgba(0,0,0,0) clamp(0%, calc(var(--reveal) - 10%), 100%),
+      rgba(255,255,255,1) clamp(0%, calc(var(--reveal) + 10%), 100%)
+    );
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+    will-change: -webkit-mask-image, mask-image;
   }
-  25% {
-    clip-path: inset(12% 88% 88% 12%);
-  }
-  35% {
-    clip-path: inset(22% 78% 78% 22%);
-  }
-  45% {
-    clip-path: inset(35% 65% 65% 35%);
-  }
-  55% {
-    clip-path: inset(50% 50% 50% 50%);
-  }
-  65% {
-    clip-path: inset(68% 32% 32% 68%);
-  }
-  75% {
-    clip-path: inset(82% 18% 18% 82%);
-  }
-  85% {
-    clip-path: inset(94% 6% 6% 94%);
-  }
-  95% {
-    clip-path: inset(99% 1% 1% 99%);
-  }
-  100% { 
-    clip-path: inset(100% 0% 0% 100%);
-  }
+  .nsfw-blurred.revealing::before { animation: nsfwReveal 1800ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards !important; }
+  @keyframes nsfwReveal { to { --reveal: 220%; } }
 }
 
 
@@ -1127,6 +1112,7 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 
 .nsfw-revealed img {
   filter: none !important;
+  will-change: auto;
 }
 
 .nsfw-revealed::before {

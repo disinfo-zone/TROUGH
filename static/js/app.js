@@ -605,17 +605,33 @@ class TroughApp {
 
     async checkAuth() {
         const token = localStorage.getItem('token');
-        // Prefer cookie session; if no token stored, still attempt cookie-based /me
+        // First try cookie-based session
         try {
             const resp = await fetch('/api/me', { credentials: 'include' });
             if (resp.ok) {
                 const data = await resp.json();
                 this.currentUser = data.user;
                 localStorage.setItem('user', JSON.stringify(data.user));
-            } else {
-                this.signOut();
+                this.updateAuthButton();
+                return;
             }
         } catch {}
+        // Fallback: try bearer token (useful on mobile HTTP where cookies may be blocked)
+        if (token) {
+            try {
+                const resp2 = await fetch('/api/me', { credentials: 'include', headers: { 'Authorization': `Bearer ${token}` } });
+                if (resp2.ok) {
+                    const data2 = await resp2.json();
+                    this.currentUser = data2.user;
+                    localStorage.setItem('user', JSON.stringify(data2.user));
+                    this.updateAuthButton();
+                    return;
+                }
+            } catch {}
+        }
+        // If both fail, ensure local logged-out state without pinging server logout
+        try { localStorage.removeItem('user'); } catch {}
+        this.currentUser = null;
         this.updateAuthButton();
     }
 
@@ -881,7 +897,9 @@ class TroughApp {
             const data = await response.json().catch(() => ({}));
             if (response.ok) {
                 // Prefer cookie-based session; still cache user locally for UI
-                try { localStorage.removeItem('token'); } catch {}
+                try {
+                    if (data && data.token) localStorage.setItem('token', data.token);
+                } catch {}
                 localStorage.setItem('user', JSON.stringify(data.user));
                 this.currentUser = data.user;
                 this.closeAuthModal(); this.updateAuthButton(); this.showNotification('Welcome back!', 'success');
@@ -971,7 +989,7 @@ class TroughApp {
             const data = await response.json().catch(() => ({}));
 
             if (response.ok) {
-                try { localStorage.removeItem('token'); } catch {}
+                try { if (data && data.token) localStorage.setItem('token', data.token); } catch {}
                 localStorage.setItem('user', JSON.stringify(data.user));
                 this.currentUser = data.user;
                 this.closeAuthModal();
@@ -1595,7 +1613,8 @@ class TroughApp {
                     cap.classList.toggle('expanded');
                     captionExpanded = cap.classList.contains('expanded');
                 };
-                img.addEventListener('click', (ev) => { if (!captionExpanded) toggleCaption(ev); });
+                // Remove image click toggling to avoid interfering with lightbox
+                // Caption can still be toggled by clicking the caption text itself below
                 // Also allow toggling by clicking the caption itself
                 meta.addEventListener('click', (ev) => {
                     const capEl = ev.target.closest('.image-caption');
@@ -1611,21 +1630,22 @@ class TroughApp {
         card.addEventListener('click', (e) => {
             // Handle NSFW blur logic - single click removes blur immediately
             if (card.classList.contains('nsfw-blurred') && !card._nsfwRevealed) {
-                // Single click: start reveal animation and immediately allow lightbox
+                // First click: reveal with animation, but do not open lightbox yet
                 card._nsfwRevealed = true;
                 card.classList.add('revealing');
                 
-                // After melting animation completes, clean up classes
+                // After burning animation completes, clean up classes
                 setTimeout(() => {
                     card.classList.remove('nsfw-blurred', 'revealing');
                     card.classList.add('nsfw-revealed');
-                }, 1200); // Match the CSS animation duration
-                
-                // Don't stop propagation - let it fall through to open lightbox
-                // This creates the desired behavior: single click reveals AND opens lightbox
+                }, 1800); // Match the CSS animation duration
+
+                e.stopPropagation();
+                e.preventDefault();
+                return;
             }
             
-            // Open lightbox (happens for all clicks)
+            // Open lightbox for normal images and for NSFW after reveal
             this.openLightbox(image);
         });
         this.appendCardToMasonry(card);
