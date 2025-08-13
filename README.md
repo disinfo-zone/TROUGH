@@ -1,199 +1,167 @@
-# trough
+# Trough
 
-An impossibly slick, minimalist web app for AI-generated images. Every pixel matters. Every interaction feels butter-smooth.
+An image stream for machine-born pictures: provenance-aware, latency-conscious, and minimal. The pipeline admits only artifacts bearing verifiable metadata, renders with deterministic surfaces, and keeps state sharply bounded at the edges.
+
+### What it is
+Trough is a self-hosted gallery for AI-generated images that enforces provenance. Uploads are accepted only when EXIF/XMP or C2PA metadata signals an AI source. The app provides a masonry feed, profiles, collections, and admin controls with strong defaults for security, performance, and reproducibility.
 
 ## Features
 
-- **Gorgeous masonry gallery** with infinite scroll
-- **AI image detection** via EXIF metadata analysis
-- **AI provenance enforcement** using EXIF/XMP heuristics and C2PA/Content Credentials sniffing
-- **Beautiful loading states** with blurhash placeholders
-- **JWT authentication** with secure password hashing
-- **Drag & drop uploads** with real-time processing
-- **Like system** with optimistic updates
-- **User profiles** and image galleries
-- **Responsive design** that works everywhere
-- **Docker deployment** ready
-- **Admin toggle for public registration**; when disabled the Register tab is hidden and `/api/register` returns 403 (invite-based registration can be added on top)
+- **AI provenance enforcement**: EXIF/XMP heuristics and C2PA sniffing gate uploads
+- **Server-driven meta**: SSR-injected OG/Twitter tags for index and image routes
+- **Masonry feed**: paginated or cursor-based listing with NSFW visibility preferences
+- **Profiles and collections**: user pages and opt-in collecting; likes are deprecated
+- **Storage adapters**: local filesystem and S3/R2-compatible backends
+- **Email workflows**: optional SMTP for verification and password reset
+- **Hard security defaults**: strong JWT requirement, scoped CORS, CSP, HSTS
+- **Containerized**: Docker multi-stage build and compose configuration
 
-## Tech Stack
+## Purpose
+Operate a precise, provenance-first image surface for synthetic media. Accept only images with reliable machine signatures; preserve or reconstruct metadata; serve clean, cache-friendly responses; avoid implicit trust in clients.
 
-- **Backend**: Go with Fiber framework
-- **Database**: PostgreSQL with UUID support
-- **Frontend**: Vanilla JS with cutting-edge CSS
-- **Authentication**: JWT with bcrypt password hashing
-- **Image Processing**: Blurhash generation, EXIF analysis
-- **Testing**: Comprehensive unit and integration tests
-- **Deployment**: Docker with multi-stage builds
-
-## Quick Start
-
-### With Docker (Recommended)
+## Quick start (Docker)
 
 ```bash
-# Start the application
+cp config.example.yaml config.yaml
+cp .env.example .env
+# Set a strong JWT secret (>=32 random bytes)
+# bash:   openssl rand -base64 48 >> .env && sed -i '' 's/^JWT_SECRET=.*/JWT_SECRET=<your-secret>/' .env
+# pwsh:   $s=[Convert]::ToBase64String((New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes(48))
+#         Add-Content .env "JWT_SECRET=$s"
+
+# Optional: seed an admin on first boot
+echo ADMIN_EMAIL=admin@example.com >> .env
+echo ADMIN_USERNAME=admin >> .env
+echo ADMIN_PASSWORD=change-me >> .env
+
 make docker-build
-
-# View logs
 docker-compose logs -f app
-
-# The app will be available at http://localhost:8080
 ```
 
-### Local Development
+App listens on http://localhost:8080.
+
+## Local development
 
 ```bash
-# Start PostgreSQL
+# Start PostgreSQL via compose (or provide your own DATABASE_URL)
 make docker-up
 
-# Install dependencies
 go mod download
+cp config.example.yaml config.yaml
 
-# Run migrations
+# Export required env
+# Windows PowerShell: $env:JWT_SECRET="<secret>"; $env:DATABASE_URL="postgres://trough:trough@localhost:5432/trough?sslmode=disable"
+# bash/zsh: export JWT_SECRET=<secret>; export DATABASE_URL=postgres://trough:trough@localhost:5432/trough?sslmode=disable
+
+# Run DB migrations (when using compose Postgres)
 make migrate
 
 # Start the server
 make run
 ```
 
-## Environment Variables
+## How to use
 
-```bash
-DATABASE_URL=postgres://trough:trough@localhost:5432/trough?sslmode=disable
-# JWT secret: REQUIRED in all environments. At least 32 random bytes.
-# Examples to generate one:
-#   PowerShell: [Convert]::ToBase64String((New-Object System.Security.Cryptography.RNGCryptoServiceProvider).GetBytes(48))
-#   bash:       openssl rand -base64 48
-JWT_SECRET=<set-a-strong-random-secret>
-# Optional: remote storage (S3/R2)
-STORAGE_PROVIDER=s3            # or r2
-S3_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
-S3_BUCKET=<bucket-name>
-S3_ACCESS_KEY_ID=<key>
-S3_SECRET_ACCESS_KEY=<secret>
-STORAGE_PUBLIC_BASE_URL=https://cdn.example.com   # optional CDN/public base URL
-```
+- Register, then log in. Admins can disable public registration and issue invites.
+- Upload an image via UI or `POST /api/upload` with form field `image`. Uploads without acceptable AI metadata are rejected.
+- Toggle NSFW visibility in account settings; feed respects preferences.
+- Configure site title/URL, analytics, SMTP, and storage in the admin panel.
 
 ## Configuration
 
-Copy `config.example.yaml` to `config.yaml` to customize AI signatures and aesthetic defaults.
+- `config.yaml` controls AI signature detection and aesthetic defaults. Start from the example:
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-## API Endpoints
+- Docker compose mounts `./config.yaml` into the container read-only.
+- If `config.yaml` is absent, sane defaults are used.
 
-### Authentication
-- `POST /api/register` - User registration
-- `POST /api/login` - User login
+## Environment
 
-### Images
-- `GET /api/feed` - Main image feed with pagination
-- `GET /api/images/:id` - Get specific image
-- `POST /api/upload` - Upload image (authenticated)
-- `POST /api/images/:id/like` - Like/unlike image (authenticated)
-
-### Users
-- `GET /api/users/:username` - User profile
-- `GET /api/users/:username/images` - User's images
-
-## Testing
+Set via `.env` or environment variables:
 
 ```bash
-# Run all tests
-make test
+# Required
+JWT_SECRET=<32+ random bytes>
+DATABASE_URL=postgres://trough:trough@localhost:5432/trough?sslmode=disable
 
-# Run tests with coverage
-make test-coverage
+# Optional admin seed (created once if not present)
+ADMIN_EMAIL=
+ADMIN_USERNAME=
+ADMIN_PASSWORD=
 
-# Run integration tests (requires database)
-go test -v ./tests -tags=integration
+# Optional cookie flags
+FORCE_SECURE_COOKIES=false
+ALLOW_INSECURE_COOKIES=false
+
+# Storage (local by default)
+STORAGE_PROVIDER=local            # local | s3 | r2
+S3_ENDPOINT=
+S3_BUCKET=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+R2_ENDPOINT=
+R2_BUCKET=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+STORAGE_PUBLIC_BASE_URL=          # e.g. cdn.example.com or https://cdn.example.com
+UPLOADS_DIR=uploads
 ```
 
-If you compile with S3 support via build tags, add `-tags s3` as well.
+Notes:
+- S3/R2 require endpoint, bucket, and keys. Path-style is forced for compatibility.
+- `STORAGE_PUBLIC_BASE_URL` enables CDN-style public URLs and runtime redirects from `/uploads/*`.
+- CORS is limited to the `site_url` configured in admin settings.
 
-## Architecture
+## Running and build targets
 
-### Database Schema
-
-```sql
-users(
-  id UUID PRIMARY KEY,
-  username VARCHAR(30) UNIQUE,
-  email VARCHAR(255) UNIQUE,
-  password_hash VARCHAR(255),
-  bio TEXT,
-  avatar_url VARCHAR(500),
-  is_admin BOOLEAN DEFAULT FALSE,
-  show_nsfw BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT NOW()
-)
-
-images(
-  id UUID PRIMARY KEY,
-  user_id UUID REFERENCES users(id),
-  filename VARCHAR(255),
-  original_name VARCHAR(255),
-  file_size INTEGER,
-  width INTEGER,
-  height INTEGER,
-  blurhash VARCHAR(100),      -- For beautiful loading states
-  dominant_color VARCHAR(7),  -- For placeholder backgrounds
-  is_nsfw BOOLEAN DEFAULT FALSE,
-  ai_signature VARCHAR(500),  -- AI detection metadata
-  ai_provider VARCHAR(100),   -- Detected provider (e.g., Midjourney, OpenAI, Firefly)
-  exif_data JSONB,           -- Full EXIF data
-  likes_count INTEGER DEFAULT 0,
-  created_at TIMESTAMP DEFAULT NOW()
-)
-
-likes(
-  user_id UUID REFERENCES users(id),
-  image_id UUID REFERENCES images(id),
-  created_at TIMESTAMP DEFAULT NOW(),
-  PRIMARY KEY (user_id, image_id)
-)
+```bash
+make build           # Build binary
+make run             # Run with go run
+make docker-up       # Start compose services
+make docker-down     # Stop compose services
+make docker-build    # Build and start via compose
+make migrate         # Apply schema via compose Postgres
+make test            # Unit tests
+make test-coverage   # Coverage report
+make lint            # gofmt + go vet
 ```
 
-### Project Structure
+## API surface
 
-```
-trough/
-├── db/              # Database connection and migrations
-├── handlers/        # HTTP request handlers
-├── middleware/      # JWT authentication, etc.
-├── models/          # Data models and repository pattern
-├── services/        # Business logic (image processing, EXIF)
-├── static/          # Frontend assets (HTML, CSS, JS)
-├── tests/           # Unit and integration tests
-├── main.go          # Application entry point
-└── docker-compose.yml
-```
+- Auth: `POST /api/register`, `POST /api/login`, `POST /api/logout`, `GET /api/me`
+- Users: `GET /api/users/:username`, `GET /api/users/:username/images`, `GET /api/users/:username/collections`
+- Images: `GET /api/feed`, `GET /api/images/:id`, `POST /api/upload`, `PATCH /api/images/:id`, `DELETE /api/images/:id`, `POST /api/images/:id/collect`
+- Invites (admin): `POST /api/admin/invites`, `GET /api/admin/invites`, `DELETE /api/admin/invites/:id`, `POST /api/admin/invites/prune`
+- Site settings (admin): `GET /api/admin/site`, `PUT /api/admin/site`, asset uploads and diagnostics
 
-## Contributing
+Notes:
+- Likes are intentionally deprecated; `POST /api/images/:id/like` returns 410.
+- Admin endpoints require an authenticated admin user.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with tests
-4. Run the test suite (`make test`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+## Storage
 
-## Performance Goals
+- Local: files persisted under `uploads/` and served at `/uploads/*`.
+- S3/R2: objects written to bucket; public URL from `STORAGE_PUBLIC_BASE_URL` when provided.
+- Admin can migrate local uploads to remote storage from the admin panel.
 
-- [x] Images load in <100ms
-- [x] Infinite scroll is buttery smooth
-- [x] No layout shift during loading
-- [x] Animations run at 60fps
-- [x] Dark theme with true black (#000000)
-- [x] Beautiful loading states with shimmer effects
+## Email
+
+- Configure SMTP in admin to enable verification and password reset flows.
+- Mail delivery uses bounded timeouts and a lightweight async queue.
+
+## Security notes
+
+- `JWT_SECRET` is mandatory; startup fails if it is missing or weak.
+- Security headers include CSP, HSTS, X-Frame-Options, and others.
+- Cookies are `HttpOnly` and honor TLS. Use `FORCE_SECURE_COOKIES=true` in production.
+
+## Screenshots
+
+Placeholder for gallery, upload, and admin screenshots.
 
 ## License
 
-MIT License - see LICENSE file for details.
-
----
-
-*The goal: When someone opens trough, they should immediately think "whoever built this really cared."*
+MIT. See `LICENSE`.
