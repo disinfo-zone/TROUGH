@@ -6,7 +6,6 @@ import (
 	"image"
 	_ "image/png"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -108,12 +107,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	// Compute meta from decoded image to avoid double decode
 	imageMeta := services.ProcessDecodedImage(img, format)
 
-	// Write out as JPEG with XMP preserved (if present)
-	tmpPath := filepath.Join("uploads", uuid.New().String()+filepath.Ext(file.Filename))
-	if err := os.MkdirAll("uploads", 0755); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create upload directory"})
-	}
-	// Save original bytes to temp to scan for XMP/EXIF and for possible re-encode source
+	// Buffer original bytes once to scan for XMP/EXIF and optionally re-encode
 	src.Seek(0, 0)
 	var originalBytes []byte
 	if buf, err := io.ReadAll(src); err == nil {
@@ -121,15 +115,11 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	} else {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to buffer upload"})
 	}
-	if err := os.WriteFile(tmpPath, originalBytes, 0o644); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save temp file"})
-	}
 
 	// AI provenance detection on the original file. Reject early if none.
 	xmpOriginal := services.ExtractXMPXMLFromBytes(originalBytes)
 	aiOK, aiRes := services.DetectAIProvenanceFromBytes(originalBytes, xmpOriginal)
 	if !aiOK {
-		os.Remove(tmpPath)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Upload rejected. Only AI-generated images with verifiable metadata (EXIF or XMP; C2PA optional) are accepted."})
 	}
 	aiSignature := aiRes.Details
@@ -195,7 +185,6 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 			exifRaw := services.ExtractExifRawFromBytes(originalBytes)
 			out, err := services.EncodeJPEGWithMetadata(resized, quality, xmpOriginal, exifRaw)
 			if err != nil {
-				os.Remove(tmpPath)
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to encode image"})
 			}
 			finalBytes = out
@@ -213,7 +202,6 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 	publicURL, err := st.Save(c.Context(), filename, bytes.NewReader(finalBytes), contentType)
 	if err != nil {
-		os.Remove(tmpPath)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to store image"})
 	}
 
@@ -225,9 +213,6 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	} else {
 		filenameOrURL = publicURL
 	}
-	// Remove tmp original
-	os.Remove(tmpPath)
-
 	// Extract EXIF JSON from the final file (after any re-encode)
 	var exifFull json.RawMessage
 	if len(finalBytes) > 0 {

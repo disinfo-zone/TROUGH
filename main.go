@@ -9,9 +9,11 @@ import (
 	"sync"
 	"time"
 
+	gjson "github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/etag"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 
 	// limiter intentionally omitted to avoid adding new dependencies in this change
@@ -305,6 +307,8 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		Prefork:      false, // enable in prod Linux if desired
+		JSONEncoder:  gjson.Marshal,
+		JSONDecoder:  gjson.Unmarshal,
 	})
 
 	// Lightweight rate-limiting for sensitive endpoints (login/register/reset)
@@ -345,7 +349,22 @@ func main() {
 			return false
 		},
 	}))
-	app.Use(compress.New())
+	app.Use(etag.New(etag.Config{Weak: true}))
+	app.Use(compress.New(compress.Config{
+		Level: compress.LevelBestSpeed,
+		Next: func(c *fiber.Ctx) bool {
+			p := c.Path()
+			// Skip already-compressed/static heavy assets
+			if strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/uploads/") {
+				return true
+			}
+			ct := c.Get("Content-Type")
+			if strings.Contains(ct, "image/") || strings.Contains(ct, "/zip") || strings.Contains(ct, "/gzip") || strings.Contains(ct, "/br") {
+				return true
+			}
+			return false
+		},
+	}))
 	// Configure CORS for API. Do not affect images/scripts loading.
 	app.Use(cors.New(cors.Config{
 		AllowOriginsFunc: func(origin string) bool {
@@ -416,69 +435,78 @@ func main() {
 	// we keep this mount (for legacy/local files), and add a redirector for /uploads/* to the
 	// configured public base if set.
 	app.Static("/uploads", "./uploads", fiber.Static{Compress: true, CacheDuration: 86400, MaxAge: 31536000})
-	if !storage.IsLocal() && strings.TrimSpace(stSettings.PublicBaseURL) != "" {
-		app.Get("/uploads/*", func(c *fiber.Ctx) error {
-			key := c.Params("*")
-			return c.Redirect(storage.PublicURL(key), fiber.StatusFound)
-		})
-	}
+	// Dynamic redirector for remote storage; uses current storage and latest settings cache
+	app.Get("/uploads/*", func(c *fiber.Ctx) error {
+		st := services.GetCurrentStorage()
+		if st == nil || st.IsLocal() {
+			return c.Next()
+		}
+		set := services.GetCachedSettings(siteRepo)
+		if strings.TrimSpace(set.PublicBaseURL) == "" {
+			return c.Next()
+		}
+		key := c.Params("*")
+		return c.Redirect(st.PublicURL(key), fiber.StatusFound)
+	})
 	// Simple health endpoint for uptime checks (not logged)
 	app.Get("/healthz", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
 	api := app.Group("/api")
+	// Build auth middleware once to reuse its small cache
+	authMW := middleware.Protected()
 
 	api.Post("/register", limiter(10, time.Minute), authHandler.Register)
 	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
 	api.Post("/login", limiter(15, time.Minute), authHandler.Login)
-	api.Post("/logout", middleware.Protected(), authHandler.Logout)
+	api.Post("/logout", authMW, authHandler.Logout)
 	api.Post("/forgot-password", limiter(5, 5*time.Minute), authHandler.ForgotPassword)
 	api.Post("/reset-password", limiter(10, time.Minute), authHandler.ResetPassword)
 	api.Post("/verify-email", limiter(20, time.Minute), authHandler.VerifyEmail)
 	api.Get("/validate-invite", authHandler.ValidateInvite)
-	api.Post("/me/resend-verification", middleware.Protected(), authHandler.ResendVerification)
-	api.Get("/me", middleware.Protected(), authHandler.Me)
+	api.Post("/me/resend-verification", authMW, authHandler.ResendVerification)
+	api.Get("/me", authMW, authHandler.Me)
 
 	api.Get("/feed", imageHandler.GetFeed)
 	api.Get("/images/:id", imageHandler.GetImage)
-	api.Post("/upload", middleware.Protected(), imageHandler.Upload)
-	api.Post("/images/:id/like", middleware.Protected(), imageHandler.LikeImage)
-	api.Patch("/images/:id", middleware.Protected(), imageHandler.UpdateImage)
-	api.Delete("/images/:id", middleware.Protected(), imageHandler.DeleteImage)
+	api.Post("/upload", authMW, imageHandler.Upload)
+	api.Post("/images/:id/like", authMW, imageHandler.LikeImage)
+	api.Patch("/images/:id", authMW, imageHandler.UpdateImage)
+	api.Delete("/images/:id", authMW, imageHandler.DeleteImage)
 
 	api.Get("/users/:username", userHandler.GetProfile)
 	api.Get("/users/:username/images", userHandler.GetUserImages)
-	api.Get("/me/profile", middleware.Protected(), userHandler.GetMyProfile)
-	api.Patch("/me/profile", middleware.Protected(), userHandler.UpdateMyProfile)
-	api.Get("/me/account", middleware.Protected(), userHandler.GetMyAccount)
-	api.Patch("/me/email", middleware.Protected(), userHandler.UpdateEmail)
-	api.Patch("/me/password", middleware.Protected(), userHandler.UpdatePassword)
-	api.Delete("/me", middleware.Protected(), userHandler.DeleteMyAccount)
-	api.Post("/me/avatar", middleware.Protected(), userHandler.UploadAvatar)
+	api.Get("/me/profile", authMW, userHandler.GetMyProfile)
+	api.Patch("/me/profile", authMW, userHandler.UpdateMyProfile)
+	api.Get("/me/account", authMW, userHandler.GetMyAccount)
+	api.Patch("/me/email", authMW, userHandler.UpdateEmail)
+	api.Patch("/me/password", authMW, userHandler.UpdatePassword)
+	api.Delete("/me", authMW, userHandler.DeleteMyAccount)
+	api.Post("/me/avatar", authMW, userHandler.UploadAvatar)
 
 	api.Get("/site", adminHandler.GetPublicSite)
 
-	api.Get("/admin/users", middleware.Protected(), userHandler.AdminListUsers)
-	api.Post("/admin/users", middleware.Protected(), userHandler.AdminCreateUser)
-	api.Patch("/admin/users/:id", middleware.Protected(), userHandler.AdminSetUserFlags)
-	api.Patch("/admin/users/:id/password", middleware.Protected(), userHandler.AdminSetUserPassword)
-	api.Post("/admin/users/:id/send-verification", middleware.Protected(), userHandler.AdminSendVerification)
-	api.Delete("/admin/users/:id", middleware.Protected(), userHandler.AdminDeleteUser)
-	api.Delete("/admin/images/:id", middleware.Protected(), userHandler.AdminDeleteImage)
-	api.Patch("/admin/images/:id/nsfw", middleware.Protected(), userHandler.AdminSetImageNSFW)
+	api.Get("/admin/users", authMW, userHandler.AdminListUsers)
+	api.Post("/admin/users", authMW, userHandler.AdminCreateUser)
+	api.Patch("/admin/users/:id", authMW, userHandler.AdminSetUserFlags)
+	api.Patch("/admin/users/:id/password", authMW, userHandler.AdminSetUserPassword)
+	api.Post("/admin/users/:id/send-verification", authMW, userHandler.AdminSendVerification)
+	api.Delete("/admin/users/:id", authMW, userHandler.AdminDeleteUser)
+	api.Delete("/admin/images/:id", authMW, userHandler.AdminDeleteImage)
+	api.Patch("/admin/images/:id/nsfw", authMW, userHandler.AdminSetImageNSFW)
 
 	// Admin invite management
-	api.Post("/admin/invites", middleware.Protected(), adminHandler.CreateInvite)
-	api.Get("/admin/invites", middleware.Protected(), adminHandler.ListInvites)
-	api.Delete("/admin/invites/:id", middleware.Protected(), adminHandler.DeleteInvite)
-	api.Post("/admin/invites/prune", middleware.Protected(), adminHandler.PruneInvites)
+	api.Post("/admin/invites", authMW, adminHandler.CreateInvite)
+	api.Get("/admin/invites", authMW, adminHandler.ListInvites)
+	api.Delete("/admin/invites/:id", authMW, adminHandler.DeleteInvite)
+	api.Post("/admin/invites/prune", authMW, adminHandler.PruneInvites)
 
-	api.Get("/admin/site", middleware.Protected(), adminHandler.GetSiteSettings)
-	api.Put("/admin/site", middleware.Protected(), adminHandler.UpdateSiteSettings)
-	api.Post("/admin/site/favicon", middleware.Protected(), adminHandler.UploadFavicon)
-	api.Post("/admin/site/social-image", middleware.Protected(), adminHandler.UploadSocialImage)
-	api.Post("/admin/site/test-smtp", middleware.Protected(), adminHandler.TestSMTP)
-	api.Post("/admin/site/export-uploads", middleware.Protected(), adminHandler.ExportLocalUploadsToStorage)
-	api.Post("/admin/site/test-storage", middleware.Protected(), adminHandler.TestStorage)
+	api.Get("/admin/site", authMW, adminHandler.GetSiteSettings)
+	api.Put("/admin/site", authMW, adminHandler.UpdateSiteSettings)
+	api.Post("/admin/site/favicon", authMW, adminHandler.UploadFavicon)
+	api.Post("/admin/site/social-image", authMW, adminHandler.UploadSocialImage)
+	api.Post("/admin/site/test-smtp", authMW, adminHandler.TestSMTP)
+	api.Post("/admin/site/export-uploads", authMW, adminHandler.ExportLocalUploadsToStorage)
+	api.Post("/admin/site/test-storage", authMW, adminHandler.TestStorage)
 
 	app.Use(func(c *fiber.Ctx) error {
 		if strings.HasPrefix(c.Path(), "/api") {

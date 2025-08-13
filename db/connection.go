@@ -82,6 +82,7 @@ func Migrate() error {
 			dominant_color VARCHAR(7),
 			is_nsfw BOOLEAN DEFAULT FALSE,
 			ai_signature VARCHAR(500),
+			ai_provider VARCHAR(100),
 			exif_data JSONB,
 			caption TEXT,
 			likes_count INTEGER DEFAULT 0,
@@ -90,6 +91,7 @@ func Migrate() error {
 
 		-- Ensure new columns exist on already-created tables
 		ALTER TABLE images ADD COLUMN IF NOT EXISTS caption TEXT;
+		ALTER TABLE images ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(100);
 
 		CREATE TABLE IF NOT EXISTS likes (
 			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
