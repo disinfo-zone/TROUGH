@@ -143,6 +143,12 @@ class TroughApp {
             await this.renderProfilePage(username);
             return;
         }
+		// CMS pages (single-segment slugs)
+		if (/^\/[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(location.pathname)) {
+			const slug = location.pathname.slice(1);
+			const ok = await this.renderCMSPage(slug);
+			if (ok) return;
+		}
         if (location.pathname === '/settings') {
             this.beginRender('settings');
             await this.renderSettingsPage();
@@ -2048,6 +2054,26 @@ class TroughApp {
           </section>`;
         this.gallery.appendChild(wrap);
 
+        // Footer with public pages
+        try {
+            const r = await fetch('/api/pages');
+            const d = await r.json().catch(()=>({pages:[]}));
+            const pages = Array.isArray(d.pages) ? d.pages : [];
+            if (pages.length) {
+                const footer = document.createElement('div');
+                footer.style.cssText = 'margin:12px auto 0;max-width:980px;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;opacity:.8';
+                pages.forEach(p => {
+                    const a = document.createElement('a');
+                    a.href = '/' + String(p.slug||'').replace(/^\/+/, '');
+                    a.className = 'link-btn';
+                    a.textContent = String(p.title||'');
+                    a.onclick = (e) => { e.preventDefault(); history.pushState({}, '', a.href); this.init(); };
+                    footer.appendChild(a);
+                });
+                this.gallery.appendChild(footer);
+            }
+        } catch {}
+
         // Password strength + confirm
         const pw = document.getElementById('new-password');
         const pwc = document.getElementById('new-password-confirm');
@@ -2742,6 +2768,44 @@ class TroughApp {
             showByProvider();
         }
 
+        const pagesSection = document.createElement('section');
+        pagesSection.className = 'settings-group';
+        pagesSection.innerHTML = `
+          <div class="settings-label" style="display:flex;align-items:center;justify-content:space-between"><span>Add/Edit Pages</span> <small class="meta" style="opacity:.8">Single-segment slugs only (e.g., about, faq)</small></div>
+          <div style="display:grid;gap:8px">
+            <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+              <div style="display:grid;gap:6px">
+                <label class="settings-label">Slug</label>
+                <input id="pg-slug" class="settings-input" placeholder="e.g., about"/>
+              </div>
+              <div style="display:grid;gap:6px">
+                <label class="settings-label">Title</label>
+                <input id="pg-title" class="settings-input" placeholder="Page title"/>
+              </div>
+              <div style="display:grid;gap:6px">
+                <label class="settings-label">Redirect URL (optional)</label>
+                <input id="pg-redirect" class="settings-input" placeholder="https://external.example/path"/>
+              </div>
+            </div>
+            <div style="display:grid;gap:6px">
+              <label class="settings-label">Content (Markdown)</label>
+              <textarea id="pg-markdown" class="settings-input" style="min-height:200px" placeholder="# Heading\n\nWrite your content here..."></textarea>
+              <small class="meta" style="opacity:.8">Supports GitHub-flavored markdown. Links open in a new tab.</small>
+            </div>
+            <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+              <div style="display:grid;gap:6px"><label class="settings-label">Meta title (optional)</label><input id="pg-meta-title" class="settings-input" placeholder="Overrides <title>"/></div>
+              <div style="display:grid;gap:6px"><label class="settings-label">Meta description (optional)</label><input id="pg-meta-desc" class="settings-input" placeholder="Short description for SEO"/></div>
+            </div>
+            <label style="display:flex;gap:8px;align-items:center"><input id="pg-published" type="checkbox"/> Published</label>
+            <div class="settings-actions" style="gap:8px;align-items:center">
+              <button id="pg-save" class="nav-btn">Save</button>
+              <button id="pg-new" class="link-btn">New</button>
+              <button id="pg-delete" class="link-btn" style="color:#ff6666">Delete</button>
+            </div>
+          </div>
+          <div id="pg-list" style="display:grid;gap:6px;margin-top:8px"></div>
+        `;
+
         const invitesSection = document.createElement('section');
         invitesSection.className = 'settings-group';
         invitesSection.innerHTML = `
@@ -2782,11 +2846,101 @@ class TroughApp {
         `;
 
         wrap.appendChild(siteSection);
-        wrap.appendChild(invitesSection);
-        wrap.appendChild(usersSection);
+        // Build tabs
+        const tabsWrap = document.createElement('div');
+        tabsWrap.className = 'tab-group';
+        tabsWrap.style.cssText = 'margin:0 auto 12px;display:flex;gap:8px;flex-wrap:wrap;';
+        const mkTab = (id, label) => { const b = document.createElement('button'); b.className='tab-btn'; b.dataset.tab=id; b.textContent=label; return b; };
+        const tabSite = mkTab('site', 'Site settings');
+        const tabPages = isAdmin ? mkTab('pages', 'Add/Edit Pages') : null;
+        const tabInv = mkTab('invites', 'Invitations');
+        const tabUsers = mkTab('users', 'User management');
+        tabsWrap.appendChild(tabSite);
+        if (tabPages) tabsWrap.appendChild(tabPages);
+        tabsWrap.appendChild(tabInv);
+        tabsWrap.appendChild(tabUsers);
+        wrap.appendChild(tabsWrap);
+        // Sections container
+        const sections = document.createElement('div');
+        sections.appendChild(siteSection);
+        if (isAdmin) sections.appendChild(pagesSection);
+        sections.appendChild(invitesSection);
+        sections.appendChild(usersSection);
+        wrap.appendChild(sections);
+        const showSection = (name) => {
+            const map = { site: siteSection, pages: pagesSection, invites: invitesSection, users: usersSection };
+            [siteSection, pagesSection, invitesSection, usersSection].forEach(sec => { if (sec) sec.style.display = 'none'; });
+            if (map[name]) map[name].style.display = 'block';
+            const setActive = (btn, on) => { if (!btn) return; if (on) btn.classList.add('active'); else btn.classList.remove('active'); };
+            setActive(tabSite, name==='site'); setActive(tabPages, name==='pages'); setActive(tabInv, name==='invites'); setActive(tabUsers, name==='users');
+        };
+        // Default tab
+        showSection('site');
+        // Wire tab clicks
+        tabSite.onclick = () => showSection('site');
+        if (tabPages) tabPages.onclick = () => showSection('pages');
+        tabInv.onclick = () => showSection('invites');
+        tabUsers.onclick = () => showSection('users');
+        
         this.gallery.appendChild(wrap);
 
         if (isAdmin) {
+            // Pages management
+            const pgSlug = pagesSection.querySelector('#pg-slug');
+            const pgTitle = pagesSection.querySelector('#pg-title');
+            const pgRedirect = pagesSection.querySelector('#pg-redirect');
+            const pgMarkdown = pagesSection.querySelector('#pg-markdown');
+            const pgMetaTitle = pagesSection.querySelector('#pg-meta-title');
+            const pgMetaDesc = pagesSection.querySelector('#pg-meta-desc');
+            const pgPub = pagesSection.querySelector('#pg-published');
+            const pgSave = pagesSection.querySelector('#pg-save');
+            const pgNew = pagesSection.querySelector('#pg-new');
+            const pgDel = pagesSection.querySelector('#pg-delete');
+            const pgList = pagesSection.querySelector('#pg-list');
+            let selectedId = null;
+            const slugRe = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
+            const loadPages = async (page=1) => {
+                const r = await fetch(`/api/admin/pages?page=${page}&limit=200`, { credentials:'include' });
+                if (!r.ok) { this.showNotification('Failed to load pages','error'); return; }
+                const d = await r.json().catch(()=>({pages:[]}));
+                pgList.innerHTML = '';
+                (d.pages||[]).forEach(p => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:8px;';
+                    row.innerHTML = `<div><div style="font-weight:600">${this.escapeHTML(String(p.title||''))}</div><div class="meta" style="opacity:.8">/${this.escapeHTML(String(p.slug||''))} ${p.is_published?'• Published':''}</div></div><button class="nav-btn" data-act="edit">Edit</button><button class="nav-btn nav-btn-danger" data-act="remove">Delete</button>`;
+                    row.querySelector('[data-act="edit"]').onclick = () => {
+                        selectedId = p.id; pgSlug.value = p.slug||''; pgTitle.value = p.title||''; pgMarkdown.value = p.markdown||''; pgRedirect.value = p.redirect_url||''; pgMetaTitle.value = p.meta_title||''; pgMetaDesc.value = p.meta_description||''; pgPub.checked = !!p.is_published;
+                    };
+                    row.querySelector('[data-act="remove"]').onclick = async () => {
+                        const ok = await this.showConfirm('Delete this page?'); if (!ok) return;
+                        const rr = await fetch(`/api/admin/pages/${encodeURIComponent(p.id)}`, { method:'DELETE', credentials:'include' });
+                        if (rr.status===204) { this.showNotification('Deleted'); loadPages(1); if (selectedId===p.id) { selectedId=null; pgNew.click(); } }
+                        else { const e = await rr.json().catch(()=>({})); this.showNotification(e.error||'Delete failed','error'); }
+                    };
+                    pgList.appendChild(row);
+                });
+            };
+            pgNew.onclick = () => { selectedId = null; pgSlug.value=''; pgTitle.value=''; pgRedirect.value=''; pgMarkdown.value=''; pgMetaTitle.value=''; pgMetaDesc.value=''; pgPub.checked=false; };
+            pgDel.onclick = async () => { if (!selectedId) return; const ok = await this.showConfirm('Delete this page?'); if (!ok) return; const r = await fetch(`/api/admin/pages/${encodeURIComponent(selectedId)}`, { method:'DELETE', credentials:'include' }); if (r.status===204) { this.showNotification('Deleted'); selectedId=null; pgNew.click(); loadPages(1); } else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Delete failed','error'); } };
+            pgSave.onclick = async () => {
+                const slug = (pgSlug.value||'').trim().toLowerCase();
+                if (!slugRe.test(slug)) { this.showNotification('Invalid slug','error'); return; }
+                const body = {
+                    slug,
+                    title: (pgTitle.value||'').trim(),
+                    markdown: (pgMarkdown.value||'').replace(/\r\n/g,'\n'),
+                    is_published: !!pgPub.checked,
+                    redirect_url: (pgRedirect.value||'').trim() || null,
+                    meta_title: (pgMetaTitle.value||'').trim() || null,
+                    meta_description: (pgMetaDesc.value||'').trim() || null,
+                };
+                const method = selectedId ? 'PUT' : 'POST';
+                const url = selectedId ? `/api/admin/pages/${encodeURIComponent(selectedId)}` : '/api/admin/pages';
+                const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
+                if (r.ok || r.status===201) { this.showNotification('Saved'); loadPages(1); }
+                else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Save failed','error'); }
+            };
+            await loadPages(1);
             // Define doSave function with all settings (including storage)
             const doSave = async () => {
                 const rawHost = document.getElementById('smtp-host').value.trim();
@@ -3372,6 +3526,189 @@ class TroughApp {
                 };
             }
         }
+    }
+
+    // Render a CMS page by slug; returns true if handled
+    async renderCMSPage(slug) {
+        try {
+            const r = await fetch(`/api/pages/${encodeURIComponent(slug)}`);
+            if (!r.ok) return false;
+            const d = await r.json().catch(()=>null);
+            if (!d) return false;
+            if (d.redirect_url) { window.location.href = d.redirect_url; return true; }
+            if (this.profileTop) this.profileTop.innerHTML = '';
+            this.gallery.innerHTML = '';
+            this.gallery.classList.add('settings-mode');
+            const wrap = document.createElement('section');
+            wrap.className = 'mono-col';
+            wrap.style.cssText = 'margin:0 auto 16px;max-width:980px;padding:16px;color:var(--text-primary)';
+            const isAdmin = !!this.currentUser?.is_admin;
+            const editBtn = isAdmin ? '<button id="page-edit" class="link-btn" style="justify-self:end">Edit</button>' : '';
+            wrap.innerHTML = `
+              <div class="page-wrap" style="display:grid;gap:12px">
+                <div class="page-toolbar" style="display:flex;justify-content:flex-end">${editBtn}</div>
+                <article class="page-content"></article>
+              </div>`;
+            this.gallery.appendChild(wrap);
+            const art = wrap.querySelector('.page-content');
+            if (art) {
+                let html = String(d.html||'');
+                if (!html && d.markdown) {
+                    const raw = String(d.markdown||'');
+                    try {
+                        if (window.markdownit) {
+                            const slugify = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9\s-]/g,'').replace(/\s+/g,'-');
+                            const md = window.markdownit({ html: true, linkify: true, breaks: true });
+                            if (window.markdownitFootnote) md.use(window.markdownitFootnote);
+                            if (window.markdownitContainer) {
+                                ['note','info','tip','warning','danger','success','quote'].forEach(name => {
+                                    md.use(window.markdownitContainer, name, {
+                                        render: (tokens, idx) => tokens[idx].nesting === 1 ? `<div class=\"admon admon-${name}\">` : `</div>`
+                                    });
+                                });
+                                md.use(window.markdownitContainer, 'details', {
+                                    render: (tokens, idx) => {
+                                        if (tokens[idx].nesting === 1) {
+                                            const info = tokens[idx].info.trim().slice('details'.length).trim();
+                                            const title = info || 'Details';
+                                            return `<details class=\"md-details\"><summary>${title}</summary>`;
+                                        } else { return `</details>`; }
+                                    }
+                                });
+                            }
+                            if (window.markdownitAnchor) md.use(window.markdownitAnchor, { slugify });
+                            let src = raw;
+                            if (src.includes('[[TOC]]')) {
+                                try {
+                                    const tmp = window.markdownit({ html:false });
+                                    const headings = [];
+                                    tmp.core.ruler.push('collect_headings', state => {
+                                        state.tokens.forEach((t,i) => {
+                                            if (t.type === 'heading_open') {
+                                                const level = Number(t.tag.slice(1));
+                                                const inline = state.tokens[i+1];
+                                                const text = (inline && inline.type==='inline') ? inline.content : '';
+                                                const slug = slugify(text||'');
+                                                headings.push({ level, text, slug });
+                                            }
+                                        });
+                                    });
+                                    tmp.render(src);
+                                    if (headings.length) {
+                                        const toc = '<nav class="page-toc"><ul>' + headings.map(h=>`<li class="lv${h.level}"><a href="#${h.slug}">${this.escapeHTML(String(h.text||''))}</a></li>`).join('') + '</ul></nav>';
+                                        src = src.replace('[[TOC]]', toc);
+                                    }
+                                } catch {}
+                            }
+                            html = md.render(src);
+                        } else if (window.marked) {
+                            if (window.marked.setOptions) { window.marked.setOptions({ gfm: true, breaks: true }); }
+                            html = window.marked.parse(raw);
+                        } else {
+                            html = this.sanitizeAndRenderMarkdown(raw);
+                        }
+                    } catch { html = this.sanitizeAndRenderMarkdown(raw); }
+                }
+                try { if (window.DOMPurify) { html = window.DOMPurify.sanitize(html, { ADD_ATTR: ['id','class','name'] }); } } catch {}
+                art.innerHTML = html;
+                // External links only: open in new tab
+                Array.from(art.querySelectorAll('a[href]')).forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    if (href.startsWith('#') || href.startsWith('/')) return;
+                    try {
+                        const u = new URL(href, location.href);
+                        if (u.origin !== location.origin) { a.setAttribute('target','_blank'); a.setAttribute('rel','noopener nofollow'); }
+                    } catch {}
+                });
+                // In-page anchor scroll (footnotes, TOC) with nav offset
+                art.addEventListener('click', (e) => {
+                    const a = e.target && e.target.closest ? e.target.closest('a[href^="#"]') : null;
+                    if (!a) return;
+                    e.preventDefault();
+                    const id = decodeURIComponent((a.getAttribute('href')||'').slice(1));
+                    if (!id) return;
+                    const target = art.querySelector(`[id="${id}"]`);
+                    if (!target) { location.hash = `#${id}`; return; }
+                    const nav = document.getElementById('nav');
+                    const offset = (nav && nav.getBoundingClientRect().height) ? nav.getBoundingClientRect().height + 8 : 0;
+                    const y = target.getBoundingClientRect().top + window.scrollY - offset;
+                    try { window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' }); } catch { window.scrollTo(0, Math.max(0, y)); }
+                    // Update hash without jumping
+                    try { history.pushState({}, '', `#${id}`); } catch {}
+                }, { once: true });
+            }
+            // Update title/meta for SPA nav
+            try {
+                const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || 'TROUGH';
+                document.title = (d.meta_title && String(d.meta_title).trim()) || `${String(d.title||'Page')} - ${siteTitle}`;
+                const ensure = (sel, create) => { let m = document.querySelector(sel); if (!m) { m = document.createElement('meta'); create(m); document.head.appendChild(m);} return m; };
+                ensure('meta[name="description"]', m=>m.setAttribute('name','description')).setAttribute('content', String(d.meta_description||''));
+                ensure('meta[property="og:title"]', m=>m.setAttribute('property','og:title')).setAttribute('content', String(d.meta_title||d.title||''));
+                ensure('meta[property="og:type"]', m=>m.setAttribute('property','og:type')).setAttribute('content', 'article');
+                ensure('meta[property="og:url"]', m=>m.setAttribute('property','og:url')).setAttribute('content', location.href);
+            } catch {}
+            // Inline page editor for admins
+            const edit = document.getElementById('page-edit');
+            if (edit) {
+                edit.onclick = async () => {
+                    // Find page id by slug via admin list
+                    let pid = null; let pageRow = null;
+                    try {
+                        const rr = await fetch('/api/admin/pages?limit=200', { credentials: 'include' });
+                        if (rr.ok) {
+                            const dd = await rr.json().catch(()=>({pages:[]}));
+                            (dd.pages||[]).forEach(p => { if (String(p.slug||'') === String(slug)) { pid = p.id; pageRow = p; } });
+                        }
+                    } catch {}
+                    if (!pid) { this.showNotification('Unable to load page for editing','error'); return; }
+                    const overlay = document.createElement('div');
+                    overlay.style.cssText='position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,0.6);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:24px;';
+                    const panel = document.createElement('div');
+                    panel.style.cssText='max-width:900px;width:100%;background:var(--surface-elevated);border:1px solid var(--border);border-radius:12px;padding:16px;color:var(--text-primary)';
+                    panel.innerHTML = `
+                      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                        <div class="settings-label">Edit Page</div>
+                        <button id="pgx-close" class="link-btn">Close</button>
+                      </div>
+                      <div style="display:grid;gap:8px">
+                        <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+                          <div style="display:grid;gap:6px"><label class="settings-label">Slug</label><input id="pgx-slug" class="settings-input" disabled value="${this.escapeHTML(String(slug))}"/></div>
+                          <div style="display:grid;gap:6px"><label class="settings-label">Title</label><input id="pgx-title" class="settings-input" value="${this.escapeHTML(String(pageRow?.title||''))}"/></div>
+                          <div style="display:grid;gap:6px"><label class="settings-label">Redirect URL</label><input id="pgx-redirect" class="settings-input" value="${this.escapeHTML(String(pageRow?.redirect_url||''))}" placeholder="https://..."/></div>
+                        </div>
+                        <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+                          <div style="display:grid;gap:6px"><label class="settings-label">Meta title</label><input id="pgx-meta-title" class="settings-input" value="${this.escapeHTML(String(d.meta_title||''))}"/></div>
+                          <div style="display:grid;gap:6px"><label class="settings-label">Meta description</label><input id="pgx-meta-desc" class="settings-input" value="${this.escapeHTML(String(d.meta_description||''))}"/></div>
+                        </div>
+                        <label style="display:flex;gap:8px;align-items:center"><input id="pgx-pub" type="checkbox" ${pageRow?.is_published? 'checked':''}/> Published</label>
+                        <div style="display:grid;gap:6px"><label class="settings-label">Content (Markdown)</label><textarea id="pgx-md" class="settings-input" style="min-height:320px">${this.escapeHTML(String(d.markdown||''))}</textarea></div>
+                        <div class="settings-actions" style="gap:8px;align-items:center;justify-content:flex-end"><button id="pgx-save" class="nav-btn">Save</button></div>
+                      </div>`;
+                    overlay.appendChild(panel); document.body.appendChild(overlay);
+                    const close = () => overlay.remove();
+                    panel.querySelector('#pgx-close').onclick = close;
+                    panel.querySelector('#pgx-save').onclick = async () => {
+                        const body = {
+                            slug: slug,
+                            title: panel.querySelector('#pgx-title').value,
+                            markdown: panel.querySelector('#pgx-md').value.replace(/\r\n/g,'\n'),
+                            is_published: panel.querySelector('#pgx-pub').checked,
+                            redirect_url: (panel.querySelector('#pgx-redirect').value||'').trim() || null,
+                            meta_title: panel.querySelector('#pgx-meta-title').value,
+                            meta_description: panel.querySelector('#pgx-meta-desc').value,
+                        };
+                        try {
+                            const rr = await fetch(`/api/admin/pages/${encodeURIComponent(pid)}`, { method:'PUT', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify(body) });
+                            if (!rr.ok) { const e = await rr.json().catch(()=>({})); this.showNotification(e.error||'Save failed','error'); return; }
+                            this.showNotification('Saved'); close();
+                            // Re-render page with latest
+                            await this.renderCMSPage(slug);
+                        } catch { this.showNotification('Save failed','error'); }
+                    };
+                };
+            }
+            return true;
+        } catch { return false; }
     }
 
     showMigrationModal() {

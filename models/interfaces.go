@@ -62,3 +62,14 @@ type InviteRepositoryInterface interface {
 	Delete(id uuid.UUID) error
 	DeleteUsedAndExpired() (int, error)
 }
+
+// Pages CMS
+type PageRepositoryInterface interface {
+	Create(p *Page) error
+	Update(p *Page) error
+	Delete(id uuid.UUID) error
+	GetBySlug(slug string) (*Page, error)
+	GetPublishedBySlug(slug string) (*Page, error)
+	ListAll(page, limit int) ([]Page, int, error)
+	ListPublished() ([]Page, error)
+}

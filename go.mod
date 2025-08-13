@@ -8,6 +8,7 @@ require (
 	github.com/bbrks/go-blurhash v1.1.1
 	github.com/dsoprea/go-exif/v3 v3.0.1
 	github.com/go-playground/validator/v10 v10.27.0
+	github.com/goccy/go-json v0.10.2
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/google/uuid v1.6.0
@@ -30,7 +31,6 @@ require (
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang/geo v0.0.0-20210211234256-740aa86cb551 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.6 // indirect

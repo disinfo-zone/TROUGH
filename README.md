@@ -56,6 +56,65 @@ make run
 - Toggle NSFW visibility in account settings; feed respects preferences.
 - Configure site title/URL, analytics, SMTP, and storage (local or S3) in the admin panel.
 
+### Custom Pages (CMS)
+
+Admins can create simple content pages under the “Add/Edit Pages” tab in `/admin`.
+
+- Pages are addressable by single-segment slugs, e.g. `/about`, `/faq`.
+- A page may be a redirect by setting a Redirect URL (e.g., `/blog` -> external blog).
+- Pages support rich markdown with enhancements and are sanitized client-side.
+- Admins can edit in place via the Edit button on the page when logged in.
+
+#### Markdown features
+
+- Standard GitHub-flavored markdown (headings, lists, tables, code, images, links)
+- Footnotes (markdown-it footnote):
+
+  ```md
+  Here is a statement with a footnote.[^1]
+
+  [^1]: Footnote text appears at the bottom.
+  ```
+
+- Admonitions / callouts (containers):
+
+  ```md
+  ::: info
+  Useful information block
+  :::
+
+  ::: warning
+  Be careful here
+  :::
+  ```
+
+  Supported types: `note`, `info`, `tip`, `warning`, `danger`, `success`, `quote`.
+
+- Collapsible sections (great for FAQ):
+
+  ```md
+  ::: details How do I reset my password?
+  Click “Forgot password” on the login screen and follow the instructions.
+  :::
+  ```
+
+- Optional Table of Contents: include `[[TOC]]` where you want the TOC injected.
+
+  - The TOC is generated from headings on the page and links to their anchors.
+  - Example:
+
+    ```md
+    [[TOC]]
+
+    # Heading 1
+    ## Heading 2
+    ```
+
+Notes:
+
+- External links open in a new tab; internal anchors (like footnotes, TOC links) navigate within the page.
+- Images in markdown are responsive. You can link to uploaded assets (e.g., `/uploads/your-image.jpg`).
+
 ## Configuration
 
 - `config.yaml` controls AI signature detection and aesthetic defaults. Start from the example:

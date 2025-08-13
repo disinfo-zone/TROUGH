@@ -36,6 +36,7 @@ type AdminHandler struct {
 	newMailSender func(*models.SiteSettings) services.MailSender
 	storage       services.Storage
 	inviteRepo    models.InviteRepositoryInterface
+	pageRepo      models.PageRepositoryInterface
 }
 
 func NewAdminHandler(settingsRepo models.SiteSettingsRepositoryInterface, userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *AdminHandler {
@@ -57,6 +58,12 @@ func (h *AdminHandler) WithStorage(s services.Storage) *AdminHandler {
 // WithInvites injects the invite repository.
 func (h *AdminHandler) WithInvites(r models.InviteRepositoryInterface) *AdminHandler {
 	h.inviteRepo = r
+	return h
+}
+
+// WithPages injects the pages repository
+func (h *AdminHandler) WithPages(r models.PageRepositoryInterface) *AdminHandler {
+	h.pageRepo = r
 	return h
 }
 
@@ -591,4 +598,135 @@ func (h *AdminHandler) TestStorage(c *fiber.Ctx) error {
 		"public":          st.PublicURL(""),
 		"public_base_url": set.PublicBaseURL,
 	})
+}
+
+// ---- CMS Pages (Admin) ----
+
+// AdminListPages lists pages with pagination
+func (h *AdminHandler) AdminListPages(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.pageRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Page repository not configured"})
+	}
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.Query("limit", "50"))
+	if limit < 1 {
+		limit = 50
+	} else if limit > 200 {
+		limit = 200
+	}
+	list, total, err := h.pageRepo.ListAll(page, limit)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
+	}
+	return c.JSON(fiber.Map{"pages": list, "page": page, "limit": limit, "total": total, "total_pages": (total + limit - 1) / limit})
+}
+
+type pageUpsertBody struct {
+	ID              *string `json:"id"`
+	Slug            string  `json:"slug"`
+	Title           string  `json:"title"`
+	Markdown        string  `json:"markdown"`
+	IsPublished     bool    `json:"is_published"`
+	RedirectURL     *string `json:"redirect_url"`
+	MetaTitle       *string `json:"meta_title"`
+	MetaDescription *string `json:"meta_description"`
+}
+
+// AdminCreatePage creates a page
+func (h *AdminHandler) AdminCreatePage(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.pageRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Page repository not configured"})
+	}
+	var b pageUpsertBody
+	if err := c.BodyParser(&b); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
+	}
+	slug := strings.ToLower(strings.TrimSpace(b.Slug))
+	if !regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$`).MatchString(slug) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid slug"})
+	}
+	// Disallow conflicting reserved routes
+	reserved := map[string]bool{"api": true, "uploads": true, "assets": true, "@:username": true, "i": true, "register": true, "reset": true, "verify": true, "settings": true, "admin": true}
+	if reserved[slug] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Slug reserved"})
+	}
+	// If redirect set, validate and store only redirect; else render markdown to HTML
+	if b.RedirectURL != nil && strings.TrimSpace(*b.RedirectURL) != "" {
+		u := strings.TrimSpace(*b.RedirectURL)
+		if !(strings.HasPrefix(strings.ToLower(u), "http://") || strings.HasPrefix(strings.ToLower(u), "https://")) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Redirect must be http(s) URL"})
+		}
+		// force not published? allow published so it can be used
+	}
+	// Store as-is; HTML will be generated on the client from markdown
+	p := &models.Page{Slug: slug, Title: strings.TrimSpace(b.Title), Markdown: b.Markdown, HTML: "", IsPublished: b.IsPublished, RedirectURL: b.RedirectURL, MetaTitle: b.MetaTitle, MetaDescription: b.MetaDescription}
+	if err := h.pageRepo.Create(p); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Create failed"})
+	}
+	return c.Status(fiber.StatusCreated).JSON(p)
+}
+
+// AdminUpdatePage updates an existing page
+func (h *AdminHandler) AdminUpdatePage(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.pageRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Page repository not configured"})
+	}
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid id"})
+	}
+	var b pageUpsertBody
+	if err := c.BodyParser(&b); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid body"})
+	}
+	slug := strings.ToLower(strings.TrimSpace(b.Slug))
+	if !regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$`).MatchString(slug) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid slug"})
+	}
+	reserved := map[string]bool{"api": true, "uploads": true, "assets": true, "@:username": true, "i": true, "register": true, "reset": true, "verify": true, "settings": true, "admin": true}
+	if reserved[slug] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Slug reserved"})
+	}
+	if b.RedirectURL != nil && strings.TrimSpace(*b.RedirectURL) != "" {
+		u := strings.TrimSpace(*b.RedirectURL)
+		if !(strings.HasPrefix(strings.ToLower(u), "http://") || strings.HasPrefix(strings.ToLower(u), "https://")) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Redirect must be http(s) URL"})
+		}
+	}
+	p := &models.Page{ID: id, Slug: slug, Title: strings.TrimSpace(b.Title), Markdown: b.Markdown, HTML: "", IsPublished: b.IsPublished, RedirectURL: b.RedirectURL, MetaTitle: b.MetaTitle, MetaDescription: b.MetaDescription}
+	if err := h.pageRepo.Update(p); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Update failed"})
+	}
+	return c.JSON(p)
+}
+
+// AdminDeletePage deletes a page
+func (h *AdminHandler) AdminDeletePage(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	if h.pageRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Page repository not configured"})
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid id"})
+	}
+	if err := h.pageRepo.Delete(id); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Delete failed"})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }

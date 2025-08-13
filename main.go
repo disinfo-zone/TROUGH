@@ -290,9 +290,13 @@ func main() {
 	}
 	services.SetCurrentStorage(storage)
 	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage).WithCollect(collectRepo)
-	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo).WithCollect(collectRepo)
+	pageRepo := models.NewPageRepository(db.DB)
+	// Seed default CMS pages once per boot if missing (respect tombstones)
+	seedDefaultPages(pageRepo, siteRepo)
+	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo).WithCollect(collectRepo).WithPages(pageRepo)
 	inviteRepo := models.NewInviteRepository(db.DB)
-	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo).WithPages(pageRepo)
+	pageHandler := handlers.NewPageHandler(pageRepo)
 	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
 	// Initialize async mail queue if SMTP is configured
 	if set, err := siteRepo.Get(); err == nil && set != nil {
@@ -429,6 +433,26 @@ func main() {
 	app.Get("/reset", index)
 	app.Get("/verify", index)
 	app.Get("/i/:id", index)
+	// Single-segment CMS pages SSR entry
+	app.Get("/:slug", func(c *fiber.Ctx) error {
+		slug := strings.ToLower(strings.Trim(c.Params("slug"), "/"))
+		if slug == "" {
+			return index(c)
+		}
+		// Skip reserved prefixes and known routes
+		reserved := map[string]bool{"api": true, "uploads": true, "assets": true, "@": true, "i": true, "register": true, "reset": true, "verify": true, "settings": true, "admin": true}
+		if reserved[slug] {
+			return index(c)
+		}
+		// If slug corresponds to a published redirect page, perform server-side redirect immediately
+		if p, err := pageRepo.GetPublishedBySlug(slug); err == nil && p != nil {
+			if p.RedirectURL != nil && strings.TrimSpace(*p.RedirectURL) != "" {
+				return c.Redirect(strings.TrimSpace(*p.RedirectURL), fiber.StatusFound)
+			}
+		}
+		// Otherwise serve SPA; client will fetch and render page content
+		return index(c)
+	})
 
 	// Static assets
 	app.Static("/", "./static", fiber.Static{Compress: true, CacheDuration: 3600, MaxAge: 31536000})
@@ -479,6 +503,10 @@ func main() {
 	api.Get("/users/:username", userHandler.GetProfile)
 	api.Get("/users/:username/images", userHandler.GetUserImages)
 	api.Get("/users/:username/collections", userHandler.GetUserCollections)
+	// Public pages list for footer
+	api.Get("/pages", userHandler.ListPublicPages)
+	// Public page data for SPA render (and server redirect)
+	api.Get("/pages/:slug", pageHandler.GetPublicPage)
 	api.Get("/me/profile", authMW, userHandler.GetMyProfile)
 	api.Patch("/me/profile", authMW, userHandler.UpdateMyProfile)
 	api.Get("/me/account", authMW, userHandler.GetMyAccount)
@@ -511,6 +539,11 @@ func main() {
 	api.Post("/admin/site/test-smtp", authMW, adminHandler.TestSMTP)
 	api.Post("/admin/site/export-uploads", authMW, adminHandler.ExportLocalUploadsToStorage)
 	api.Post("/admin/site/test-storage", authMW, adminHandler.TestStorage)
+	// Admin CMS pages
+	api.Get("/admin/pages", authMW, adminHandler.AdminListPages)
+	api.Post("/admin/pages", authMW, adminHandler.AdminCreatePage)
+	api.Put("/admin/pages/:id", authMW, adminHandler.AdminUpdatePage)
+	api.Delete("/admin/pages/:id", authMW, adminHandler.AdminDeletePage)
 
 	app.Use(func(c *fiber.Ctx) error {
 		if strings.HasPrefix(c.Path(), "/api") {
@@ -524,4 +557,189 @@ func main() {
 
 	log.Printf("Server starting on port 8080")
 	log.Fatal(app.Listen(":8080"))
+}
+
+// Create a few default pages if they do not yet exist. If deleted by admin, they will not be recreated
+func seedDefaultPages(pageRepo models.PageRepositoryInterface, siteRepo models.SiteSettingsRepositoryInterface) {
+	type def struct{ slug, title, md string }
+	// Use SMTP from settings for contact page when available
+	from := ""
+	if set, err := siteRepo.Get(); err == nil && set != nil {
+		from = strings.TrimSpace(set.SMTPFromEmail)
+	}
+	var contactBody string
+	if from != "" {
+		contactBody = `# Contact
+
+We would love to hear from you. Email us at <` + from + `>.
+
+::: tip
+If your message concerns account access, include your username and the email you registered with.
+:::
+`
+	} else {
+		contactBody = `# Contact
+
+Email is not configured yet. Check back soon.
+
+::: info
+In the meantime, you can reach us through our public channels.
+:::
+`
+	}
+
+	defs := []def{
+		{"about", "About", `# About
+
+Trough is a focused home for AI-generated imagery. Fast to load, clear to navigate, respectful of attention.
+
+::: note
+We check for AI provenance in metadata. What you see is created by machines and curated by humans.
+:::
+
+## What you can expect
+
+- Straightforward uploading with sensible limits
+- Clean, responsive viewing on any device
+- An emphasis on signal over noise
+
+We keep the surface minimal so the work can speak for itself.
+`},
+		{"contact", "Contact", contactBody},
+		{"terms", "Terms of Service", `# Terms of Service
+
+Welcome to Trough. By accessing or using the Service, you agree to these Terms.
+
+## 1. Accounts
+
+You are responsible for your account and for any content you upload. You must be at least 13 years old.
+
+## 2. Content
+
+You retain rights to your uploads. By uploading, you grant us a non-exclusive license to host and display your images on the Service. Do not upload anything illegal, infringing, or malicious. We reserve the right to remove content that violates policy or law.
+
+::: warning
+We accept only AI-generated images with verifiable signals. Non-conforming uploads may be rejected or removed.
+:::
+
+### Moderation & Admin Actions
+
+We may moderate content and take administrative action at our discretion to preserve the integrity and safety of the Service, including removal of content, rate limiting, or account suspension/termination.
+
+### Prohibited Content
+
+Illegal content is strictly prohibited. This includes (but is not limited to) CSAM, content that incites violence, doxxing, or infringement of third-party rights. We will cooperate with lawful requests from authorities where required.
+
+## 3. Acceptable Use
+
+Do not attempt to disrupt the Service, probe, or scrape at scale. Respect other users.
+
+## 4. Disclaimers
+
+The Service is provided “as is.” We make no guarantees about uptime or fitness for a particular purpose.
+
+## 5. Limitation of Liability
+
+To the fullest extent permitted by law, Trough, its contributors, and operators shall not be liable for indirect, incidental, or consequential damages.
+
+## 6. Changes
+
+We may update these Terms. Continued use constitutes acceptance of the new Terms.
+
+## 7. Contact
+
+See the Contact page for how to reach us.
+`},
+		{"privacy", "Privacy Policy", `# Privacy Policy
+
+We respect your privacy. This document explains what we collect and why.
+
+## Data We Process
+
+- Account data you give us (email, username).\
+- Uploaded images and their metadata (EXIF/XMP/C2PA when present).
+- Minimal operational logs to keep the site running.
+
+## What We Do Not Do
+
+- We do not sell your data.\
+- We do not run invasive trackers. Analytics are optional and disabled by default.
+
+## Cookies
+
+We use essential cookies for authentication. Optional analytics may set their own cookies when enabled by the admin.
+
+## Storage & Retention
+
+Uploads reside on our storage backend (local or S3/R2). You can delete your account and uploads at any time; backups may persist for a limited window.
+
+## Your Rights
+
+You can access, update, or delete your data by visiting Settings or contacting us.
+
+## Changes
+
+We may update this policy. Material changes will be reflected here.
+`},
+	}
+
+	// FAQ (appended for clarity)
+	defs = append(defs, def{"faq", "FAQ", `# Frequently Asked Questions
+
+## Getting started
+
+### How do I create an account?
+Use the Register option. Admins may enable invites or require email verification.
+
+### How do I upload an image?
+Click Upload, choose a file (JPG/PNG/WebP up to 10MB), and add an optional caption. We require verifiable AI metadata.
+
+### Why was my upload rejected?
+Uploads without acceptable AI provenance are rejected. Ensure your generator includes EXIF/XMP/C2PA signals.
+
+## Profiles and collections
+
+### Can I change my username or avatar?
+Yes — under Settings. Usernames are lowercase alphanumerics (3–30 chars).
+
+### How do collections work?
+Click ✧ on an image to collect; it becomes ✦ when collected. Find your collections on your profile.
+
+## Safety and privacy
+
+### Do you track me?
+No invasive tracking. Optional analytics may be enabled by the admin.
+
+### How are NSFW images handled?
+We offer hide/show/blur preferences in Settings.
+
+## Troubleshooting
+
+### I forgot my password
+Use “Forgot password” on the sign-in modal. You’ll receive a reset link if email is configured.
+
+### My image won’t load
+Check your connection and file type. If using remote storage, it may take a moment for CDN propagation.
+
+::: details Contact support
+If problems persist, visit the Contact page and email us. Include your username and a brief description.
+:::
+`})
+
+	for _, d := range defs {
+		// Respect tombstones: do not re-create if admin previously deleted
+		var count int
+		if db.DB != nil {
+			_ = db.DB.Get(&count, `SELECT COUNT(*) FROM cms_tombstones WHERE slug=$1`, d.slug)
+			if count > 0 {
+				continue
+			}
+		}
+		// Only create if missing
+		if _, err := pageRepo.GetBySlug(d.slug); err == nil {
+			continue
+		}
+		// Create as published default
+		_ = pageRepo.Create(&models.Page{Slug: d.slug, Title: d.title, Markdown: d.md, HTML: "", IsPublished: true})
+	}
 }

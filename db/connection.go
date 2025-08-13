@@ -195,7 +195,7 @@ func Migrate() error {
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS plausible_src TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS plausible_domain TEXT DEFAULT '';
 
-		-- Invitation codes for gated registration
+			-- Invitation codes for gated registration
 		CREATE TABLE IF NOT EXISTS invites (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 			code VARCHAR(64) UNIQUE NOT NULL,
@@ -210,6 +210,37 @@ func Migrate() error {
 		-- Ensure uses column exists (for upgrades) and constraints reasonable
 		ALTER TABLE invites ADD COLUMN IF NOT EXISTS uses INTEGER DEFAULT 0;
 		ALTER TABLE invites ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP NULL;
+
+			-- CMS tombstones: remember admin-deleted default slugs to avoid re-seeding
+			CREATE TABLE IF NOT EXISTS cms_tombstones (
+				slug VARCHAR(60) PRIMARY KEY,
+				deleted_at TIMESTAMP NOT NULL DEFAULT NOW()
+			);
+
+			-- CMS pages
+			CREATE TABLE IF NOT EXISTS pages (
+				id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+				slug VARCHAR(60) UNIQUE NOT NULL,
+				title VARCHAR(200) NOT NULL,
+            markdown TEXT NOT NULL DEFAULT '',
+            html TEXT NOT NULL DEFAULT '',
+				is_published BOOLEAN NOT NULL DEFAULT FALSE,
+				redirect_url TEXT NULL,
+				meta_title VARCHAR(200),
+				meta_description VARCHAR(300),
+				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_pages_published ON pages(is_published);
+			-- Constrain slug to single path segment [a-z0-9-], no leading/trailing hyphens
+			DO $$ BEGIN
+			  IF NOT EXISTS (
+			    SELECT 1 FROM pg_constraint WHERE conname = 'pages_slug_check'
+			  ) THEN
+			    ALTER TABLE pages
+			      ADD CONSTRAINT pages_slug_check CHECK (slug ~ '^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$');
+			  END IF;
+			END $$;
 	`
 
 	_, err := DB.Exec(schema)

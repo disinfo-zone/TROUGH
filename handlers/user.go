@@ -29,6 +29,7 @@ type UserHandler struct {
 	validator     *validator.Validate
 	settingsRepo  models.SiteSettingsRepositoryInterface
 	newMailSender func(*models.SiteSettings) services.MailSender
+	pageRepo      models.PageRepositoryInterface
 }
 
 func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface, storage services.Storage) *UserHandler {
@@ -45,6 +46,27 @@ func (h *UserHandler) WithSettings(r models.SiteSettingsRepositoryInterface) *Us
 	h.settingsRepo = r
 	h.newMailSender = services.NewMailSender
 	return h
+}
+
+func (h *UserHandler) WithPages(r models.PageRepositoryInterface) *UserHandler {
+	h.pageRepo = r
+	return h
+}
+
+// Public: list published pages for footer or navigation
+func (h *UserHandler) ListPublicPages(c *fiber.Ctx) error {
+	if h.pageRepo == nil {
+		return c.JSON(fiber.Map{"pages": []any{}})
+	}
+	list, err := h.pageRepo.ListPublished()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
+	}
+	out := make([]fiber.Map, 0, len(list))
+	for _, p := range list {
+		out = append(out, fiber.Map{"slug": p.Slug, "title": p.Title})
+	}
+	return c.JSON(fiber.Map{"pages": out})
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {

@@ -111,6 +111,14 @@
         </div>
     </div>
 
+    <!-- Optional: full markdown + sanitizer (loaded from CDN, allowed by CSP 'https:') -->
+    <!-- Markdown renderers: prefer markdown-it + plugins; fallback to marked -->
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.2/dist/markdown-it.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it-footnote@3.0.3/dist/markdown-it-footnote.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it-container@3.0.0/dist/markdown-it-container.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it-anchor@8.6.7/dist/markdown-it-anchor.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
     <script src="/js/app.js?v=v3"></script>
 </body>
 </html>
