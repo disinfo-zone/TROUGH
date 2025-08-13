@@ -29,6 +29,12 @@ class TroughApp {
         this.renderEpoch = 0;
         this.pendingTimers = new Set();
         this.routeMode = 'home';
+        // Queue of items not yet rendered as cards (for chunked reveal)
+        this.unrendered = [];
+        // Interaction flag for conservative prefill before any user action
+        this._userInteracted = false;
+        // Optional override to force which masonry column the next card should use
+        this._forcedColumnIndex = null;
         
         // DOM elements
         this.gallery = document.getElementById('gallery');
@@ -270,6 +276,8 @@ class TroughApp {
             const targetPage = Math.max(1, state.page);
             while (this.page <= targetPage && this.hasMore) {
                 await this.loadImages();
+                // Immediately reveal a small batch so the anchor card exists in DOM
+                this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
             }
             this.isRestoring = false;
             // Prefer anchoring by id, then index; fallback to scrollY
@@ -279,14 +287,23 @@ class TroughApp {
             }
             if (!targetCard && Number.isFinite(state.firstVisibleIndex) && state.firstVisibleIndex > 0) {
                 const cards = Array.from(document.querySelectorAll('.image-card'));
-                targetCard = cards[state.firstVisibleIndex] || null;
+                // If the indexed card doesn't exist yet, try revealing until it does or we run out
+                while (!cards[state.firstVisibleIndex] && (this.unrendered && this.unrendered.length)) {
+                    const revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+                    if (!revealed) break;
+                }
+                const cards2 = Array.from(document.querySelectorAll('.image-card'));
+                targetCard = cards2[state.firstVisibleIndex] || null;
             }
             if (targetCard) {
                 const rect = targetCard.getBoundingClientRect();
                 const y = rect.top + window.scrollY - (document.getElementById('nav')?.offsetHeight || 0) - 8;
                 try { window.scrollTo(0, Math.max(0, y)); } catch {}
+                // After anchoring, ensure there is sufficient content below to allow further scrolling
+                await this.topUpBelowViewport(4);
             } else if (typeof state.scrollY === 'number') {
                 try { window.scrollTo(0, state.scrollY); } catch {}
+                await this.topUpBelowViewport(4);
             }
         } else if (path.startsWith('/@')) {
             // For profiles, fetch the page 1 images, then scroll to saved position
@@ -367,6 +384,7 @@ class TroughApp {
             try { if (this.imageObserver) this.imageObserver.disconnect(); } catch {}
             this.lazyQueue = [];
             this.currentImageLoads = 0;
+            this.unrendered = [];
             // Reset managed masonry layout
             this.disableManagedMasonry();
             // Stop any in-flight scroll animations
@@ -382,14 +400,14 @@ class TroughApp {
         // Fallback: if no IO, we'll just let native lazy do the work
         if (!('IntersectionObserver' in window)) return;
         try {
-            // Preload a comfortable buffer below the viewport so scrolling feels instant
-            const rootMargin = '800px 0px 800px 0px';
+			// Preload a comfortable buffer below the viewport so scrolling feels instant
+        const isMobile = window.innerWidth <= 600;
+        const rootMargin = (isMobile ? '200px 0px 200px 0px' : '700px 0px 700px 0px');
             this.imageObserver = new IntersectionObserver((entries) => {
                 for (const entry of entries) {
                     // We observe the card host to avoid zero-area issues; map back to the image
                     const target = entry.target;
                     const img = target._lazyImg || target;
-                    if (this.isRestoring) { continue; }
                     if (entry.isIntersecting) {
                         this.imageObserver.unobserve(target);
                         if (target._lazyImg) delete target._lazyImg;
@@ -411,10 +429,12 @@ class TroughApp {
         const host = img.closest('.image-card') || img;
         const rect = host.getBoundingClientRect();
         const viewportH = window.innerHeight || document.documentElement.clientHeight;
+		const isMobile = window.innerWidth <= 600;
         
         // Load images that are above the fold immediately with high priority
         // Be generous with "above the fold" to ensure instant visibility
-        if (rect.top < viewportH + 100 || this.isRestoring) {
+        const aboveFoldPad = isMobile ? 50 : 100;
+        if (rect.top < viewportH + aboveFoldPad) {
             this.loadImageNow(img, { eager: true, highPriority: true });
             return;
         }
@@ -431,7 +451,8 @@ class TroughApp {
                 visualIndex = Array.from(this.gallery.children).indexOf(host);
             }
         }
-        const eagerThreshold = (this.masonry && this.masonry.enabled && this.masonry.columnCount) ? this.masonry.columnCount : 4;
+		const eagerThresholdBase = (this.masonry && this.masonry.enabled && this.masonry.columnCount) ? this.masonry.columnCount : 4;
+		const eagerThreshold = isMobile ? Math.min(2, eagerThresholdBase) : eagerThresholdBase;
         if (visualIndex > -1 && visualIndex < eagerThreshold) {
             this.loadImageNow(img, { eager: true, highPriority: true });
             return;
@@ -448,7 +469,7 @@ class TroughApp {
         host._lazyImg = img;
         this.imageObserver.observe(host);
 
-        // Safety: re-check after layout settles in case positions changed
+		// Safety: re-check after layout settles in case positions changed
         requestAnimationFrame(() => {
             if (img.dataset.loaded === '1' || img.dataset.loading === '1' || img.dataset.queued === '1') return;
             const h = img.closest('.image-card') || img;
@@ -1301,7 +1322,10 @@ class TroughApp {
             if (resp.ok) {
                 const data = await resp.json();
                 if (data.images && data.images.length > 0) {
-                    this.renderImages(data.images);
+					// Append to unrendered queue; do not immediately create DOM nodes for all
+					this.enqueueUnrendered(data.images);
+					// Attempt to reveal a small chunk if needed
+					this.maybeRevealCards();
                     this.page++;
                 } else {
                     this.hasMore = false;
@@ -1343,16 +1367,69 @@ class TroughApp {
     }
 
     renderImages(images) {
+        // Backwards compatibility: if called directly, route through unrendered queue
+        this.enqueueUnrendered(images);
+        this.maybeRevealCards();
+    }
+
+    enqueueUnrendered(images) {
+        if (!Array.isArray(images) || images.length === 0) return;
+        for (const it of images) this.unrendered.push(it);
+    }
+
+    maybeRevealCards(maxToReveal) {
+        const baseChunk = (window.innerWidth <= 600) ? 4 : 8;
+        let toReveal = Math.min(baseChunk, this.unrendered.length);
+        if (Number.isFinite(maxToReveal) && maxToReveal >= 0) toReveal = Math.min(toReveal, Math.max(0, Math.floor(maxToReveal)));
+        if (toReveal <= 0) return 0;
+
         const epoch = this.renderEpoch;
-        // When managed masonry is enabled, we still stagger a bit but avoid long delays
-        images.forEach((img, index) => {
-            const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
+        let revealed = 0;
+        // On desktop with managed masonry, reveal batches as a balanced row: one per column
+        const useManaged = (this.masonry && this.masonry.enabled && this.masonry.columnCount > 1 && window.innerWidth > 900);
+        const batchSize = toReveal;
+        for (let i = 0; i < toReveal; i++) {
+            const item = this.unrendered.shift();
+            if (!item) break;
             if (this.isRestoring) {
-                this.createImageCard(img);
+                if (useManaged) this._forcedColumnIndex = (this.masonry.appendedCount % this.masonry.columnCount);
+                this.createImageCard(item);
             } else {
-                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
+                // Small stagger to keep UI smooth
+                const tid = this.trackTimeout(setTimeout(() => {
+                    this.untrackTimeout(tid);
+                    if (epoch !== this.renderEpoch) return;
+                    if (useManaged) this._forcedColumnIndex = ((this.masonry.appendedCount) % this.masonry.columnCount);
+                    this.createImageCard(item);
+                }, Math.min(40, i * 20)));
             }
-        });
+            revealed++;
+        }
+        return revealed;
+    }
+
+    async topUpBelowViewport(maxCycles = 3) {
+        // Ensure there is scrollable content below the current viewport after restore
+        const viewportH = window.innerHeight || document.documentElement.clientHeight;
+        let cycles = 0;
+        while (cycles < Math.max(1, maxCycles)) {
+            const doc = document.documentElement;
+            const bottomSpace = doc.scrollHeight - (window.scrollY + viewportH);
+            if (bottomSpace >= Math.floor(viewportH * 0.75)) break;
+            let revealed = 0;
+            if (this.unrendered && this.unrendered.length > 0) {
+                revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 4 : 8);
+            } else if (this.hasMore && !this.loading && this.routeMode === 'home') {
+                await this.loadImages();
+                revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 4 : 8);
+            } else {
+                break;
+            }
+            cycles++;
+            if (!revealed) break;
+            // Allow layout to settle between cycles
+            await new Promise(r => setTimeout(r, 16));
+        }
     }
 
     createImageCard(image) {
@@ -1959,27 +2036,103 @@ class TroughApp {
     setupInfiniteScroll() {
         // Ensure only one scroll listener is attached at a time
         if (this._infiniteScrollCleanup) { try { this._infiniteScrollCleanup(); } catch {} this._infiniteScrollCleanup = null; }
-        let ticking = false;
-        
-        const handleScroll = () => {
-            if (!ticking) {
-                requestAnimationFrame(() => {
-                    const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
-                    
-                    if (scrollTop + clientHeight >= scrollHeight - 1000) {
-                        this.loadImages();
-                    }
-                    
-                    ticking = false;
-                });
-                
-                ticking = true;
-            }
+        // Prefer an IntersectionObserver sentinel to avoid premature loads on mobile
+        const sentinel = document.createElement('div');
+        sentinel.id = 'infinite-scroll-sentinel';
+        sentinel.style.cssText = 'width:1px;height:1px;';
+        // Ensure sentinel is appended at the end of the gallery (after any unrendered reveals too)
+        const appendSentinel = () => {
+            try {
+                if (!this.gallery) return;
+                if (!document.getElementById('infinite-scroll-sentinel')) {
+                    this.gallery.appendChild(sentinel);
+                }
+            } catch {}
         };
-        
-        const onScroll = handleScroll;
-        window.addEventListener('scroll', onScroll, { passive: true });
-        this._infiniteScrollCleanup = () => window.removeEventListener('scroll', onScroll, { passive: true });
+        appendSentinel();
+
+        const isMobile = window.innerWidth <= 600;
+        const margin = isMobile ? '50px 0px 50px 0px' : '200px 0px 200px 0px';
+        let io = null;
+		// State to avoid repeated fetches while sentinel remains intersecting
+		this._infinitePendingExit = false;
+        this._autoFillDone = false;
+        this._userInteracted = false;
+        const markInteracted = () => { this._userInteracted = true; };
+        window.addEventListener('touchstart', markInteracted, { passive: true, once: true });
+        window.addEventListener('wheel', markInteracted, { passive: true, once: true });
+        window.addEventListener('keydown', markInteracted, { passive: true, once: true });
+
+		try {
+			const pushSentinelOut = () => {
+				let cycles = 0;
+				const step = () => {
+					if (cycles >= 8) return; // safety cap per intersection
+					const maxReveal = (window.innerWidth <= 600) ? 2 : 4;
+					const revealed = this.maybeRevealCards(maxReveal);
+					cycles++;
+					// If sentinel still visible and we revealed something, keep pushing
+					const rect = sentinel.getBoundingClientRect();
+					const stillIntersecting = rect.top < (window.innerHeight + 1);
+					if (revealed > 0 && stillIntersecting) {
+						requestAnimationFrame(step);
+					}
+				};
+				requestAnimationFrame(step);
+			};
+
+			io = new IntersectionObserver((entries) => {
+				for (const e of entries) {
+					if (e.target !== sentinel) continue;
+					if (!e.isIntersecting) {
+						this._infinitePendingExit = false;
+						continue;
+					}
+
+					// Always try to reveal queued cards; push sentinel out of view in small steps
+					pushSentinelOut();
+
+					// If nothing left to reveal, consider fetching more
+					if (!this.hasMore) continue;
+					if (this._infinitePendingExit) continue;
+					if (this.loading) continue;
+
+					// Before user interaction: only auto-fill once if viewport isn't filled yet
+					const doc = document.documentElement;
+					const needsFill = (doc.scrollHeight <= (window.innerHeight + 200));
+					if (!this._userInteracted) {
+						if (this._autoFillDone || !needsFill) continue;
+						this._autoFillDone = true;
+					}
+
+					this._infinitePendingExit = true;
+					this.loadImages();
+				}
+			}, { root: null, rootMargin: margin, threshold: 0 });
+		} catch {}
+
+        if (io) {
+            io.observe(sentinel);
+            this._infiniteScrollCleanup = () => { try { io.disconnect(); } catch {}; try { sentinel.remove(); } catch {}; };
+        } else {
+            // Fallback to scroll handler if IO unavailable
+            let ticking = false;
+            const handleScroll = () => {
+                if (!ticking) {
+                    requestAnimationFrame(() => {
+                        const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
+                        if (scrollTop + clientHeight >= scrollHeight - 800) {
+                            this.loadImages();
+                        }
+                        ticking = false;
+                    });
+                    ticking = true;
+                }
+            };
+            const onScroll = handleScroll;
+            window.addEventListener('scroll', onScroll, { passive: true });
+            this._infiniteScrollCleanup = () => window.removeEventListener('scroll', onScroll, { passive: true });
+        }
     }
 
     // Managed masonry: explicit column containers for efficient initial load
@@ -2056,7 +2209,17 @@ class TroughApp {
 
     appendCardToMasonry(card) {
         if (this.masonry && this.masonry.enabled && this.masonry.columns?.length > 0) {
-            this.placeCardSmart(card);
+            // If a forced column is specified (balanced reveal), honor it
+            if (Number.isInteger(this._forcedColumnIndex) && this._forcedColumnIndex >= 0 && this._forcedColumnIndex < this.masonry.columnCount) {
+                const idx = this._forcedColumnIndex;
+                this._forcedColumnIndex = null;
+                this.masonry.columns[idx].appendChild(card);
+                this.masonry.appendedCount = (this.masonry.appendedCount || 0) + 1;
+                // Keep nextColumnIndex in sync with round-robin expectation
+                this.masonry.nextColumnIndex = (idx + 1) % this.masonry.columnCount;
+            } else {
+                this.placeCardSmart(card);
+            }
             // Update row-height hint from the first row for smarter buffer sizing
             if (this.masonry.appendedCount <= this.masonry.columnCount) {
                 const cr = card.getBoundingClientRect();
@@ -2067,6 +2230,13 @@ class TroughApp {
         } else {
             this.gallery.appendChild(card);
         }
+        // Keep sentinel at the end so IO triggers correctly
+        try {
+            const sentinel = document.getElementById('infinite-scroll-sentinel');
+            if (sentinel && sentinel.parentNode === this.gallery) {
+                this.gallery.appendChild(sentinel);
+            }
+        } catch {}
     }
 
     // Place first row round-robin, then append to shortest column for balance
@@ -2102,14 +2272,15 @@ class TroughApp {
         }
     }
 
-    // Compute lazy buffer height: aim for ~two rows in managed mode, otherwise fallback
+	// Compute lazy buffer height: aim for ~two rows in managed mode, otherwise fallback
     computeLazyBuffer() {
-        if (this.masonry && this.masonry.enabled) {
+		if (this.masonry && this.masonry.enabled) {
             const rowH = this.masonry.rowHeightHint || 400;
             // Two rows plus some breathing room
             return Math.min(1600, Math.max(600, Math.round(rowH * 2.25)));
         }
-        return 600;
+		// On mobile, use a smaller buffer to avoid over-eager loading
+		return (window.innerWidth <= 600) ? 250 : 600;
     }
 
     // (legacy mobile magnetic snap system removed)
