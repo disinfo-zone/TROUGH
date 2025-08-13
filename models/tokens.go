@@ -170,37 +170,37 @@ func (r *InviteRepository) RevertConsume(id uuid.UUID) error {
 	return err
 }
 
-func CreatePasswordReset(userID uuid.UUID, token string, expires time.Time) error {
-	_, err := DB().Exec(`INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1,$2,$3)`, userID, token, expires)
+func CreatePasswordReset(userID uuid.UUID, tokenHash string, expires time.Time) error {
+	_, err := DB().Exec(`INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1,$2,$3)`, userID, tokenHash, expires)
 	return err
 }
 
-func GetPasswordReset(token string) (uuid.UUID, time.Time, error) {
+func GetPasswordReset(tokenHash string) (uuid.UUID, time.Time, error) {
 	var uid uuid.UUID
 	var exp time.Time
-	err := DB().QueryRowx(`SELECT user_id, expires_at FROM password_resets WHERE token=$1`, token).Scan(&uid, &exp)
+	err := DB().QueryRowx(`SELECT user_id, expires_at FROM password_resets WHERE token=$1`, tokenHash).Scan(&uid, &exp)
 	return uid, exp, err
 }
 
-func DeletePasswordReset(token string) error {
-	_, err := DB().Exec(`DELETE FROM password_resets WHERE token=$1`, token)
+func DeletePasswordReset(tokenHash string) error {
+	_, err := DB().Exec(`DELETE FROM password_resets WHERE token=$1`, tokenHash)
 	return err
 }
 
-func CreateEmailVerification(userID uuid.UUID, token string, expires time.Time) error {
-	_, err := DB().Exec(`INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1,$2,$3)`, userID, token, expires)
+func CreateEmailVerification(userID uuid.UUID, tokenHash string, expires time.Time) error {
+	_, err := DB().Exec(`INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1,$2,$3)`, userID, tokenHash, expires)
 	return err
 }
 
-func GetEmailVerification(token string) (uuid.UUID, time.Time, error) {
+func GetEmailVerification(tokenHash string) (uuid.UUID, time.Time, error) {
 	var uid uuid.UUID
 	var exp time.Time
-	err := DB().QueryRowx(`SELECT user_id, expires_at FROM email_verifications WHERE token=$1`, token).Scan(&uid, &exp)
+	err := DB().QueryRowx(`SELECT user_id, expires_at FROM email_verifications WHERE token=$1`, tokenHash).Scan(&uid, &exp)
 	return uid, exp, err
 }
 
-func DeleteEmailVerification(token string) error {
-	_, err := DB().Exec(`DELETE FROM email_verifications WHERE token=$1`, token)
+func DeleteEmailVerification(tokenHash string) error {
+	_, err := DB().Exec(`DELETE FROM email_verifications WHERE token=$1`, tokenHash)
 	return err
 }
 

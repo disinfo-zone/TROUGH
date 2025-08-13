@@ -190,7 +190,7 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 		_ = models.SetEmailVerified(userID, false)
 		token := uuid.New().String()
 		exp := time.Now().Add(24 * time.Hour)
-		_ = models.CreateEmailVerification(userID, token, exp)
+		_ = models.CreateEmailVerification(userID, services.HashToken(token), exp)
 		link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
 		// Sync send for user feedback; enqueue for background retry
 		_ = h.newMailSender(set).Send(body.Email, "Verify your email", "Click to verify: "+link)
@@ -657,7 +657,7 @@ func (h *UserHandler) AdminSendVerification(c *fiber.Ctx) error {
 	}
 	token := uuid.New().String()
 	exp := time.Now().Add(24 * time.Hour)
-	if err := models.CreateEmailVerification(id, token, exp); err != nil {
+	if err := models.CreateEmailVerification(id, services.HashToken(token), exp); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
 	link := set.SiteURL + "/verify?token=" + token

@@ -217,15 +217,9 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 			case "ga4":
 				mid := strings.ToUpper(strings.TrimSpace(set.GA4MeasurementID))
 				if gaIDRe.MatchString(mid) {
-					// Use standard GA4 snippet with IP anonymization
-					analytics.WriteString("\n    <!-- Analytics: Google Analytics 4 -->\n")
+					// External GA4 loader only (no inline JS to comply with CSP)
+					analytics.WriteString("\n    <!-- Analytics: Google Analytics 4 (loader only) -->\n")
 					analytics.WriteString("    <script async src=\"https://www.googletagmanager.com/gtag/js?id=" + html.EscapeString(mid) + "\"></script>\n")
-					analytics.WriteString("    <script>\n")
-					analytics.WriteString("      window.dataLayer = window.dataLayer || [];\n")
-					analytics.WriteString("      function gtag(){dataLayer.push(arguments);}\n")
-					analytics.WriteString("      gtag('js', new Date());\n")
-					analytics.WriteString("      gtag('config', '" + html.EscapeString(mid) + "', { 'anonymize_ip': true });\n")
-					analytics.WriteString("    </script>\n")
 				}
 			case "umami":
 				src := strings.TrimSpace(set.UmamiSrc)
@@ -258,6 +252,10 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 }
 
 func main() {
+	// Enforce strong JWT secret at startup
+	if len(os.Getenv("JWT_SECRET")) < 32 {
+		log.Fatalf("JWT_SECRET must be set and at least 32 characters")
+	}
 	config, err := services.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -309,6 +307,34 @@ func main() {
 		Prefork:      false, // enable in prod Linux if desired
 	})
 
+	// Lightweight rate-limiting for sensitive endpoints (login/register/reset)
+	// Without external deps: simple token bucket per IP in-memory
+	type rlEntry struct {
+		tokens   int
+		refillAt time.Time
+	}
+	var rlMu sync.Mutex
+	rl := make(map[string]*rlEntry)
+	limiter := func(capacity int, refill time.Duration) fiber.Handler {
+		return func(c *fiber.Ctx) error {
+			ip := c.IP()
+			now := time.Now()
+			rlMu.Lock()
+			e, ok := rl[ip]
+			if !ok || now.After(e.refillAt) {
+				e = &rlEntry{tokens: capacity, refillAt: now.Add(refill)}
+				rl[ip] = e
+			}
+			if e.tokens <= 0 {
+				rlMu.Unlock()
+				return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{"error": "Too many requests"})
+			}
+			e.tokens--
+			rlMu.Unlock()
+			return c.Next()
+		}
+	}
+
 	// Application logger; skip noise for static and health endpoints
 	app.Use(logger.New(logger.Config{
 		Next: func(c *fiber.Ctx) bool {
@@ -342,9 +368,9 @@ func main() {
 			}
 			return false
 		},
-		AllowHeaders:     "Authorization, Content-Type",
+		AllowHeaders:     "Content-Type, Authorization",
 		AllowMethods:     "GET,POST,PATCH,DELETE,PUT,OPTIONS",
-		AllowCredentials: false,
+		AllowCredentials: true,
 	}))
 
 	// Security headers
@@ -352,6 +378,9 @@ func main() {
 		c.Set("X-Content-Type-Options", "nosniff")
 		c.Set("Referrer-Policy", "no-referrer")
 		c.Set("X-Frame-Options", "SAMEORIGIN")
+		c.Set("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()")
+		// For HTTPS deployments only; safe to set, browsers ignore on HTTP
+		c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 		// Basic CSP allowing self resources and https images; SSR may inject analytics scripts from configured hosts.
 		// Keep img-src https: to avoid breaking remote images on custom domains. Allow inline styles for existing CSS.
 		csp := []string{
@@ -361,8 +390,8 @@ func main() {
 			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
 			// Allow Google Fonts font files
 			"font-src 'self' https://fonts.gstatic.com data:",
-			// Allow inline scripts/handlers used by the SPA while avoiding external inline injection
-			"script-src 'self' 'unsafe-inline' https:",
+			// Disallow inline scripts; allow https script sources (analytics are served from https)
+			"script-src 'self' https:",
 			"connect-src 'self' https:",
 			"frame-ancestors 'self'",
 		}
@@ -398,12 +427,13 @@ func main() {
 
 	api := app.Group("/api")
 
-	api.Post("/register", authHandler.Register)
+	api.Post("/register", limiter(10, time.Minute), authHandler.Register)
 	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
-	api.Post("/login", authHandler.Login)
-	api.Post("/forgot-password", authHandler.ForgotPassword)
-	api.Post("/reset-password", authHandler.ResetPassword)
-	api.Post("/verify-email", authHandler.VerifyEmail)
+	api.Post("/login", limiter(15, time.Minute), authHandler.Login)
+	api.Post("/logout", middleware.Protected(), authHandler.Logout)
+	api.Post("/forgot-password", limiter(5, 5*time.Minute), authHandler.ForgotPassword)
+	api.Post("/reset-password", limiter(10, time.Minute), authHandler.ResetPassword)
+	api.Post("/verify-email", limiter(20, time.Minute), authHandler.VerifyEmail)
 	api.Get("/validate-invite", authHandler.ValidateInvite)
 	api.Post("/me/resend-verification", middleware.Protected(), authHandler.ResendVerification)
 	api.Get("/me", middleware.Protected(), authHandler.Me)

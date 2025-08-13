@@ -605,13 +605,9 @@ class TroughApp {
 
     async checkAuth() {
         const token = localStorage.getItem('token');
-        if (!token) {
-            this.currentUser = null;
-            this.updateAuthButton();
-            return;
-        }
+        // Prefer cookie session; if no token stored, still attempt cookie-based /me
         try {
-            const resp = await fetch('/api/me', { headers: { 'Authorization': `Bearer ${token}` } });
+            const resp = await fetch('/api/me', { credentials: 'include' });
             if (resp.ok) {
                 const data = await resp.json();
                 this.currentUser = data.user;
@@ -721,6 +717,8 @@ class TroughApp {
         };
         if (this.gallery) this.gallery.addEventListener('click', handleInternalLink, true);
         if (this.profileTop) this.profileTop.addEventListener('click', handleInternalLink, true);
+        const nav = document.getElementById('nav');
+        if (nav) nav.addEventListener('click', handleInternalLink, true);
 
         // Intercept logo click to SPA-navigate home (fresh)
         const logo = document.querySelector('.logo');
@@ -745,10 +743,12 @@ class TroughApp {
 
     // Sign out clears auth and updates UI
     signOut() {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        this.currentUser = null;
-        this.updateAuthButton();
+        // Clear server-side cookie session
+        fetch('/api/logout', { method: 'POST', credentials: 'include' }).finally(() => {
+            try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch {}
+            this.currentUser = null;
+            this.updateAuthButton();
+        });
     }
 
     setupAuthModal() {
@@ -757,6 +757,11 @@ class TroughApp {
         const loginForm = document.getElementById('login-form');
         const registerForm = document.getElementById('register-form');
         const submitBtn = document.getElementById('auth-submit');
+        // Wire close actions (no inline handlers)
+        const ab = document.querySelector('#auth-modal .auth-backdrop');
+        const ac = document.querySelector('#auth-modal .auth-close');
+        if (ab) ab.addEventListener('click', () => this.closeAuthModal());
+        if (ac) ac.addEventListener('click', () => this.closeAuthModal());
         const inviteParam = this._pendingInvite || '';
         const setSubmit = (text, disabled) => { submitBtn.textContent = text; submitBtn.disabled = !!disabled; };
         // Hide register tab if public registration is disabled (unless invite present)
@@ -872,10 +877,11 @@ class TroughApp {
         if (!email || !password) { this.showAuthError('Please fill in all fields'); return; }
         this.showLoader(); this.hideAuthError();
         try {
-            const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+            const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ email, password }) });
             const data = await response.json().catch(() => ({}));
             if (response.ok) {
-                localStorage.setItem('token', data.token);
+                // Prefer cookie-based session; still cache user locally for UI
+                try { localStorage.removeItem('token'); } catch {}
                 localStorage.setItem('user', JSON.stringify(data.user));
                 this.currentUser = data.user;
                 this.closeAuthModal(); this.updateAuthButton(); this.showNotification('Welcome back!', 'success');
@@ -953,6 +959,7 @@ class TroughApp {
             const response = await fetch('/api/register' + (invite ? ('?invite=' + encodeURIComponent(invite)) : ''), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({ username, email, password, invite })
             });
 
@@ -964,7 +971,7 @@ class TroughApp {
             const data = await response.json().catch(() => ({}));
 
             if (response.ok) {
-                localStorage.setItem('token', data.token);
+                try { localStorage.removeItem('token'); } catch {}
                 localStorage.setItem('user', JSON.stringify(data.user));
                 this.currentUser = data.user;
                 this.closeAuthModal();
@@ -1115,7 +1122,8 @@ class TroughApp {
         const header = document.createElement('section');
         header.className = 'mono-col';
         header.style.cssText = 'padding:16px 0;color:var(--text-primary);display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 auto;position:relative';
-        const avatar = `<div class="avatar-preview" style="flex:0 0 auto;background-image:url('${user.avatar_url || ''}');"></div>`;
+        const safeAvatar = user.avatar_url ? String(user.avatar_url) : '';
+        const avatar = `<div class="avatar-preview" style="flex:0 0 auto;"></div>`;
         const adminBtn = (isOwner && (isAdmin || isModerator)) ? '<button id="profile-admin" class="link-btn">Admin</button>' : '';
         header.innerHTML = `
           <div class="profile-left" style="display:flex;gap:12px;align-items:center;min-width:0;flex:1">
@@ -1139,6 +1147,11 @@ class TroughApp {
             </div>
           </div>` : ''}
         `;
+        // Set avatar background via style API to avoid inline URL injection
+        const avatarEl = header.querySelector('.avatar-preview');
+        if (avatarEl && safeAvatar) {
+            try { avatarEl.style.backgroundImage = `url('${encodeURI(safeAvatar)}')`; } catch {}
+        }
         this.profileTop.appendChild(header);
         if (isOwner) {
             const sBtn = document.getElementById('profile-settings'); if (sBtn) sBtn.onclick = () => { try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
@@ -1289,7 +1302,7 @@ class TroughApp {
                 input.addEventListener('input', updateCount); updateCount();
                 area.querySelector('#bio-cancel').onclick = () => { this.renderProfilePage(username); };
                 area.querySelector('#bio-save').onclick = async () => {
-                    const resp = await fetch('/api/me/profile', { method:'PATCH', headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ bio: input.value.slice(0,500) }) });
+            const resp = await fetch('/api/me/profile', { method:'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ bio: input.value.slice(0,500) }) });
                     if (resp.ok) { this.showNotification('Bio updated'); this.renderProfilePage(username); }
                     else { const err = await resp.json().catch(()=>({})); this.showNotification(err.error||'Save failed','error'); }
                 };
@@ -1315,10 +1328,7 @@ class TroughApp {
         this.loading = true;
         this.showLoader();
         try {
-            const token = localStorage.getItem('token');
-            const resp = await fetch(`/api/feed?page=${this.page}`, {
-                headers: token ? { 'Authorization': `Bearer ${token}` } : undefined
-            });
+            const resp = await fetch(`/api/feed?page=${this.page}`, { credentials: 'include' });
             if (resp.ok) {
                 const data = await resp.json();
                 if (data.images && data.images.length > 0) {
@@ -1506,7 +1516,7 @@ class TroughApp {
             const meta = document.createElement('div');
             meta.className = 'image-meta';
             const username = image.username || image.author || 'Unknown';
-            const captionHtml = image.caption ? `<div class="image-caption" style="margin-top:4px;color:var(--text-secondary);font-size:0.8rem">${this.sanitizeAndRenderMarkdown(image.caption)}</div>` : '';
+            const captionHtml = image.caption ? `<div class="image-caption" style="margin-top:4px;color:var(--text-secondary);font-size:0.8rem">${this.sanitizeAndRenderMarkdown(String(image.caption))}</div>` : '';
             const actions = canEdit ? `
                 <div class="image-actions" style="display:flex;gap:2px;align-items:center;flex-shrink:0">
                   <button title="Edit" class="like-btn" data-act="edit" data-id="${image.id}" style="width:28px;height:28px;padding:0;color:var(--text-secondary)">
@@ -1519,7 +1529,7 @@ class TroughApp {
             meta.innerHTML = `
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                   <div style="min-width:0">
-                    <div class="image-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${(image.title || image.original_name || 'Untitled').trim()}</a></div>
+                    <div class="image-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${this.escapeHTML(String((image.title || image.original_name || 'Untitled')).trim())}</a></div>
                     <div class="image-author" style="font-family:var(--font-mono)"><a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${this.escapeHTML(String(username))}</a></div>
                   </div>
                   ${actions}
@@ -1548,7 +1558,7 @@ class TroughApp {
                 if (act === 'delete') {
                     const ok = await this.showConfirm('Delete image?');
                     if (ok) {
-                        const resp = await fetch(`/api/images/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                        const resp = await fetch(`/api/images/${id}`, { method: 'DELETE', credentials: 'include' });
                         if (resp.status === 204) { card.remove(); this.showNotification('Image deleted'); } else { this.showNotification('Delete failed', 'error'); }
                     }
                 } else if (act === 'edit') {
@@ -1638,8 +1648,8 @@ class TroughApp {
         panel.innerHTML = `
             ${filename ? `<div style="display:flex;justify-content:center;"><img src="${this.getImageURL(filename)}" alt="" style="max-height:60vh;width:auto;border-radius:10px;border:1px solid var(--border);margin-bottom:12px"/></div>` : ''}
             <div style="position:sticky;bottom:0;background:var(--surface-elevated);border-top:1px solid var(--border);padding-top:12px;display:grid;gap:12px">
-              <input id="e-title" placeholder="Title" value="${(image.title || image.original_name || '').replaceAll('"','&quot;')}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-primary)"/>
-              <textarea id="e-caption" placeholder="Caption" rows="3" maxlength="2000" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-primary)">${(image.caption||'').replaceAll('<','&lt;')}</textarea>
+              <input id="e-title" placeholder="Title" value="${this.escapeHTML(String(image.title || image.original_name || ''))}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-primary)"/>
+              <textarea id="e-caption" placeholder="Caption" rows="3" maxlength="2000" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-primary)">${this.escapeHTML(String(image.caption||''))}</textarea>
               <label style="display:flex;gap:8px;align-items:center;color:var(--text-secondary)"><input type="checkbox" id="e-nsfw" ${image.is_nsfw ? 'checked' : ''}/> NSFW</label>
               <div style="display:flex;gap:8px;justify-content:flex-end">
                 <button id="e-cancel" class="nav-btn">Cancel</button>
@@ -1652,7 +1662,7 @@ class TroughApp {
         panel.querySelector('#e-cancel').onclick = () => overlay.remove();
         panel.querySelector('#e-save').onclick = async () => {
             const body = { title: panel.querySelector('#e-title').value, caption: panel.querySelector('#e-caption').value, is_nsfw: panel.querySelector('#e-nsfw').checked };
-            const resp = await fetch(`/api/images/${image.id}`, { method:'PATCH', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const resp = await fetch(`/api/images/${image.id}`, { method:'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
             if (resp.ok) { overlay.remove(); this.showNotification('Saved'); location.reload(); } else { this.showNotification('Save failed', 'error'); }
         };
     }
@@ -1694,7 +1704,7 @@ class TroughApp {
         lightboxLike.onclick = () => this.toggleLike(image.id);
         // Render caption (sanitized markdown) in lightbox
         if (lightboxCaption) {
-            lightboxCaption.innerHTML = image.caption ? this.sanitizeAndRenderMarkdown(image.caption) : '';
+            lightboxCaption.innerHTML = image.caption ? this.sanitizeAndRenderMarkdown(String(image.caption)) : '';
         }
         this.lightbox.classList.add('active');
         document.body.style.overflow = 'hidden';
@@ -1708,7 +1718,11 @@ class TroughApp {
     }
 
     setupLightbox() {
-        // Backdrop close handled in HTML; ESC handled globally
+        // Wire close actions programmatically to comply with CSP (no inline handlers)
+        const backdrop = document.querySelector('#lightbox .lightbox-backdrop');
+        const closeBtn = document.querySelector('#lightbox .lightbox-close');
+        if (backdrop) backdrop.addEventListener('click', () => this.closeLightbox());
+        if (closeBtn) closeBtn.addEventListener('click', () => this.closeLightbox());
     }
 
     async toggleLike(imageId) {
@@ -1717,7 +1731,7 @@ class TroughApp {
         const wasLiked = likeBtn.classList.contains('liked');
         likeBtn.classList.toggle('liked');
         try {
-            const response = await fetch(`/api/images/${imageId}/like`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type': 'application/json' }});
+            const response = await fetch(`/api/images/${imageId}/like`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
             if (!response.ok) {
                 likeBtn.classList.toggle('liked');
                 if (response.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); this.currentUser = null; this.checkAuth(); this.showAuthModal(); }
@@ -1747,6 +1761,9 @@ class TroughApp {
         document.addEventListener('dragleave', handleDragLeave);
         document.addEventListener('dragover', handleDragOver);
         document.addEventListener('drop', handleDrop);
+        // Wire backdrop close for upload zone as defensive UX
+        const uzBackdrop = document.querySelector('#upload-zone .upload-backdrop');
+        if (uzBackdrop) uzBackdrop.addEventListener('click', () => this.uploadZone.classList.remove('active'));
     }
 
     async promptImageMeta() {
@@ -1781,7 +1798,7 @@ class TroughApp {
         if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
         if (!this.currentUser) { this.showAuthModal(); return; }
         let email = '';
-        try { const resp = await fetch('/api/me/account', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` } }); if (resp.ok) { const acc = await resp.json(); email = acc.email || ''; } } catch {}
+        try { const resp = await fetch('/api/me/account', { credentials: 'include' }); if (resp.ok) { const acc = await resp.json(); email = acc.email || ''; } } catch {}
 
         this.gallery.innerHTML = '';
         if (this.profileTop) this.profileTop.innerHTML = '';
@@ -1872,7 +1889,7 @@ class TroughApp {
         // Back navigation handled centrally in setupHistoryHandler
 
         // Handlers remain (updated references)
-        const authHeader = { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}`, 'Content-Type': 'application/json' };
+        const authHeader = { 'Content-Type': 'application/json' };
         const pref = (this.currentUser?.nsfw_pref || ((this.currentUser?.show_nsfw) ? 'show' : 'hide'));
         (document.querySelector(`input[name='nsfw-pref'][value='${pref}']`)||document.querySelector(`input[name='nsfw-pref'][value='hide']`)).checked = true;
         document.getElementById('btn-nsfw').onclick = async () => {
@@ -1940,20 +1957,20 @@ class TroughApp {
             const fileInput = document.getElementById('avatar-file'); const file = fileInput.files && fileInput.files[0]; if (!file) { this.showNotification('Choose a file first', 'error'); return; }
             const fd = new FormData(); fd.append('avatar', file);
             try {
-                const resp = await fetch('/api/me/avatar', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` }, body: fd });
+                const resp = await fetch('/api/me/avatar', { method:'POST', credentials: 'include', body: fd });
                 if (!resp.ok) throw await resp.json();
                 const data = await resp.json();
-                const pv = document.getElementById('avatar-preview'); if (pv) pv.style.backgroundImage = `url('${data.avatar_url}')`;
+                const pv = document.getElementById('avatar-preview'); if (pv) { try { pv.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
                 this.currentUser.avatar_url = data.avatar_url; localStorage.setItem('user', JSON.stringify(this.currentUser));
                 // Also update profile header avatar if present on page
-                const headerAv = document.querySelector('.avatar-preview'); if (headerAv) headerAv.style.backgroundImage = `url('${data.avatar_url}')`;
+                const headerAv = document.querySelector('.avatar-preview'); if (headerAv) { try { headerAv.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
                 this.showNotification('Avatar updated');
             } catch (e) { this.showNotification(e.error || 'Upload failed', 'error'); }
         };
         if (needVerify) {
             const btn = document.getElementById('btn-resend-verify');
             if (btn) btn.onclick = async () => {
-                try { const r = await fetch('/api/me/resend-verification', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` } }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
+                try { const r = await fetch('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
             };
         }
     }
@@ -1973,11 +1990,7 @@ class TroughApp {
         this.showLoader();
         
         try {
-            const response = await fetch('/api/upload', {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-                body: formData
-            });
+            const response = await fetch('/api/upload', { method: 'POST', credentials: 'include', body: formData });
             
             if (response.ok) {
                 const image = await response.json();
@@ -2396,7 +2409,7 @@ class TroughApp {
         siteSection.className = 'settings-group';
         if (isAdmin) {
             let s = {};
-            try { const r = await fetch('/api/admin/site', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')||''}` }}); if (r.ok) s = await r.json(); } catch {}
+            try { const r = await fetch('/api/admin/site', { credentials: 'include' }); if (r.ok) s = await r.json(); } catch {}
             const smtpConfigured = !!(s.smtp_host && s.smtp_port && s.smtp_username && s.smtp_password);
             siteSection.innerHTML = `
               <div class="settings-label">Site settings</div>
@@ -2499,7 +2512,7 @@ class TroughApp {
             if (upFavBtn) upFavBtn.onclick = async () => {
                 const f = favInput.files[0]; if (!f) { this.showNotification('Choose a favicon file', 'error'); return; }
                 const fd = new FormData(); fd.append('favicon', f);
-                const r = await fetch('/api/admin/site/favicon', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: fd });
+                const r = await fetch('/api/admin/site/favicon', { method:'POST', credentials:'include', body: fd });
                 if (r.ok) { const d = await r.json(); favPreview.src = d.favicon_path || favPreview.src; favPreview.style.display='inline-block'; this.showNotification('Favicon uploaded'); await this.applyPublicSiteSettings(); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
@@ -2512,7 +2525,7 @@ class TroughApp {
             if (upSocialBtn) upSocialBtn.onclick = async () => {
                 const f = socialInput.files[0]; if (!f) { this.showNotification('Choose a social image file', 'error'); return; }
                 const fd = new FormData(); fd.append('image', f);
-                const r = await fetch('/api/admin/site/social-image', { method:'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: fd });
+                const r = await fetch('/api/admin/site/social-image', { method:'POST', credentials:'include', body: fd });
                 if (r.ok) { const d = await r.json(); document.getElementById('social-image').value = d.social_image_url || ''; socialPreview.src = d.social_image_url || socialPreview.src; socialPreview.style.display='inline-block'; this.showNotification('Social image uploaded'); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
@@ -2614,7 +2627,7 @@ class TroughApp {
                     plausible_src: document.getElementById('plausible-src')?.value || '',
                     plausible_domain: document.getElementById('plausible-domain')?.value || '',
                 };
-                const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+                const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Content-Type':'application/json' }, credentials: 'include', body: JSON.stringify(body) });
                 if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }
                 else { this.showNotification('Save failed','error'); }
             };
@@ -2679,7 +2692,7 @@ class TroughApp {
                         row.querySelector('[data-act="copy-code"]').onclick = () => copyToClipboard(inv.code);
                         row.querySelector('[data-act="revoke"]').onclick = async () => {
                             const ok = await this.showConfirm('Revoke this invite?'); if (!ok) return;
-                            const r = await fetch(`/api/admin/invites/${inv.id}`, { method:'DELETE', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                const r = await fetch(`/api/admin/invites/${inv.id}`, { method:'DELETE', credentials:'include' });
                             if (r.status === 204) { this.showNotification('Invite revoked'); await loadInvites(invPage); }
                             else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Revoke failed','error'); }
                         };
@@ -2695,7 +2708,7 @@ class TroughApp {
                         e.preventDefault();
                         const ok = await this.showConfirm('Clear all used and expired invites?');
                         if (!ok) return;
-                        const r = await fetch('/api/admin/invites/prune', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                        const r = await fetch('/api/admin/invites/prune', { method:'POST', credentials:'include' });
                         if (r.ok) { this.showNotification('Cleared'); await loadInvites(invPage); }
                         else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed to clear','error'); }
                     };
@@ -2707,7 +2720,7 @@ class TroughApp {
             };
             const loadInvites = async (page=1) => {
                 invPage = page;
-                const r = await fetch(`/api/admin/invites?page=${page}&limit=${invLimit}`, { headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                const r = await fetch(`/api/admin/invites?page=${page}&limit=${invLimit}`, { credentials:'include' });
                 if (!r.ok) { this.showNotification('Failed to load invites','error'); return; }
                 const d = await r.json().catch(()=>({invites:[],total:0}));
                 renderInvites(d.invites||[], d.page||page, d.total||0, d.limit||invLimit);
@@ -2722,7 +2735,7 @@ class TroughApp {
                 const body = {};
                 if (maxUsesVal !== '') { body.max_uses = parseInt(maxUsesVal, 10); }
                 if (durationVal !== '') { body.duration = durationVal; }
-                const r = await fetch('/api/admin/invites', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+                const r = await fetch('/api/admin/invites', { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify(body) });
                 if (r.ok || r.status === 201) {
                     const d = await r.json().catch(()=>({}));
                     this.showNotification('Invite created');
@@ -2748,11 +2761,7 @@ class TroughApp {
             if (btnTest) btnTest.onclick = async () => {
                 const to = (document.getElementById('smtp-test-to').value||'').trim();
                 if(!to){ this.showNotification('Enter recipient','error'); return;}
-                const r = await fetch('/api/admin/site/test-smtp', {
-                    method:'POST',
-                    headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' },
-                    body: JSON.stringify({ to })
-                });
+                const r = await fetch('/api/admin/site/test-smtp', { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ to }) });
                 if (r.status===204) this.showNotification('Test email sent');
                 else {
                     const e = await r.json().catch(()=>({}));
@@ -3005,11 +3014,11 @@ class TroughApp {
                 : (!username && captionText)
                     ? captionText
                     : asciiFallback;
-        const captionHtml = data.caption ? `<div class="image-caption" id="single-caption" style="margin-top:8px;color:var(--text-secondary);position:relative">${this.sanitizeAndRenderMarkdown(data.caption)}</div>` : '';
+        const captionHtml = data.caption ? `<div class="image-caption" id="single-caption" style="margin-top:8px;color:var(--text-secondary);position:relative">${this.sanitizeAndRenderMarkdown(String(data.caption))}</div>` : '';
         wrap.innerHTML = `
           <div style="display:grid;gap:12px">
             <div class="single-header">
-              <h1 class="single-title" title="${this.escapeHTML(title)}">${this.escapeHTML(title)}</h1>
+              <h1 class="single-title" title="${this.escapeHTML(String(title))}">${this.escapeHTML(String(title))}</h1>
               <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
             </div>
             <div style="display:flex;justify-content:center"><img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>

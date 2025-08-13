@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,14 +76,18 @@ func Protected() fiber.Handler {
 	}
 	return func(c *fiber.Ctx) error {
 		tokenString := c.Get("Authorization")
-		if tokenString == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Missing authorization token",
-			})
+		if tokenString != "" {
+			if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
+				tokenString = tokenString[7:]
+			}
+		} else {
+			// Fallback to auth cookie if Authorization header is absent
+			if v := c.Cookies("auth_token"); strings.TrimSpace(v) != "" {
+				tokenString = v
+			}
 		}
-
-		if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
-			tokenString = tokenString[7:]
+		if tokenString == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Missing authorization token"})
 		}
 
 		secret := getJWTSecret()
@@ -90,6 +95,10 @@ func Protected() fiber.Handler {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
 		}
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+			// Enforce expected signing method
+			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+				return nil, errors.New("invalid signing method")
+			}
 			return []byte(secret), nil
 		})
 
@@ -122,14 +131,22 @@ func Protected() fiber.Handler {
 
 func OptionalUserID(c *fiber.Ctx) uuid.UUID {
 	tokenString := c.Get("Authorization")
-	if tokenString == "" {
-		return uuid.Nil
-	}
-	if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
+	if tokenString != "" && len(tokenString) > 7 && tokenString[:7] == "Bearer " {
 		tokenString = tokenString[7:]
 	}
+	if tokenString == "" {
+		// Fallback to cookie when header missing
+		tokenString = strings.TrimSpace(c.Cookies("auth_token"))
+	}
+	secret := getJWTSecret()
+	if tokenString == "" || len(secret) < 32 {
+		return uuid.Nil
+	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(getJWTSecret()), nil
+		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, errors.New("invalid signing method")
+		}
+		return []byte(secret), nil
 	})
 	if err != nil || !token.Valid {
 		return uuid.Nil

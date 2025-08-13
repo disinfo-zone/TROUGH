@@ -206,7 +206,8 @@ func detectFromEXIF(imagePath string) (bool, AIDetectionResult) {
 		return false, AIDetectionResult{}
 	}
 
-	log.Printf("AI Detection: Found %d EXIF entries for %s", len(entries), imagePath)
+	// Avoid verbose logging of user-provided metadata to reduce leakage/noise
+	log.Printf("AI Detection: EXIF parsed for %s", imagePath)
 	var softwareVal string
 	for _, e := range entries {
 		tn := strings.TrimSpace(e.TagName)
@@ -214,11 +215,8 @@ func detectFromEXIF(imagePath string) (bool, AIDetectionResult) {
 
 		// Log UserComment specifically since that's where SDXL params often are
 		if strings.EqualFold(tn, "UserComment") {
-			logLen := 200
-			if len(val) < logLen {
-				logLen = len(val)
-			}
-			log.Printf("AI Detection: UserComment found (formatted): %s", val[:logLen])
+			// Avoid logging raw user comment content
+			log.Printf("AI Detection: UserComment present (formatted)")
 
 			// Try to get raw value for UserComment since formatted might not work
 			if e.Value != nil {
@@ -234,11 +232,8 @@ func detectFromEXIF(imagePath string) (bool, AIDetectionResult) {
 					rawStr = fmt.Sprintf("%v", e.Value)
 				}
 				if len(rawStr) > 0 && rawStr != val {
-					logLen := 200
-					if len(rawStr) < logLen {
-						logLen = len(rawStr)
-					}
-					log.Printf("AI Detection: UserComment raw: %s", rawStr[:logLen])
+					// Avoid logging raw user comment content
+					log.Printf("AI Detection: UserComment raw present")
 					val = rawStr // Use raw value instead of formatted
 				}
 			}

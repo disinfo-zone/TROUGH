@@ -1,7 +1,9 @@
 package services
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -54,6 +56,12 @@ func NewMailer(cfg *models.SiteSettings) *Mailer {
 
 // Allows swapping in tests
 var NewMailSender = func(cfg *models.SiteSettings) MailSender { return NewMailer(cfg) }
+
+// HashToken computes a hex-encoded SHA-256 of an opaque token string. Use for storing verification/reset tokens at rest.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
 
 func (s *Mailer) Send(to, subject, body string) error {
 	// Build dial address; net.Dial supports bracketed IPv6

@@ -158,7 +158,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			_ = models.SetEmailVerified(u.ID, false)
 			token := uuid.New().String()
 			exp := time.Now().Add(24 * time.Hour)
-			_ = models.CreateEmailVerification(u.ID, token, exp)
+			_ = models.CreateEmailVerification(u.ID, services.HashToken(token), exp)
 			link := set.SiteURL + "/verify?token=" + token
 			services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
 		}
@@ -167,6 +167,16 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
+	// Also set HttpOnly auth cookie alongside JSON token for progressive migration
+	c.Cookie(&fiber.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HTTPOnly: true,
+		Secure:   true,
+		SameSite: "Lax",
+		MaxAge:   24 * 60 * 60,
+	})
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }
 
@@ -205,6 +215,16 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
+	// Also set HttpOnly cookie for auth
+	c.Cookie(&fiber.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HTTPOnly: true,
+		Secure:   true,
+		SameSite: "Lax",
+		MaxAge:   24 * 60 * 60,
+	})
 	return c.JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }
 
@@ -220,6 +240,13 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"user": user.ToResponse()})
+}
+
+// Logout clears the auth cookie for the current session
+func (h *AuthHandler) Logout(c *fiber.Ctx) error {
+	// Overwrite cookie with empty value and immediate expiry
+	c.Cookie(&fiber.Cookie{Name: "auth_token", Value: "", Path: "/", HTTPOnly: true, Secure: true, SameSite: "Lax", MaxAge: -1})
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
@@ -243,8 +270,10 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{"error": "Please wait before requesting again"})
 	}
 	token := uuid.New().String()
+	// Hash token before storing for at-rest protection
+	hashed := services.HashToken(token)
 	expires := time.Now().Add(1 * time.Hour)
-	if err := models.CreatePasswordReset(u.ID, token, expires); err != nil {
+	if err := models.CreatePasswordReset(u.ID, hashed, expires); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
 	link := set.SiteURL + "/reset?token=" + token
@@ -284,7 +313,7 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 	if err := services.ValidatePassword(r.NewPassword); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	uid, exp, err := models.GetPasswordReset(r.Token)
+	uid, exp, err := models.GetPasswordReset(services.HashToken(r.Token))
 	if err != nil || time.Now().After(exp) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid or expired token"})
 	}
@@ -298,12 +327,21 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 	if err := h.userRepo.UpdatePassword(uid, u.PasswordHash); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	_ = models.DeletePasswordReset(r.Token)
+	_ = models.DeletePasswordReset(services.HashToken(r.Token))
 	// Issue a fresh token so client can auto-login
 	tokenStr, err := middleware.GenerateToken(u.ID, u.Username)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
+	c.Cookie(&fiber.Cookie{
+		Name:     "auth_token",
+		Value:    tokenStr,
+		Path:     "/",
+		HTTPOnly: true,
+		Secure:   true,
+		SameSite: "Lax",
+		MaxAge:   24 * 60 * 60,
+	})
 	return c.JSON(fiber.Map{"user": u.ToResponse(), "token": tokenStr})
 }
 
@@ -315,12 +353,12 @@ func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {
 	if err := c.BodyParser(&r); err != nil || r.Token == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Token required"})
 	}
-	uid, exp, err := models.GetEmailVerification(r.Token)
+	uid, exp, err := models.GetEmailVerification(services.HashToken(r.Token))
 	if err != nil || time.Now().After(exp) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid or expired token"})
 	}
 	_ = models.SetEmailVerified(uid, true)
-	_ = models.DeleteEmailVerification(r.Token)
+	_ = models.DeleteEmailVerification(services.HashToken(r.Token))
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -346,7 +384,7 @@ func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
 	}
 	token := uuid.New().String()
 	exp := time.Now().Add(24 * time.Hour)
-	if err := models.CreateEmailVerification(uid, token, exp); err != nil {
+	if err := models.CreateEmailVerification(uid, services.HashToken(token), exp); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
 	link := set.SiteURL + "/verify?token=" + token
