@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"errors"
 	"os"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
+	"github.com/yourusername/trough/models"
 )
 
 type Claims struct {
@@ -16,14 +18,15 @@ type Claims struct {
 }
 
 func getJWTSecret() string {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "trough-default-secret-change-in-production"
-	}
-	return secret
+	// Do not provide a default. Startup must ensure JWT_SECRET is set.
+	return os.Getenv("JWT_SECRET")
 }
 
 func GenerateToken(userID uuid.UUID, username string) (string, error) {
+	secret := getJWTSecret()
+	if len(secret) < 32 {
+		return "", errors.New("JWT secret not configured or too weak")
+	}
 	claims := Claims{
 		UserID:   userID,
 		Username: username,
@@ -35,7 +38,7 @@ func GenerateToken(userID uuid.UUID, username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(getJWTSecret()))
+	return token.SignedString([]byte(secret))
 }
 
 func Protected() fiber.Handler {
@@ -51,8 +54,12 @@ func Protected() fiber.Handler {
 			tokenString = tokenString[7:]
 		}
 
+		secret := getJWTSecret()
+		if len(secret) < 32 {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
+		}
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-			return []byte(getJWTSecret()), nil
+			return []byte(secret), nil
 		})
 
 		if err != nil || !token.Valid {
@@ -68,6 +75,15 @@ func Protected() fiber.Handler {
 			})
 		}
 
+		// Optional token invalidation on password change: reject if token iat < password_changed_at
+		if claims.IssuedAt != nil {
+			var changedAt time.Time
+			// Ignore query errors; only enforce when we can read a non-zero changedAt
+			_ = models.DB().QueryRowx(`SELECT COALESCE(password_changed_at, to_timestamp(0)) FROM users WHERE id = $1`, claims.UserID).Scan(&changedAt)
+			if !changedAt.IsZero() && changedAt.After(claims.IssuedAt.Time) {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
+			}
+		}
 		c.Locals("user_id", claims.UserID)
 		c.Locals("username", claims.Username)
 

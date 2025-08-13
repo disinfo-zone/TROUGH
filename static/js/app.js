@@ -1594,8 +1594,8 @@ class TroughApp {
         }
         const username = image.username || image.author || 'Unknown';
         const titleText = image.title || image.original_name || 'Untitled';
-        // Title becomes a link to the single-image page
-        lightboxTitle.innerHTML = `<a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${titleText}</a>`;
+        // Title becomes a link to the single-image page (escape to prevent XSS)
+        lightboxTitle.innerHTML = `<a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${this.escapeHTML(String(titleText))}</a>`;
         const link = lightboxTitle.querySelector('a.image-link');
         if (link) {
             link.addEventListener('click', async (e) => {

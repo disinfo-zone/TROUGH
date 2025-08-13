@@ -64,6 +64,8 @@ func Migrate() error {
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_moderator BOOLEAN DEFAULT FALSE;
 		-- Email verified (default true for legacy users)
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT TRUE;
+        -- Track password change time for token invalidation (NULL means never changed)
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP NULL;
 
 		CREATE TABLE IF NOT EXISTS images (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

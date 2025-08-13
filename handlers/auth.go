@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"log"
 	"strings"
 	"time"
 
@@ -175,6 +176,8 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
+	// Normalize email for lookup to match registration normalization
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 	}
@@ -183,7 +186,9 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database error"})
+		// Log server-side; avoid leaking DB state to clients
+		log.Printf("login error: GetByEmail failed: %v", err)
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 	}
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})

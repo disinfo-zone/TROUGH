@@ -8,19 +8,20 @@ import (
 )
 
 type User struct {
-	ID            uuid.UUID `json:"id" db:"id"`
-	Username      string    `json:"username" db:"username"`
-	Email         string    `json:"email" db:"email"`
-	PasswordHash  string    `json:"-" db:"password_hash"`
-	Bio           *string   `json:"bio" db:"bio"`
-	AvatarURL     *string   `json:"avatar_url" db:"avatar_url"`
-	IsAdmin       bool      `json:"is_admin" db:"is_admin"`
-	IsModerator   bool      `json:"is_moderator" db:"is_moderator"`
-	ShowNSFW      bool      `json:"show_nsfw" db:"show_nsfw"`
-	IsDisabled    bool      `json:"is_disabled" db:"is_disabled"`
-	NsfwPref      string    `json:"nsfw_pref" db:"nsfw_pref"`
-	EmailVerified bool      `json:"email_verified" db:"email_verified"`
-	CreatedAt     time.Time `json:"created_at" db:"created_at"`
+	ID                uuid.UUID  `json:"id" db:"id"`
+	Username          string     `json:"username" db:"username"`
+	Email             string     `json:"email" db:"email"`
+	PasswordHash      string     `json:"-" db:"password_hash"`
+	Bio               *string    `json:"bio" db:"bio"`
+	AvatarURL         *string    `json:"avatar_url" db:"avatar_url"`
+	IsAdmin           bool       `json:"is_admin" db:"is_admin"`
+	IsModerator       bool       `json:"is_moderator" db:"is_moderator"`
+	ShowNSFW          bool       `json:"show_nsfw" db:"show_nsfw"`
+	IsDisabled        bool       `json:"is_disabled" db:"is_disabled"`
+	NsfwPref          string     `json:"nsfw_pref" db:"nsfw_pref"`
+	EmailVerified     bool       `json:"email_verified" db:"email_verified"`
+	PasswordChangedAt *time.Time `json:"-" db:"password_changed_at"`
+	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
 }
 
 type CreateUserRequest struct {

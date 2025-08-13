@@ -9,7 +9,7 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgres://trough:trough@db:5432/trough?sslmode=disable
-      - JWT_SECRET=${JWT_SECRET:-trough-default-secret-change-in-production}
+      - JWT_SECRET=${JWT_SECRET}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}

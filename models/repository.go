@@ -420,7 +420,7 @@ func (r *LikeRepository) GetByUser(userID uuid.UUID, imageID uuid.UUID) (*Like, 
 }
 
 func (r *UserRepository) UpdatePassword(id uuid.UUID, passwordHash string) error {
-	_, err := r.db.Exec(`UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, id)
+	_, err := r.db.Exec(`UPDATE users SET password_hash = $1, password_changed_at = NOW() WHERE id = $2`, passwordHash, id)
 	return err
 }
 

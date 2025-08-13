@@ -23,14 +23,23 @@ import (
 )
 
 type UserHandler struct {
-	userRepo  models.UserRepositoryInterface
-	imageRepo models.ImageRepositoryInterface
-	storage   services.Storage
-	validator *validator.Validate
+	userRepo      models.UserRepositoryInterface
+	imageRepo     models.ImageRepositoryInterface
+	storage       services.Storage
+	validator     *validator.Validate
+	settingsRepo  models.SiteSettingsRepositoryInterface
+	newMailSender func(*models.SiteSettings) services.MailSender
 }
 
 func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface, storage services.Storage) *UserHandler {
 	return &UserHandler{userRepo: userRepo, imageRepo: imageRepo, storage: storage, validator: validator.New()}
+}
+
+// WithSettings injects site settings repo and mail sender for email verification flows.
+func (h *UserHandler) WithSettings(r models.SiteSettingsRepositoryInterface) *UserHandler {
+	h.settingsRepo = r
+	h.newMailSender = services.NewMailSender
+	return h
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
@@ -159,6 +168,8 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 	if err := c.BodyParser(&body); err != nil || body.Email == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email required"})
 	}
+	// Normalize email
+	body.Email = strings.ToLower(strings.TrimSpace(body.Email))
 	// Conflict check
 	if existing, err := h.userRepo.GetByEmail(body.Email); err == nil && existing != nil {
 		if existing.ID != userID {
@@ -167,6 +178,17 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 	}
 	if err := h.userRepo.UpdateEmail(userID, body.Email); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update email"})
+	}
+	// If email verification is required, mark unverified and send verification email
+	set, _ := h.settingsRepo.Get()
+	if set.RequireEmailVerification && (set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != "") {
+		_ = models.SetEmailVerified(userID, false)
+		token := uuid.New().String()
+		exp := time.Now().Add(24 * time.Hour)
+		_ = models.CreateEmailVerification(userID, token, exp)
+		sender := h.newMailSender(set)
+		link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
+		_ = sender.Send(body.Email, "Verify your email", "Click to verify: "+link)
 	}
 	return c.JSON(fiber.Map{"email": body.Email})
 }
@@ -307,11 +329,8 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to write avatar"})
 		}
 	} else {
-		// Fallback: save original (e.g., webp)
-		path = filepath.Join(avatarDir, uuid.New().String()+filepath.Ext(file.Filename))
-		if err := c.SaveFile(file, path); err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save avatar"})
-		}
+		// Reject avatars we cannot decode to avoid saving arbitrary content
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported or invalid avatar image"})
 	}
 	// Upload to storage (use current storage)
 	data, _ := os.ReadFile(path)

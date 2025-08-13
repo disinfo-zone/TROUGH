@@ -12,6 +12,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+
+	// limiter intentionally omitted to avoid adding new dependencies in this change
 	"github.com/google/uuid"
 	"github.com/yourusername/trough/db"
 	"github.com/yourusername/trough/handlers"
@@ -25,8 +27,10 @@ func customErrorHandler(c *fiber.Ctx, err error) error {
 	if e, ok := err.(*fiber.Error); ok {
 		code = e.Code
 	}
+	// Avoid leaking internal errors to clients. Log the detailed error server-side.
+	log.Printf("error: %v", err)
 	return c.Status(code).JSON(fiber.Map{
-		"error": err.Error(),
+		"error": "internal server error",
 	})
 }
 
@@ -284,7 +288,7 @@ func main() {
 	}
 	services.SetCurrentStorage(storage)
 	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage)
-	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage)
+	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo)
 	inviteRepo := models.NewInviteRepository(db.DB)
 	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo)
 	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
@@ -293,7 +297,55 @@ func main() {
 
 	app.Use(logger.New())
 	app.Use(compress.New())
-	app.Use(cors.New())
+	// Configure CORS for API. Do not affect images/scripts loading.
+	app.Use(cors.New(cors.Config{
+		AllowOriginsFunc: func(origin string) bool {
+			set, _ := siteRepo.Get()
+			allowed := strings.TrimSpace(set.SiteURL)
+			if allowed == "" || origin == "" {
+				return false
+			}
+			allowed = strings.TrimRight(allowed, "/")
+			// Allow exact match. Also allow same host with http/https scheme variance in dev.
+			if strings.EqualFold(origin, allowed) {
+				return true
+			}
+			// Best-effort: compare hosts ignoring scheme
+			// origin like https://example.com
+			oi := strings.Index(origin, "://")
+			ai := strings.Index(allowed, "://")
+			if oi > 0 && ai > 0 {
+				return strings.EqualFold(origin[oi+3:], allowed[ai+3:])
+			}
+			return false
+		},
+		AllowHeaders:     "Authorization, Content-Type",
+		AllowMethods:     "GET,POST,PATCH,DELETE,PUT,OPTIONS",
+		AllowCredentials: false,
+	}))
+
+	// Security headers
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("Referrer-Policy", "no-referrer")
+		c.Set("X-Frame-Options", "SAMEORIGIN")
+		// Basic CSP allowing self resources and https images; SSR may inject analytics scripts from configured hosts.
+		// Keep img-src https: to avoid breaking remote images on custom domains. Allow inline styles for existing CSS.
+		csp := []string{
+			"default-src 'self'",
+			"img-src 'self' data: https:",
+			// Allow Google Fonts stylesheet
+			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+			// Allow Google Fonts font files
+			"font-src 'self' https://fonts.gstatic.com data:",
+			// Allow inline scripts/handlers used by the SPA while avoiding external inline injection
+			"script-src 'self' 'unsafe-inline' https:",
+			"connect-src 'self' https:",
+			"frame-ancestors 'self'",
+		}
+		c.Set("Content-Security-Policy", strings.Join(csp, "; "))
+		return c.Next()
+	})
 
 	// Serve SPA entry with server-side meta tags for key routes
 	index := indexWithMetaHandler(siteRepo, imageRepo)
@@ -322,6 +374,7 @@ func main() {
 	api := app.Group("/api")
 
 	api.Post("/register", authHandler.Register)
+	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
 	api.Post("/login", authHandler.Login)
 	api.Post("/forgot-password", authHandler.ForgotPassword)
 	api.Post("/reset-password", authHandler.ResetPassword)

@@ -60,7 +60,11 @@ make run
 
 ```bash
 DATABASE_URL=postgres://trough:trough@localhost:5432/trough?sslmode=disable
-JWT_SECRET=your-secret-key-here
+# JWT secret: REQUIRED in all environments. At least 32 random bytes.
+# Examples to generate one:
+#   PowerShell: [Convert]::ToBase64String((New-Object System.Security.Cryptography.RNGCryptoServiceProvider).GetBytes(48))
+#   bash:       openssl rand -base64 48
+JWT_SECRET=<set-a-strong-random-secret>
 # Optional: remote storage (S3/R2)
 STORAGE_PROVIDER=s3            # or r2
 S3_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
