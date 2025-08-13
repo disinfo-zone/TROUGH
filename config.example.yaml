@@ -9,3 +9,5 @@ aesthetic:
   thumbnail_quality: 85
   max_width: 2048
   formats: [".jpg", ".jpeg", ".png", ".webp"]
+
+

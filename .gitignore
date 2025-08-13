@@ -1,6 +1,7 @@
 # Environment and secrets
 .env
 .env.*
+!.env.example
 /config.yaml
 
 # OS / Editor
@@ -13,6 +14,7 @@ Thumbs.db
 # AI/LLM assistant artifacts
 CLAUDE.md
 claude.md
+.claude/
 .cursorrules
 .cursor/
 .anthropic/
@@ -21,6 +23,16 @@ claude.md
 *.prompt.md
 *.llm
 *.llm.*
+
+# Shell/env helpers
+.envrc
+.envrc.local
+
+# Private keys (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Logs
 *.log

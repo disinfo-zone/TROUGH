@@ -74,6 +74,14 @@ S3_SECRET_ACCESS_KEY=<secret>
 STORAGE_PUBLIC_BASE_URL=https://cdn.example.com   # optional CDN/public base URL
 ```
 
+## Configuration
+
+Copy `config.example.yaml` to `config.yaml` to customize AI signatures and aesthetic defaults.
+
+```bash
+cp config.example.yaml config.yaml
+```
+
 ## API Endpoints
 
 ### Authentication
