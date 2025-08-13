@@ -97,43 +97,37 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 			}
 		}
 	}
-	// Decode image for processing (register webp in services/image.go init via blank import)
+	// Decode image once (register webp via blank import)
 	if _, err := src.Seek(0, 0); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploaded file"})
 	}
-	img, _, err := image.Decode(src)
+	img, format, err := image.Decode(src)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to decode image"})
 	}
-	// Compute meta
-	// Rewind for ProcessImage which also decodes.
-	src.Seek(0, 0)
-	imageMeta, err := services.ProcessImage(src)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to process image"})
-	}
+	// Compute meta from decoded image to avoid double decode
+	imageMeta := services.ProcessDecodedImage(img, format)
 
 	// Write out as JPEG with XMP preserved (if present)
 	tmpPath := filepath.Join("uploads", uuid.New().String()+filepath.Ext(file.Filename))
 	if err := os.MkdirAll("uploads", 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create upload directory"})
 	}
-	// Save original bytes to temp to scan for XMP/EXIF
+	// Save original bytes to temp to scan for XMP/EXIF and for possible re-encode source
 	src.Seek(0, 0)
-	tmpFile, err := os.Create(tmpPath)
-	if err != nil {
+	var originalBytes []byte
+	if buf, err := io.ReadAll(src); err == nil {
+		originalBytes = buf
+	} else {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to buffer upload"})
+	}
+	if err := os.WriteFile(tmpPath, originalBytes, 0o644); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save temp file"})
 	}
-	if _, err = io.Copy(tmpFile, src); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save temp file"})
-	}
-	tmpFile.Close()
 
 	// AI provenance detection on the original file. Reject early if none.
-	xmpOriginal := services.ExtractXMPXML(tmpPath)
-	aiOK, aiRes := services.DetectAIProvenance(tmpPath, xmpOriginal)
+	xmpOriginal := services.ExtractXMPXMLFromBytes(originalBytes)
+	aiOK, aiRes := services.DetectAIProvenanceFromBytes(originalBytes, xmpOriginal)
 	if !aiOK {
 		os.Remove(tmpPath)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Upload rejected. Only AI-generated images with verifiable metadata (EXIF or XMP; C2PA optional) are accepted."})
@@ -146,12 +140,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	var filename string
 	originalExt := strings.ToLower(filepath.Ext(file.Filename))
 	if aiRes.Method == "c2pa" {
-		b, err := os.ReadFile(tmpPath)
-		if err != nil {
-			os.Remove(tmpPath)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploaded file"})
-		}
-		finalBytes = b
+		finalBytes = originalBytes
 		// Preserve original extension and content type if supported
 		switch originalExt {
 		case ".jpg", ".jpeg":
@@ -169,12 +158,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		// If the image has transparency, preserve the original bytes to keep alpha and any metadata intact.
 		// This avoids flattening artifacts and respects original authoring.
 		if !services.IsOpaque(img) {
-			b, err := os.ReadFile(tmpPath)
-			if err != nil {
-				os.Remove(tmpPath)
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploaded file"})
-			}
-			finalBytes = b
+			finalBytes = originalBytes
 			switch originalExt {
 			case ".png":
 				contentType = "image/png"
@@ -208,7 +192,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 				quality = 86
 			}
 			// Extract raw EXIF to reattach if available
-			exifRaw := services.ExtractExifRaw(tmpPath)
+			exifRaw := services.ExtractExifRawFromBytes(originalBytes)
 			out, err := services.EncodeJPEGWithMetadata(resized, quality, xmpOriginal, exifRaw)
 			if err != nil {
 				os.Remove(tmpPath)
@@ -246,17 +230,10 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 
 	// Extract EXIF JSON from the final file (after any re-encode)
 	var exifFull json.RawMessage
-	if st.IsLocal() {
-		localPath := filepath.Join("uploads", filename)
-		exifFull = services.ExtractExifJSON(localPath)
+	if len(finalBytes) > 0 {
+		exifFull = services.ExtractExifJSONFromBytes(finalBytes)
 	} else {
-		tmpExif := filepath.Join("uploads", "tmp-exif-"+uuid.New().String()+".jpg")
-		if err := os.WriteFile(tmpExif, finalBytes, 0o644); err == nil {
-			exifFull = services.ExtractExifJSON(tmpExif)
-			os.Remove(tmpExif)
-		} else {
-			exifFull = json.RawMessage("null")
-		}
+		exifFull = services.ExtractExifJSONFromBytes(originalBytes)
 	}
 
 	var exifData json.RawMessage
@@ -317,6 +294,11 @@ func (h *ImageHandler) GetFeed(c *fiber.Ctx) error {
 		page = 1
 	}
 	limit := 20
+	if lq := strings.TrimSpace(c.Query("limit", "")); lq != "" {
+		if v, err := strconv.Atoi(lq); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
 
 	// Determine NSFW visibility based on user pref
 	showNSFW := false
@@ -327,6 +309,32 @@ func (h *ImageHandler) GetFeed(c *fiber.Ctx) error {
 		}
 	}
 
+	// Prefer seek-based when cursor is provided; optional totals only when asked and on first page/no cursor
+	cursor := strings.TrimSpace(c.Query("cursor", ""))
+	if cursor != "" {
+		images, next, err := h.imageRepo.GetFeedSeek(limit, showNSFW, cursor)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images"})
+		}
+		return c.JSON(models.FeedResponse{Images: images, NextCursor: next})
+	}
+	// Optional totals flag
+	includeTotal := strings.EqualFold(strings.TrimSpace(c.Query("include_total", "")), "true")
+	if includeTotal && page == 1 {
+		images, _, err := h.imageRepo.GetFeedSeek(limit, showNSFW, "")
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images"})
+		}
+		total, _ := h.imageRepo.CountFeed(showNSFW)
+		return c.JSON(models.FeedResponse{Images: images, Page: 1, Total: total, NextCursor: func() string {
+			if len(images) > 0 {
+				last := images[len(images)-1]
+				return models.EncodeCursor(last.CreatedAt, last.ID)
+			}
+			return ""
+		}()})
+	}
+	// Backward-compatible page/offset fallback
 	images, total, err := h.imageRepo.GetFeed(page, limit, showNSFW)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images"})

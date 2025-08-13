@@ -313,6 +313,8 @@ func (h *AdminHandler) UpdateSiteSettings(c *fiber.Ctx) error {
 	if err := h.settingsRepo.Upsert(&body); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save settings"})
 	}
+	// Update in-memory settings cache immediately
+	services.UpdateCachedSettings(body)
 	// If storage settings changed, rebuild the storage for subsequent requests
 	if st, err := services.NewStorageFromSettings(body); err == nil {
 		h.storage = st

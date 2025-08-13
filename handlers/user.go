@@ -75,25 +75,30 @@ func (h *UserHandler) GetUserImages(c *fiber.Ctx) error {
 		})
 	}
 
+	// Support both cursor and page for compatibility
+	limit := 20
+	if lq := strings.TrimSpace(c.Query("limit", "")); lq != "" {
+		if v, err := strconv.Atoi(lq); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	cursor := strings.TrimSpace(c.Query("cursor", ""))
+	if cursor != "" {
+		images, next, err := h.imageRepo.GetUserImagesSeek(user.ID, limit, cursor)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch user images"})
+		}
+		return c.JSON(models.FeedResponse{Images: images, NextCursor: next})
+	}
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	if page < 1 {
 		page = 1
 	}
-
-	limit := 20
-
 	images, total, err := h.imageRepo.GetUserImages(user.ID, page, limit)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to fetch user images",
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch user images"})
 	}
-
-	return c.JSON(models.FeedResponse{
-		Images: images,
-		Page:   page,
-		Total:  total,
-	})
+	return c.JSON(models.FeedResponse{Images: images, Page: page, Total: total})
 }
 
 func (h *UserHandler) GetMyProfile(c *fiber.Ctx) error {
@@ -186,9 +191,10 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 		token := uuid.New().String()
 		exp := time.Now().Add(24 * time.Hour)
 		_ = models.CreateEmailVerification(userID, token, exp)
-		sender := h.newMailSender(set)
 		link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
-		_ = sender.Send(body.Email, "Verify your email", "Click to verify: "+link)
+		// Sync send for user feedback; enqueue for background retry
+		_ = h.newMailSender(set).Send(body.Email, "Verify your email", "Click to verify: "+link)
+		services.EnqueueMail(body.Email, "Verify your email", "Click to verify: "+link)
 	}
 	return c.JSON(fiber.Map{"email": body.Email})
 }
@@ -227,6 +233,7 @@ func (h *UserHandler) UpdatePassword(c *fiber.Ctx) error {
 	if err := h.userRepo.UpdatePassword(userID, user.PasswordHash); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update password"})
 	}
+	// Best-effort: issue short response; token invalidation cache refresh happens via DB read path
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -653,11 +660,11 @@ func (h *UserHandler) AdminSendVerification(c *fiber.Ctx) error {
 	if err := models.CreateEmailVerification(id, token, exp); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	sender := services.NewMailSender(set)
 	link := set.SiteURL + "/verify?token=" + token
-	if err := sender.Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
+	if err := services.NewMailSender(set).Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
 	}
+	services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

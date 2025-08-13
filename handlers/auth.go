@@ -159,9 +159,8 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			token := uuid.New().String()
 			exp := time.Now().Add(24 * time.Hour)
 			_ = models.CreateEmailVerification(u.ID, token, exp)
-			sender := h.newMailSender(set)
 			link := set.SiteURL + "/verify?token=" + token
-			_ = sender.Send(u.Email, "Verify your email", "Click to verify: "+link)
+			services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
 		}
 	}
 	token, err := middleware.GenerateToken(user.ID, user.Username)
@@ -248,7 +247,6 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	if err := models.CreatePasswordReset(u.ID, token, expires); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	sender := h.newMailSender(set)
 	link := set.SiteURL + "/reset?token=" + token
 	// Plain-text, ASCII-styled message with clear instructions and expiry notice
 	body := "" +
@@ -266,9 +264,11 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 		"This link expires in 1 hour or after it is used once.\n" +
 		"For security, never share this link.\n\n" +
 		"— TROUGH\n"
-	if err := sender.Send(u.Email, "Reset your password", body); err != nil {
+		// Try async path; also attempt sync for immediate error surface
+	if err := h.newMailSender(set).Send(u.Email, "Reset your password", body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
 	}
+	services.EnqueueMail(u.Email, "Reset your password", body)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -349,10 +349,10 @@ func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
 	if err := models.CreateEmailVerification(uid, token, exp); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	sender := h.newMailSender(set)
 	link := set.SiteURL + "/verify?token=" + token
-	if err := sender.Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
+	if err := h.newMailSender(set).Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
 	}
+	services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
 	return c.SendStatus(fiber.StatusNoContent)
 }

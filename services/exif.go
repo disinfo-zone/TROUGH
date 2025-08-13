@@ -73,3 +73,37 @@ func ExtractExifRaw(imagePath string) []byte {
 	}
 	return rawExif
 }
+
+// ExtractExifJSONFromBytes mirrors ExtractExifJSON but works on an in-memory buffer.
+func ExtractExifJSONFromBytes(imageBytes []byte) json.RawMessage {
+	rawExif, err := exif.SearchAndExtractExif(imageBytes)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	entries, _, err := exif.GetFlatExifData(rawExif, nil)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	m := map[string]interface{}{}
+	for _, e := range entries {
+		key := e.TagName
+		if _, exists := m[key]; exists {
+			key = key + "_dup"
+		}
+		m[key] = e.Formatted
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return json.RawMessage(b)
+}
+
+// ExtractExifRawFromBytes returns raw EXIF payload from in-memory buffer, if present.
+func ExtractExifRawFromBytes(imageBytes []byte) []byte {
+	rawExif, err := exif.SearchAndExtractExif(imageBytes)
+	if err != nil || len(rawExif) == 0 {
+		return nil
+	}
+	return rawExif
+}

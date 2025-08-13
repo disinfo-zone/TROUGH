@@ -24,6 +24,15 @@ func ExtractXMPXML(filePath string) []byte {
 	return nil
 }
 
+// ExtractXMPXMLFromBytes scans in-memory bytes for an XMP packet.
+func ExtractXMPXMLFromBytes(b []byte) []byte {
+	m := xmpRegex.Find(b)
+	if len(m) > 0 {
+		return m
+	}
+	return nil
+}
+
 // WriteJPEGWithXMP encodes img as JPEG and embeds XMP (if provided) as an APP1 segment.
 func WriteJPEGWithXMP(img image.Image, quality int, destPath string, xmp []byte) error {
 	var buf bytes.Buffer

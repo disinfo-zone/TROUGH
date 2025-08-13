@@ -36,6 +36,9 @@ func Connect() error {
 
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(25)
+	// Recycle connections to prevent memory bloat and stale server-side state
+	DB.SetConnMaxLifetime(30 * time.Minute)
+	DB.SetConnMaxIdleTime(5 * time.Minute)
 
 	return nil
 }

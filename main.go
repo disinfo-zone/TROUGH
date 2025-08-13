@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -281,8 +282,8 @@ func main() {
 	// Build storage from settings or env
 	// Note: inviteRepo will be created after storage since it depends only on DB
 	// Build storage from settings or env
-	stSettings, _ := siteRepo.Get()
-	storage, err := services.NewStorageFromSettings(*stSettings)
+	stSettings := services.GetCachedSettings(siteRepo)
+	storage, err := services.NewStorageFromSettings(stSettings)
 	if err != nil {
 		storage = services.NewLocalStorage("uploads")
 	}
@@ -292,15 +293,37 @@ func main() {
 	inviteRepo := models.NewInviteRepository(db.DB)
 	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo)
 	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
+	// Initialize async mail queue if SMTP is configured
+	if set, err := siteRepo.Get(); err == nil && set != nil {
+		if set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != "" {
+			services.InitMailQueue(services.NewMailSender, siteRepo)
+		}
+	}
 
-	app := fiber.New(fiber.Config{BodyLimit: 10 * 1024 * 1024, ErrorHandler: customErrorHandler})
+	app := fiber.New(fiber.Config{
+		BodyLimit:    10 * 1024 * 1024,
+		ErrorHandler: customErrorHandler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+		Prefork:      false, // enable in prod Linux if desired
+	})
 
-	app.Use(logger.New())
+	// Application logger; skip noise for static and health endpoints
+	app.Use(logger.New(logger.Config{
+		Next: func(c *fiber.Ctx) bool {
+			p := c.Path()
+			if strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/uploads/") || p == "/healthz" || p == "/" {
+				return true
+			}
+			return false
+		},
+	}))
 	app.Use(compress.New())
 	// Configure CORS for API. Do not affect images/scripts loading.
 	app.Use(cors.New(cors.Config{
 		AllowOriginsFunc: func(origin string) bool {
-			set, _ := siteRepo.Get()
+			set := services.GetCachedSettings(siteRepo)
 			allowed := strings.TrimSpace(set.SiteURL)
 			if allowed == "" || origin == "" {
 				return false
@@ -359,17 +382,19 @@ func main() {
 	app.Get("/i/:id", index)
 
 	// Static assets
-	app.Static("/", "./static", fiber.Static{Compress: true, CacheDuration: 3600})
+	app.Static("/", "./static", fiber.Static{Compress: true, CacheDuration: 3600, MaxAge: 31536000})
 	// Local uploads are served statically when storage is local. For remote storage (S3/R2),
 	// we keep this mount (for legacy/local files), and add a redirector for /uploads/* to the
 	// configured public base if set.
-	app.Static("/uploads", "./uploads", fiber.Static{Compress: true, CacheDuration: 86400})
+	app.Static("/uploads", "./uploads", fiber.Static{Compress: true, CacheDuration: 86400, MaxAge: 31536000})
 	if !storage.IsLocal() && strings.TrimSpace(stSettings.PublicBaseURL) != "" {
 		app.Get("/uploads/*", func(c *fiber.Ctx) error {
 			key := c.Params("*")
 			return c.Redirect(storage.PublicURL(key), fiber.StatusFound)
 		})
 	}
+	// Simple health endpoint for uptime checks (not logged)
+	app.Get("/healthz", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
 	api := app.Group("/api")
 

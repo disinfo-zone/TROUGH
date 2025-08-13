@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"encoding/base64"
+
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 )
@@ -202,12 +204,12 @@ func (r *ImageRepository) GetFeed(page, limit int, showNSFW bool) ([]ImageWithUs
 	}
 
 	query := `
-		SELECT i.*, u.username, u.avatar_url
-		FROM images i
-		JOIN users u ON i.user_id = u.id
-		WHERE ($1 OR i.is_nsfw = false)
-		ORDER BY i.created_at DESC
-		LIMIT $2 OFFSET $3`
+        SELECT i.*, u.username, u.avatar_url
+        FROM images i
+        JOIN users u ON i.user_id = u.id
+        WHERE ($1 OR i.is_nsfw = false)
+        ORDER BY i.created_at DESC, i.id DESC
+        LIMIT $2 OFFSET $3`
 
 	err = r.db.Select(&images, query, showNSFW, limit, offset)
 	if err != nil {
@@ -215,6 +217,91 @@ func (r *ImageRepository) GetFeed(page, limit int, showNSFW bool) ([]ImageWithUs
 	}
 
 	return images, total, nil
+}
+
+// --- Seek-based feed pagination ---
+
+type FeedSeekCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+func encodeFeedCursor(c FeedSeekCursor) string {
+	// Use Unix microseconds for compactness
+	payload := fmt.Sprintf("%d|%s", c.CreatedAt.UnixMicro(), c.ID.String())
+	return base64.RawURLEncoding.EncodeToString([]byte(payload))
+}
+
+func decodeFeedCursor(s string) (*FeedSeekCursor, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(string(b), "|", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	var us int64
+	if _, err := fmt.Sscanf(parts[0], "%d", &us); err != nil {
+		return nil, fmt.Errorf("invalid cursor time")
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor id")
+	}
+	t := time.UnixMicro(us)
+	return &FeedSeekCursor{CreatedAt: t, ID: id}, nil
+}
+
+// GetFeedSeek returns images before the cursor (exclusive), ordered desc.
+// If cursor is nil, returns the first page.
+func (r *ImageRepository) GetFeedSeek(limit int, showNSFW bool, cursorEncoded string) ([]ImageWithUser, string, error) {
+	cur, err := decodeFeedCursor(cursorEncoded)
+	if err != nil {
+		return nil, "", err
+	}
+	var images []ImageWithUser
+	if cur == nil {
+		// First page
+		q := `
+            SELECT i.*, u.username, u.avatar_url
+            FROM images i
+            JOIN users u ON i.user_id = u.id
+            WHERE ($1 OR i.is_nsfw = false)
+            ORDER BY i.created_at DESC, i.id DESC
+            LIMIT $2`
+		if err := r.db.Select(&images, q, showNSFW, limit); err != nil {
+			return nil, "", err
+		}
+	} else {
+		q := `
+            SELECT i.*, u.username, u.avatar_url
+            FROM images i
+            JOIN users u ON i.user_id = u.id
+            WHERE ($1 OR i.is_nsfw = false)
+              AND (i.created_at < $2 OR (i.created_at = $2 AND i.id < $3))
+            ORDER BY i.created_at DESC, i.id DESC
+            LIMIT $4`
+		if err := r.db.Select(&images, q, showNSFW, cur.CreatedAt, cur.ID, limit); err != nil {
+			return nil, "", err
+		}
+	}
+	if len(images) == 0 {
+		return images, "", nil
+	}
+	last := images[len(images)-1]
+	next := encodeFeedCursor(FeedSeekCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	return images, next, nil
+}
+
+// CountFeed returns the total number of feed images under the current NSFW filter.
+func (r *ImageRepository) CountFeed(showNSFW bool) (int, error) {
+	var total int
+	err := r.db.Get(&total, `SELECT COUNT(*) FROM images WHERE ($1 OR is_nsfw = false)`, showNSFW)
+	return total, err
 }
 
 func (r *ImageRepository) GetByID(id uuid.UUID) (*ImageWithUser, error) {
@@ -258,6 +345,50 @@ func (r *ImageRepository) GetUserImages(userID uuid.UUID, page, limit int) ([]Im
 	}
 
 	return images, total, nil
+}
+
+// GetUserImagesSeek returns images for a user before the cursor.
+func (r *ImageRepository) GetUserImagesSeek(userID uuid.UUID, limit int, cursorEncoded string) ([]ImageWithUser, string, error) {
+	cur, err := decodeFeedCursor(cursorEncoded)
+	if err != nil {
+		return nil, "", err
+	}
+	var images []ImageWithUser
+	if cur == nil {
+		q := `
+            SELECT i.*, u.username, u.avatar_url
+            FROM images i
+            JOIN users u ON i.user_id = u.id
+            WHERE i.user_id = $1
+            ORDER BY i.created_at DESC, i.id DESC
+            LIMIT $2`
+		if err := r.db.Select(&images, q, userID, limit); err != nil {
+			return nil, "", err
+		}
+	} else {
+		q := `
+            SELECT i.*, u.username, u.avatar_url
+            FROM images i
+            JOIN users u ON i.user_id = u.id
+            WHERE i.user_id = $1 AND (i.created_at < $2 OR (i.created_at = $2 AND i.id < $3))
+            ORDER BY i.created_at DESC, i.id DESC
+            LIMIT $4`
+		if err := r.db.Select(&images, q, userID, cur.CreatedAt, cur.ID, limit); err != nil {
+			return nil, "", err
+		}
+	}
+	if len(images) == 0 {
+		return images, "", nil
+	}
+	last := images[len(images)-1]
+	next := encodeFeedCursor(FeedSeekCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	return images, next, nil
+}
+
+func (r *ImageRepository) CountUserImages(userID uuid.UUID) (int, error) {
+	var total int
+	err := r.db.Get(&total, `SELECT COUNT(*) FROM images WHERE user_id = $1`, userID)
+	return total, err
 }
 
 func (r *ImageRepository) Delete(id uuid.UUID) error {

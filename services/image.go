@@ -50,6 +50,22 @@ func ProcessImage(file multipart.File) (ImageMeta, error) {
 	return meta, nil
 }
 
+// ProcessDecodedImage computes ImageMeta from an already decoded image.
+// Avoids a second decode on the upload path.
+func ProcessDecodedImage(img image.Image, detectedFormat string) ImageMeta {
+	bounds := img.Bounds()
+	meta := ImageMeta{
+		Width:  bounds.Dx(),
+		Height: bounds.Dy(),
+		Format: detectedFormat,
+	}
+	if hash, err := blurhash.Encode(4, 3, img); err == nil {
+		meta.Blurhash = hash
+	}
+	meta.DominantColor = extractDominantColor(img)
+	return meta
+}
+
 func extractDominantColor(img image.Image) string {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()

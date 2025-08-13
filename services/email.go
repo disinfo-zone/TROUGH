@@ -7,6 +7,7 @@ import (
 	"net/smtp"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/yourusername/trough/models"
 )
@@ -62,10 +63,14 @@ func (s *Mailer) Send(to, subject, body string) error {
 		"Subject: " + subject + "\r\n" +
 		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body + "\r\n")
 	auth := smtp.PlainAuth("", s.user, s.pass, s.host)
+	// Common dialer with timeouts for non-implicit TLS path
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
 
 	// If TLS is enabled and using implicit TLS (commonly port 465), connect via TLS immediately
 	if s.tls && s.port == 465 {
-		conn, err := tls.Dial("tcp", hostPort, &tls.Config{ServerName: s.host})
+		// Implicit TLS (465): bound handshake with timeout
+		d := &net.Dialer{Timeout: 10 * time.Second}
+		conn, err := tls.DialWithDialer(d, "tcp", hostPort, &tls.Config{ServerName: s.host})
 		if err != nil {
 			return err
 		}
@@ -74,6 +79,8 @@ func (s *Mailer) Send(to, subject, body string) error {
 			return err
 		}
 		defer c.Close()
+		// Bound the overall SMTP interaction
+		_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
 		if err := c.Auth(auth); err != nil {
 			return err
 		}
@@ -97,7 +104,7 @@ func (s *Mailer) Send(to, subject, body string) error {
 	}
 
 	// For STARTTLS (commonly port 587) or plain connection, dial then optionally upgrade
-	conn, err := net.Dial("tcp", hostPort)
+	conn, err := dialer.Dial("tcp", hostPort)
 	if err != nil {
 		return err
 	}
@@ -106,6 +113,7 @@ func (s *Mailer) Send(to, subject, body string) error {
 		return err
 	}
 	defer c.Close()
+	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
 
 	if s.tls {
 		// Attempt STARTTLS upgrade; fail if not supported when TLS is requested
@@ -138,4 +146,65 @@ func (s *Mailer) Send(to, subject, body string) error {
 		return err
 	}
 	return c.Quit()
+}
+
+// ---- Lightweight async mail queue ----
+
+type queuedMail struct {
+	to      string
+	subject string
+	body    string
+}
+
+var (
+	mailQueueCh   chan queuedMail
+	mailQueueOnce = func() {
+		// default no-op; real init below
+	}
+)
+
+// InitMailQueue starts a background goroutine to process emails asynchronously.
+// It must be called once at startup when SMTP is configured.
+func InitMailQueue(senderFactory func(*models.SiteSettings) MailSender, repo models.SiteSettingsRepositoryInterface) {
+	if mailQueueCh != nil {
+		return
+	}
+	mailQueueCh = make(chan queuedMail, 256)
+	go func() {
+		// Read settings once and create sender; refresh on failure every minute
+		var sender MailSender
+		var lastInit time.Time
+		for msg := range mailQueueCh {
+			// lazily init or re-init every 60s
+			if sender == nil || time.Since(lastInit) > time.Minute {
+				if repo != nil {
+					if s, err := repo.Get(); err == nil && s != nil {
+						sender = senderFactory(s)
+						lastInit = time.Now()
+					}
+				}
+			}
+			if sender == nil {
+				// drop silently when not configured
+				continue
+			}
+			// Try with one retry on transient error
+			if err := sender.Send(msg.to, msg.subject, msg.body); err != nil {
+				time.Sleep(2 * time.Second)
+				_ = sender.Send(msg.to, msg.subject, msg.body)
+			}
+		}
+	}()
+}
+
+// EnqueueMail enqueues a message to be sent asynchronously; no-op if queue not initialized.
+func EnqueueMail(to, subject, body string) {
+	if mailQueueCh == nil {
+		return
+	}
+	select {
+	case mailQueueCh <- queuedMail{to: to, subject: subject, body: body}:
+	default:
+		// queue full: drop to avoid blocking request path
+	}
 }

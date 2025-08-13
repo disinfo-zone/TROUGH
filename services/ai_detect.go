@@ -57,6 +57,103 @@ func DetectAIProvenance(imagePath string, xmpXML []byte) (ok bool, result AIDete
 	return false, AIDetectionResult{}
 }
 
+// DetectAIProvenanceFromBytes is the bytes-based variant avoiding disk I/O.
+func DetectAIProvenanceFromBytes(imageBytes []byte, xmpXML []byte) (ok bool, result AIDetectionResult) {
+	// 1) Heuristic presence of C2PA JUMBF/labels in file body
+	if c2paSniffRegex.Find(imageBytes) != nil {
+		provider := classifyC2PAProvider(xmpXML)
+		if provider == "" {
+			provider = "Unknown C2PA"
+		}
+		return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA/JUMBF markers present"}
+	}
+	// 2) EXIF
+	if ok, res := detectFromEXIFBytes(imageBytes); ok {
+		return true, res
+	}
+	// 3) Binary text blobs
+	if ok, res := detectFromBinaryTextBytes(imageBytes); ok {
+		return true, res
+	}
+	// 4) XMP
+	if ok, res := detectFromXMP(xmpXML); ok {
+		return true, res
+	}
+	return false, AIDetectionResult{}
+}
+
+func detectFromEXIFBytes(b []byte) (bool, AIDetectionResult) {
+	rawExif, err := exif.SearchAndExtractExif(b)
+	if err != nil {
+		return false, AIDetectionResult{}
+	}
+	// quick raw scan
+	if strings.Contains(string(rawExif), "sui_image_params") ||
+		strings.Contains(string(rawExif), "prompt") ||
+		bytes.Contains(rawExif, buildUTF16LEPattern("sui_image_params")) ||
+		bytes.Contains(rawExif, buildUTF16BEPattern("sui_image_params")) ||
+		bytes.Contains(rawExif, buildUTF16LEPattern("prompt")) ||
+		bytes.Contains(rawExif, buildUTF16BEPattern("prompt")) {
+		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "exif", Details: "sui_image_params/prompt in raw EXIF"}
+	}
+	entries, _, err := exif.GetFlatExifData(rawExif, nil)
+	if err != nil {
+		return false, AIDetectionResult{}
+	}
+	var softwareVal string
+	for _, e := range entries {
+		tn := strings.TrimSpace(e.TagName)
+		val := strings.TrimSpace(e.Formatted)
+		if strings.EqualFold(tn, "Software") {
+			softwareVal = val
+			low := strings.ToLower(val)
+			switch {
+			case strings.Contains(low, "midjourney"):
+				return true, AIDetectionResult{Provider: "Midjourney", Method: "exif", Details: val}
+			case strings.Contains(low, "dall-e") || strings.Contains(low, "dalle") || strings.Contains(low, "openai"):
+				return true, AIDetectionResult{Provider: "OpenAI", Method: "exif", Details: val}
+			case strings.Contains(low, "stable diffusion") || strings.Contains(low, "sdxl"):
+				return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "exif", Details: val}
+			case strings.Contains(low, "flux"):
+				return true, AIDetectionResult{Provider: "FLUX", Method: "exif", Details: val}
+			}
+		}
+		if containsAnyFold(val, []string{"prompt", "negativeprompt", "negative_prompt", "sampler", "steps", "cfg", "seed", "model"}) {
+			return true, AIDetectionResult{Provider: "AI (Prompt in EXIF)", Method: "exif", Details: tn}
+		}
+		if strings.EqualFold(tn, "DigitalSourceType") && strings.TrimSpace(val) == iptcTrainedMedia {
+			return true, AIDetectionResult{Provider: "AI (IPTC Trained Media)", Method: "exif", Details: val}
+		}
+	}
+	if softwareVal != "" {
+		low := strings.ToLower(softwareVal)
+		if strings.Contains(low, "ai") || strings.Contains(low, "diffusion") {
+			return true, AIDetectionResult{Provider: "AI (Software)", Method: "exif", Details: softwareVal}
+		}
+	}
+	return false, AIDetectionResult{}
+}
+
+func detectFromBinaryTextBytes(b []byte) (bool, AIDetectionResult) {
+	s := strings.ToLower(string(b))
+	if strings.Contains(s, "grok image prompt") || strings.Contains(s, "grok image upsampled prompt") || strings.Contains(s, "\x00grok\x00") || strings.Contains(s, " g r o k ") || strings.Contains(s, "grok:") || strings.Contains(s, "\"grok\"") {
+		return true, AIDetectionResult{Provider: "Grok", Method: "binary", Details: "Grok prompt fields in image"}
+	}
+	if strings.Contains(s, "\"filename_prefix\":\"comfyui\"") || strings.Contains(s, "comfyui") || strings.Contains(s, "prompt\t{") || (strings.Contains(s, "prompt") && strings.Contains(s, "workflow")) {
+		return true, AIDetectionResult{Provider: "ComfyUI", Method: "binary", Details: "ComfyUI markers present"}
+	}
+	if strings.Contains(s, "sdxl") || strings.Contains(s, "sdxlpromptstyler") || strings.Contains(s, "stable diffusion") || strings.Contains(s, "ksampler") || strings.Contains(s, "sampler_name") || strings.Contains(s, "negativeprompt") || strings.Contains(s, "negative_prompt") || strings.Contains(s, "cfg") || strings.Contains(s, "steps") {
+		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SDXL/SD params present"}
+	}
+	if strings.Contains(s, "flux") || strings.Contains(s, "black forest labs") || strings.Contains(s, "bfl") {
+		return true, AIDetectionResult{Provider: "FLUX", Method: "binary", Details: "Flux markers present"}
+	}
+	if strings.Contains(s, "\"prompt\"") || strings.Contains(s, "prompt:") || strings.Contains(s, "\nprompt") || strings.Contains(s, " prompt ") || bytes.Contains(b, buildUTF16LEPattern("prompt")) || bytes.Contains(b, buildUTF16BEPattern("prompt")) {
+		return true, AIDetectionResult{Provider: "AI (Prompt Embedded)", Method: "binary", Details: "Prompt-like text present"}
+	}
+	return false, AIDetectionResult{}
+}
+
 func sniffC2PA(imagePath string) bool {
 	b, err := ioutil.ReadFile(imagePath)
 	if err != nil {

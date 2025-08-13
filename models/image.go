@@ -1,11 +1,21 @@
 package models
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// Helpers to expose the repository cursor encoding for handlers without import cycles
+// These simply wrap the same logic used in the repository.
+func EncodeCursor(t time.Time, id uuid.UUID) string {
+	// mirrors encodeFeedCursor in repository.go
+	payload := fmt.Sprintf("%d|%s", t.UnixMicro(), id.String())
+	return base64.RawURLEncoding.EncodeToString([]byte(payload))
+}
 
 type Image struct {
 	ID            uuid.UUID       `json:"id" db:"id"`
@@ -67,7 +77,8 @@ func (i *Image) ToUploadResponse() UploadResponse {
 }
 
 type FeedResponse struct {
-	Images []ImageWithUser `json:"images"`
-	Page   int             `json:"page"`
-	Total  int             `json:"total"`
+	Images     []ImageWithUser `json:"images"`
+	Page       int             `json:"page"`
+	Total      int             `json:"total"`
+	NextCursor string          `json:"next_cursor,omitempty"`
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -53,6 +54,12 @@ func buildS3StorageImpl(cfg S3Config) (Storage, error) {
 
 func (s *s3Storage) Save(ctx context.Context, key string, r io.Reader, contentType string) (string, error) {
 	key = strings.TrimPrefix(key, "/")
+	// Bound network time for save operations
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		c, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		ctx = c
+	}
 	var size int64 = -1
 	if br, ok := r.(*bytes.Reader); ok {
 		size = int64(br.Len())
@@ -69,6 +76,11 @@ func (s *s3Storage) Save(ctx context.Context, key string, r io.Reader, contentTy
 
 func (s *s3Storage) Delete(ctx context.Context, key string) error {
 	key = strings.TrimPrefix(key, "/")
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		c, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		ctx = c
+	}
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
