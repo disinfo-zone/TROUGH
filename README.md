@@ -1,23 +1,12 @@
 # Trough
 
-An image stream for machine-born pictures: provenance-aware, latency-conscious, and minimal. The pipeline admits only artifacts bearing verifiable metadata, renders with deterministic surfaces, and keeps state sharply bounded at the edges.
+An image stream for machine-born pictures: enforced, performant, and minimal.
 
 ### What it is
-Trough is a self-hosted gallery for AI-generated images that enforces provenance. Uploads are accepted only when EXIF/XMP or C2PA metadata signals an AI source. The app provides a masonry feed, profiles, collections, and admin controls with strong defaults for security, performance, and reproducibility.
-
-## Features
-
-- **AI provenance enforcement**: EXIF/XMP heuristics and C2PA sniffing gate uploads
-- **Server-driven meta**: SSR-injected OG/Twitter tags for index and image routes
-- **Masonry feed**: paginated or cursor-based listing with NSFW visibility preferences
-- **Profiles and collections**: user pages and opt-in collecting; likes are deprecated
-- **Storage adapters**: local filesystem and S3/R2-compatible backends
-- **Email workflows**: optional SMTP for verification and password reset
-- **Hard security defaults**: strong JWT requirement, scoped CORS, CSP, HSTS
-- **Containerized**: Docker multi-stage build and compose configuration
+Trough is a self-hosted gallery for AI-generated images that enforces provenance. Uploads are accepted only when EXIF/XMP or C2PA metadata signals an AI source. The app provides a masonry feed, profiles, collections, and admin controls with strong defaults for security, performance, and usability.
 
 ## Purpose
-Operate a precise, provenance-first image surface for synthetic media. Accept only images with reliable machine signatures; preserve or reconstruct metadata; serve clean, cache-friendly responses; avoid implicit trust in clients.
+Operate a precise, provenance-first image surface for synthetic media. Accept only images with reliable machine signatures; preserve or reconstruct metadata; serve clean, cache-friendly responses; do this securely and privately.
 
 ## Quick start (Docker)
 
@@ -65,7 +54,7 @@ make run
 - Register, then log in. Admins can disable public registration and issue invites.
 - Upload an image via UI or `POST /api/upload` with form field `image`. Uploads without acceptable AI metadata are rejected.
 - Toggle NSFW visibility in account settings; feed respects preferences.
-- Configure site title/URL, analytics, SMTP, and storage in the admin panel.
+- Configure site title/URL, analytics, SMTP, and storage (local or S3) in the admin panel.
 
 ## Configuration
 
@@ -138,7 +127,6 @@ make lint            # gofmt + go vet
 - Site settings (admin): `GET /api/admin/site`, `PUT /api/admin/site`, asset uploads and diagnostics
 
 Notes:
-- Likes are intentionally deprecated; `POST /api/images/:id/like` returns 410.
 - Admin endpoints require an authenticated admin user.
 
 ## Storage
@@ -160,7 +148,7 @@ Notes:
 
 ## Screenshots
 
-Placeholder for gallery, upload, and admin screenshots.
+To be added.
 
 ## License
 
