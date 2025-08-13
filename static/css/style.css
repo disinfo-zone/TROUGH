@@ -389,6 +389,9 @@ input, button {
 .image-caption a:visited { color: inherit; }
 .image-caption a:hover { opacity: 0.85; }
 
+/* Single image page: caption uses JS-driven max-height, not -webkit-line-clamp */
+#single-caption { display: block; }
+
 /* Single image page header: keep image centered; title should not push layout */
 .single-header { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; min-width:0; flex-wrap: wrap; }
 .single-username { flex: 0 0 auto; }
