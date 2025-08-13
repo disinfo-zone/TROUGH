@@ -64,7 +64,7 @@ func (suite *IntegrationTestSuite) TearDownSuite() {
 }
 
 func (suite *IntegrationTestSuite) SetupTest() {
-	db.DB.Exec("TRUNCATE users, images, likes CASCADE")
+	db.DB.Exec("TRUNCATE users, images, likes, collections CASCADE")
 }
 
 func (suite *IntegrationTestSuite) TestUserRegistrationAndLogin() {

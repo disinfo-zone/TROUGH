@@ -239,6 +239,7 @@ input, button {
     transition: all var(--duration-normal) var(--ease-out);
     box-shadow: var(--shadow-sm);
 }
+.nav-btn[aria-pressed="true"] { background: var(--text-primary); color: var(--surface); }
 
 .nav-btn:hover {
     background: var(--surface);
@@ -331,7 +332,7 @@ input, button {
     border-radius: var(--radius-xl);
     overflow: hidden;
     background: var(--surface-elevated);
-    border: 1px solid var(--border);
+    border: 0px solid var(--border);
     transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal) var(--ease-out), border-color var(--duration-normal) var(--ease-out);
     cursor: pointer;
     position: relative;
@@ -486,10 +487,10 @@ input, button {
 .lightbox-info .image-title { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); margin-bottom: var(--space-xs); }
 .lightbox-info .image-author { font-size: 0.875rem; color: var(--text-secondary); }
 
-.like-btn {
-    width: 44px;
-    height: 44px;
-    display: flex;
+.like-btn { 
+    width: 42px;
+    height: 42px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     background: var(--surface-elevated);
@@ -497,25 +498,47 @@ input, button {
     border-radius: var(--radius-full);
     color: var(--text-secondary);
     transition: all var(--duration-fast) var(--ease-out);
-    margin-left: var(--space-lg);
+    margin-left: 0;
+}
+.like-btn.collect-btn { font-size: 18px; }
+
+.like-btn:hover { background: var(--surface); color: var(--text-primary); border-color: var(--border-strong); transform: scale(1.05); }
+
+.collect-btn.collected { background: var(--text-primary); color: var(--surface); border-color: var(--text-primary); }
+
+/* Subtle transparency for overlayed collect on single image */
+/* Single image collect breathing visibility */
+@keyframes breathe {
+  0% { opacity: 0.35; }
+  50% { opacity: 0.55; }
+  100% { opacity: 0.35; }
+}
+#single-collect {
+  opacity: 0.35;
+  transition: opacity 220ms var(--ease-out), background-color 220ms var(--ease-out), color 220ms var(--ease-out), border-color 220ms var(--ease-out);
+  animation: breathe 2.6s ease-in-out infinite;
+  color: var(--text-secondary);
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--border);
+}
+#single-collect:hover {
+  opacity: 1;
+  animation: none;
+}
+/* Ensure collected state is clearly white, but keep breathing unless hovered */
+#single-collect.collected {
+  /* White disc with black symbol when collected */
+  color: var(--black);
+  background: #ffffff !important; /* ensure white disc overrides base */
+  border: 0 !important; /* remove border when collected */
+  animation: none;
+}
+@media (hover: none) {
+  #single-collect { opacity: 0.5; animation-duration: 3.2s; }
 }
 
-.like-btn:hover {
-    background: var(--surface);
-    color: #ef4444;
-    border-color: var(--border-strong);
-    transform: scale(1.05);
-}
-
-.like-btn.liked {
-    background: #ef4444;
-    color: white;
-    border-color: #ef4444;
-}
-
-.like-btn.liked svg {
-    fill: currentColor;
-}
+/* Collect button variant */
+/* retained above */
 
 /* AUTH MODAL */
 
@@ -1132,6 +1155,12 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 /* Simple link-like button (restore readable color) */
 .link-btn { background: none; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 10px; }
 .link-btn:hover { text-decoration: underline; }
+
+/* Posts/Collections tabs */
+.tab-group { display:flex; gap:8px; align-items:center; border-radius: 12px; padding:0; background: transparent; border: none; margin-bottom: 8px; }
+.tab-btn { padding:8px 12px; border-radius:8px; color: var(--text-secondary); background: transparent; border: none; font-family: var(--font-family); }
+.tab-btn:hover { background: var(--surface); color: var(--text-primary); }
+.tab-btn[aria-pressed="true"] { background: var(--text-primary); color: var(--surface); box-shadow: var(--shadow-sm); }
 
 /* Admin user search result rows */
 .user-row { display:flex; gap:8px; align-items:center; justify-content:space-between; border:1px solid var(--border); border-radius:8px; padding:8px; background: var(--surface-elevated); max-width:100%; overflow:hidden; }

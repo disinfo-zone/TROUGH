@@ -550,6 +550,94 @@ func (r *LikeRepository) GetByUser(userID uuid.UUID, imageID uuid.UUID) (*Like, 
 	return &like, nil
 }
 
+type CollectRepository struct {
+	db *sqlx.DB
+}
+
+func NewCollectRepository(db *sqlx.DB) *CollectRepository {
+	return &CollectRepository{db: db}
+}
+
+func (r *CollectRepository) Create(userID, imageID uuid.UUID) error {
+	_, err := r.db.Exec(`INSERT INTO collections (user_id, image_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, userID, imageID)
+	return err
+}
+
+func (r *CollectRepository) Delete(userID, imageID uuid.UUID) error {
+	_, err := r.db.Exec(`DELETE FROM collections WHERE user_id = $1 AND image_id = $2`, userID, imageID)
+	return err
+}
+
+func (r *CollectRepository) GetByUser(userID uuid.UUID, imageID uuid.UUID) (*Collect, error) {
+	var col Collect
+	err := r.db.Get(&col, `SELECT * FROM collections WHERE user_id = $1 AND image_id = $2`, userID, imageID)
+	if err != nil {
+		return nil, err
+	}
+	return &col, nil
+}
+
+func (r *CollectRepository) GetUserCollections(userID uuid.UUID, page, limit int) ([]ImageWithUser, int, error) {
+	offset := (page - 1) * limit
+	var images []ImageWithUser
+	var total int
+	if err := r.db.Get(&total, `SELECT COUNT(*) FROM collections WHERE user_id = $1`, userID); err != nil {
+		return nil, 0, err
+	}
+	q := `
+        SELECT i.*, u.username, u.avatar_url
+        FROM collections c
+        JOIN images i ON c.image_id = i.id
+        JOIN users u ON i.user_id = u.id
+        WHERE c.user_id = $1
+        ORDER BY i.created_at DESC, i.id DESC
+        LIMIT $2 OFFSET $3`
+	if err := r.db.Select(&images, q, userID, limit, offset); err != nil {
+		return nil, 0, err
+	}
+	return images, total, nil
+}
+
+func (r *CollectRepository) GetUserCollectionsSeek(userID uuid.UUID, limit int, cursorEncoded string) ([]ImageWithUser, string, error) {
+	cur, err := decodeFeedCursor(cursorEncoded)
+	if err != nil {
+		return nil, "", err
+	}
+	var images []ImageWithUser
+	if cur == nil {
+		q := `
+            SELECT i.*, u.username, u.avatar_url
+            FROM collections c
+            JOIN images i ON c.image_id = i.id
+            JOIN users u ON i.user_id = u.id
+            WHERE c.user_id = $1
+            ORDER BY i.created_at DESC, i.id DESC
+            LIMIT $2`
+		if err := r.db.Select(&images, q, userID, limit); err != nil {
+			return nil, "", err
+		}
+	} else {
+		// For seek pagination: use images.created_at as primary order when available; fallback to collections.created_at
+		q := `
+            SELECT i.*, u.username, u.avatar_url
+            FROM collections c
+            JOIN images i ON c.image_id = i.id
+            JOIN users u ON i.user_id = u.id
+            WHERE c.user_id = $1 AND (i.created_at < $2 OR (i.created_at = $2 AND i.id < $3))
+            ORDER BY i.created_at DESC, i.id DESC
+            LIMIT $4`
+		if err := r.db.Select(&images, q, userID, cur.CreatedAt, cur.ID, limit); err != nil {
+			return nil, "", err
+		}
+	}
+	if len(images) == 0 {
+		return images, "", nil
+	}
+	last := images[len(images)-1]
+	next := encodeFeedCursor(FeedSeekCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	return images, next, nil
+}
+
 func (r *UserRepository) UpdatePassword(id uuid.UUID, passwordHash string) error {
 	_, err := r.db.Exec(`UPDATE users SET password_hash = $1, password_changed_at = NOW() WHERE id = $2`, passwordHash, id)
 	return err

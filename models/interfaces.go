@@ -45,6 +45,14 @@ type LikeRepositoryInterface interface {
 	GetByUser(userID uuid.UUID, imageID uuid.UUID) (*Like, error)
 }
 
+type CollectRepositoryInterface interface {
+	Create(userID, imageID uuid.UUID) error
+	Delete(userID, imageID uuid.UUID) error
+	GetByUser(userID uuid.UUID, imageID uuid.UUID) (*Collect, error)
+	GetUserCollections(userID uuid.UUID, page, limit int) ([]ImageWithUser, int, error)
+	GetUserCollectionsSeek(userID uuid.UUID, limit int, cursorEncoded string) ([]ImageWithUser, string, error)
+}
+
 type InviteRepositoryInterface interface {
 	Create(maxUses *int, expiresAt *time.Time, createdBy *uuid.UUID) (*Invite, error)
 	List(page, limit int) ([]Invite, int, error)

@@ -24,6 +24,7 @@ import (
 type UserHandler struct {
 	userRepo      models.UserRepositoryInterface
 	imageRepo     models.ImageRepositoryInterface
+	collectRepo   models.CollectRepositoryInterface
 	storage       services.Storage
 	validator     *validator.Validate
 	settingsRepo  models.SiteSettingsRepositoryInterface
@@ -32,6 +33,11 @@ type UserHandler struct {
 
 func NewUserHandler(userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface, storage services.Storage) *UserHandler {
 	return &UserHandler{userRepo: userRepo, imageRepo: imageRepo, storage: storage, validator: validator.New()}
+}
+
+func (h *UserHandler) WithCollect(r models.CollectRepositoryInterface) *UserHandler {
+	h.collectRepo = r
+	return h
 }
 
 // WithSettings injects site settings repo and mail sender for email verification flows.
@@ -96,6 +102,45 @@ func (h *UserHandler) GetUserImages(c *fiber.Ctx) error {
 	images, total, err := h.imageRepo.GetUserImages(user.ID, page, limit)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch user images"})
+	}
+	return c.JSON(models.FeedResponse{Images: images, Page: page, Total: total})
+}
+
+// GetUserCollections returns images that the user has collected (not their own uploads).
+func (h *UserHandler) GetUserCollections(c *fiber.Ctx) error {
+	username := normalizeUsername(c.Params("username"))
+	if username == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Username required"})
+	}
+	user, err := h.userRepo.GetByUsername(username)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+	if h.collectRepo == nil {
+		h.collectRepo = models.NewCollectRepository(models.DB())
+	}
+	// Support cursor and page
+	limit := 20
+	if lq := strings.TrimSpace(c.Query("limit", "")); lq != "" {
+		if v, err := strconv.Atoi(lq); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	cursor := strings.TrimSpace(c.Query("cursor", ""))
+	if cursor != "" {
+		images, next, err := h.collectRepo.GetUserCollectionsSeek(user.ID, limit, cursor)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch collections"})
+		}
+		return c.JSON(models.FeedResponse{Images: images, NextCursor: next})
+	}
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	images, total, err := h.collectRepo.GetUserCollections(user.ID, page, limit)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch collections"})
 	}
 	return c.JSON(models.FeedResponse{Images: images, Page: page, Total: total})
 }

@@ -41,11 +41,12 @@ func extractStorageKey(filenameOrURL string) string {
 }
 
 type ImageHandler struct {
-	imageRepo models.ImageRepositoryInterface
-	likeRepo  models.LikeRepositoryInterface
-	userRepo  models.UserRepositoryInterface
-	config    services.Config
-	storage   services.Storage
+	imageRepo   models.ImageRepositoryInterface
+	likeRepo    models.LikeRepositoryInterface
+	userRepo    models.UserRepositoryInterface
+	config      services.Config
+	storage     services.Storage
+	collectRepo models.CollectRepositoryInterface
 }
 
 func NewImageHandler(imageRepo models.ImageRepositoryInterface, likeRepo models.LikeRepositoryInterface, userRepo models.UserRepositoryInterface, config services.Config, storage services.Storage) *ImageHandler {
@@ -56,6 +57,11 @@ func NewImageHandler(imageRepo models.ImageRepositoryInterface, likeRepo models.
 		config:    config,
 		storage:   storage,
 	}
+}
+
+func (h *ImageHandler) WithCollect(r models.CollectRepositoryInterface) *ImageHandler {
+	h.collectRepo = r
+	return h
 }
 
 func (h *ImageHandler) Upload(c *fiber.Ctx) error {
@@ -345,42 +351,43 @@ func (h *ImageHandler) GetImage(c *fiber.Ctx) error {
 	return c.JSON(image)
 }
 
+// LikeImage has been deprecated and is intentionally disabled
 func (h *ImageHandler) LikeImage(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusGone).JSON(fiber.Map{"error": "Likes are no longer supported"})
+}
+
+// CollectImage allows a user to collect another user's image. Collecting own image is disallowed.
+func (h *ImageHandler) CollectImage(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 	if userID == uuid.Nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "Authentication required",
-		})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication required"})
 	}
-
 	imageID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid image ID",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image ID"})
 	}
-
-	existingLike, _ := h.likeRepo.GetByUser(userID, imageID)
-	if existingLike != nil {
-		if err := h.likeRepo.Delete(userID, imageID); err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to unlike image",
-			})
+	img, err := h.imageRepo.GetByID(imageID)
+	if err != nil || img == nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Image not found"})
+	}
+	// Disallow collecting own image
+	if img.UserID == userID {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot collect your own image"})
+	}
+	if h.collectRepo == nil {
+		// Initialize lazily if not set (for legacy construction)
+		h.collectRepo = models.NewCollectRepository(models.DB())
+	}
+	if existing, _ := h.collectRepo.GetByUser(userID, imageID); existing != nil {
+		if err := h.collectRepo.Delete(userID, imageID); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to uncollect image"})
 		}
-		return c.JSON(fiber.Map{
-			"liked": false,
-		})
+		return c.JSON(fiber.Map{"collected": false})
 	}
-
-	if err := h.likeRepo.Create(userID, imageID); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to like image",
-		})
+	if err := h.collectRepo.Create(userID, imageID); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to collect image"})
 	}
-
-	return c.JSON(fiber.Map{
-		"liked": true,
-	})
+	return c.JSON(fiber.Map{"collected": true})
 }
 
 func (h *ImageHandler) UpdateImage(c *fiber.Ctx) error {

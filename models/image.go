@@ -48,6 +48,12 @@ type Like struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
+type Collect struct {
+	UserID    uuid.UUID `json:"user_id" db:"user_id"`
+	ImageID   uuid.UUID `json:"image_id" db:"image_id"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
 type UploadResponse struct {
 	ID            uuid.UUID `json:"id"`
 	Filename      string    `json:"filename"`

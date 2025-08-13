@@ -35,6 +35,8 @@ class TroughApp {
         this._userInteracted = false;
         // Optional override to force which masonry column the next card should use
         this._forcedColumnIndex = null;
+		// Track my collected image ids for UI state
+		this._myCollectedSet = new Set();
         
         // DOM elements
         this.gallery = document.getElementById('gallery');
@@ -78,6 +80,20 @@ class TroughApp {
         this.init();
     }
 
+    async seedMyCollectedSet() {
+        try {
+            // Only for logged-in users
+            if (!this.currentUser || !this.currentUser.username) { this._myCollectedSet = new Set(); return; }
+            // Fetch first page of my collections to initialize state
+            const resp = await fetch(`/api/users/${encodeURIComponent(this.currentUser.username)}/collections?page=1`, { credentials: 'include' });
+            if (!resp.ok) { this._myCollectedSet = this._myCollectedSet || new Set(); return; }
+            const data = await resp.json();
+            this._myCollectedSet = new Set((data.images || []).map(img => String(img.id)));
+        } catch {
+            this._myCollectedSet = this._myCollectedSet || new Set();
+        }
+    }
+
     // Helper function to get the correct image URL (handles both local filenames and remote URLs)
     getImageURL(filename) {
         if (!filename) return '';
@@ -112,6 +128,8 @@ class TroughApp {
             }
         } catch {}
         await this.checkAuth();
+		// Seed my collection state early for correct UI on first paint
+		await this.seedMyCollectedSet();
         await this.applyPublicSiteSettings();
         this.setupHistoryHandler();
         this.setupEventListeners();
@@ -640,9 +658,13 @@ class TroughApp {
             this.authBtn.textContent = `@${this.currentUser.username}`;
             this.authBtn.title = `@${this.currentUser.username}`;
             this.authBtn.style.fontFamily = 'var(--font-mono)';
+            // Refresh my collected set after login
+            this.seedMyCollectedSet().catch(()=>{});
         } else {
             this.authBtn.textContent = 'ENTER';
             this.authBtn.style.fontFamily = '';
+            // Clear collected cache when logged out
+            this._myCollectedSet = new Set();
         }
     }
 
@@ -727,6 +749,7 @@ class TroughApp {
                 window.scrollTo(0, 0);
                 this.beginRender('home');
                 this.enableManagedMasonry();
+                await this.seedMyCollectedSet();
                 await this.loadImages();
                 this.setupInfiniteScroll();
             }
@@ -751,6 +774,8 @@ class TroughApp {
                 // Scroll to top synchronously before loading, to avoid race with magnetic/IO
                 try { window.scrollTo(0, 0); } catch {}
                 this.beginRender('home');
+                // Ensure my collected set is fresh so feed buttons render correctly
+                await this.seedMyCollectedSet();
                 await this.loadImages();
                 this.setupInfiniteScroll();
             }, true);
@@ -764,6 +789,7 @@ class TroughApp {
             try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch {}
             this.currentUser = null;
             this.updateAuthButton();
+            this._myCollectedSet = new Set();
         });
     }
 
@@ -1327,14 +1353,94 @@ class TroughApp {
             };
         }
 
-        const epoch = this.renderEpoch;
-        if (this.isRestoring) {
-            (imgs.images || []).forEach((img) => this.createImageCard(img));
+        // Collections toggle row
+        const tabs = document.createElement('section');
+        tabs.className = 'mono-col';
+        tabs.style.cssText = 'padding:0 0 8px;margin:0 auto;';
+        tabs.innerHTML = `
+          <div class="tab-group" style="margin-bottom:8px">
+            <button id="tab-posts" class="tab-btn" aria-pressed="true">User Images</button>
+            <button id="tab-collections" class="tab-btn" aria-pressed="false">Collected</button>
+          </div>`;
+        this.profileTop.appendChild(tabs);
+
+        const loadPosts = async () => {
+			this.gallery.innerHTML = '';
+			this.enableManagedMasonry();
+            const epoch = this.renderEpoch;
+            const list = imgs.images || [];
+            if (this.isRestoring) {
+                list.forEach((img) => this.createImageCard(img));
+            } else {
+                list.forEach((img, index) => {
+                    const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
+                    const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
+                });
+				// Desktop fallback: if managed masonry fails to paint any cards quickly, disable it and render directly
+				const failSafe = setTimeout(() => {
+					if (epoch !== this.renderEpoch) return;
+					const hasCards = !!this.gallery.querySelector('.image-card');
+					if (!hasCards && this.masonry && this.masonry.enabled) {
+						this.disableManagedMasonry();
+						this.gallery.innerHTML = '';
+						list.forEach((img) => this.createImageCard(img));
+					}
+				}, 500);
+				this.trackTimeout(failSafe);
+            }
+        };
+
+		const loadCollections = async () => {
+			this.gallery.innerHTML = '';
+			this.enableManagedMasonry();
+			try {
+				const resp = await fetch(`/api/users/${encodeURIComponent(username)}/collections?page=1`);
+				if (!resp.ok) { this.showNotification('Failed to load collections','error'); return; }
+				const data = await resp.json();
+				const epoch = this.renderEpoch;
+				const list = data.images || [];
+				list.forEach((img, index) => {
+					const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
+					const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
+				});
+				// Desktop fallback similar to posts
+				const failSafe = setTimeout(() => {
+					if (epoch !== this.renderEpoch) return;
+					const hasCards = !!this.gallery.querySelector('.image-card');
+					if (!hasCards && this.masonry && this.masonry.enabled) {
+						this.disableManagedMasonry();
+						this.gallery.innerHTML = '';
+						list.forEach((img) => this.createImageCard(img));
+					}
+				}, 500);
+				this.trackTimeout(failSafe);
+			} catch {}
+		};
+
+        const postsBtn = tabs.querySelector('#tab-posts');
+        const colBtn = tabs.querySelector('#tab-collections');
+        if (postsBtn && colBtn) {
+            postsBtn.onclick = async () => {
+                postsBtn.setAttribute('aria-pressed','true');
+                colBtn.setAttribute('aria-pressed','false');
+                await loadPosts();
+            };
+            colBtn.onclick = async () => {
+                postsBtn.setAttribute('aria-pressed','false');
+                colBtn.setAttribute('aria-pressed','true');
+                await loadCollections();
+            };
+        }
+
+        // Default to posts; if user has no posts, show collections
+        if ((imgs.images || []).length === 0) {
+            postsBtn.setAttribute('aria-pressed','false');
+            colBtn.setAttribute('aria-pressed','true');
+            await loadCollections();
         } else {
-            (imgs.images || []).forEach((img, index) => {
-                const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
-                const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
-            });
+            // Refresh my collected set so collect buttons reflect persisted state
+            await this.seedMyCollectedSet();
+            await loadPosts();
         }
     }
 
@@ -1544,13 +1650,15 @@ class TroughApp {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
                   </button>
                 </div>` : '';
+            // Collect button for non-owners
+            const collectBtn = (!isOwner) ? `<button title="Collect" class="like-btn collect-btn${(this._myCollectedSet && this._myCollectedSet.has(String(image.id))) ? ' collected' : ''}" data-act="collect" data-id="${image.id}" style="width:32px;height:32px;padding:0;font-size:16px;opacity:0.85">${(this._myCollectedSet && this._myCollectedSet.has(String(image.id))) ? '✦' : '✧'}</button>` : '';
             meta.innerHTML = `
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                   <div style="min-width:0">
                     <div class="image-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><a href="/i/${encodeURIComponent(image.id)}" class="image-link" style="color:inherit;text-decoration:none">${this.escapeHTML(String((image.title || image.original_name || 'Untitled')).trim())}</a></div>
                     <div class="image-author" style="font-family:var(--font-mono)"><a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${this.escapeHTML(String(username))}</a></div>
                   </div>
-                  ${actions}
+                  <div style="display:flex;gap:6px;align-items:center">${collectBtn}${actions}</div>
                 </div>
                 ${captionHtml}`;
             meta.addEventListener('click', async (e) => {
@@ -1573,7 +1681,23 @@ class TroughApp {
                 const act = btn.dataset.act;
                 const id = btn.dataset.id;
                 e.stopPropagation();
-                if (act === 'delete') {
+                if (act === 'collect') {
+                    if (!this.currentUser) { this.showAuthModal(); return; }
+                    btn.classList.toggle('collected');
+                    btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
+                    try {
+                        const resp = await fetch(`/api/images/${id}/collect`, { method:'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
+                        if (!resp.ok) {
+                            btn.classList.toggle('collected');
+                            btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
+                            if (resp.status === 401) { this.currentUser = null; this.checkAuth(); this.showAuthModal(); }
+                            else { this.showNotification('Collect failed', 'error'); }
+                        }
+                        // Update in-memory cache
+                        if (!this._myCollectedSet) this._myCollectedSet = new Set();
+                        if (btn.classList.contains('collected')) this._myCollectedSet.add(String(id)); else this._myCollectedSet.delete(String(id));
+                    } catch { btn.classList.toggle('collected'); btn.textContent = btn.classList.contains('collected') ? '✦' : '✧'; }
+                } else if (act === 'delete') {
                     const ok = await this.showConfirm('Delete image?');
                     if (ok) {
                         const resp = await fetch(`/api/images/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -1627,7 +1751,10 @@ class TroughApp {
             }
         }
 
+        // Single vs double click: single opens lightbox; double triggers collect for non-owners
+        let clickTimer = null;
         card.addEventListener('click', (e) => {
+            if (e.detail === 2) return; // let dblclick handler run
             // Handle NSFW blur logic - single click removes blur immediately
             if (card.classList.contains('nsfw-blurred') && !card._nsfwRevealed) {
                 // First click: reveal with animation, but do not open lightbox yet
@@ -1645,8 +1772,22 @@ class TroughApp {
                 return;
             }
             
-            // Open lightbox for normal images and for NSFW after reveal
-            this.openLightbox(image);
+            // Delay a bit to allow dblclick to cancel
+            clearTimeout(clickTimer);
+            clickTimer = setTimeout(() => {
+                this.openLightbox(image);
+            }, 180);
+        });
+        card.addEventListener('dblclick', (e) => {
+            clearTimeout(clickTimer);
+            e.preventDefault();
+            e.stopPropagation();
+            if (!this.currentUser) { this.showAuthModal(); return; }
+            // ignore owners
+            if (this.currentUser && this.currentUser.username === image.username) return;
+            const metaBtn = card.querySelector('button.collect-btn');
+            if (metaBtn) this.toggleCollect(image.id, metaBtn);
+            else this.toggleCollect(image.id);
         });
         this.appendCardToMasonry(card);
         
@@ -1691,7 +1832,7 @@ class TroughApp {
         const lightboxImg = document.getElementById('lightbox-img');
         const lightboxTitle = document.getElementById('lightbox-title');
         const lightboxAuthor = document.getElementById('lightbox-author');
-        const lightboxLike = document.getElementById('lightbox-like');
+        const lightboxCollect = document.getElementById('lightbox-collect');
         const lightboxCaption = document.getElementById('lightbox-caption');
         if (!lightboxImg) return;
 
@@ -1720,8 +1861,33 @@ class TroughApp {
         }
         lightboxAuthor.innerHTML = `<a href="/@${encodeURIComponent(username)}" style="color:inherit;text-decoration:none">@${this.escapeHTML(String(username))}</a>`;
         lightboxAuthor.style.fontFamily = 'var(--font-mono)';
-        lightboxLike.classList.remove('liked');
-        lightboxLike.onclick = () => this.toggleLike(image.id);
+        if (lightboxCollect) {
+            lightboxCollect.classList.remove('collected');
+            lightboxCollect.classList.add('collect-btn');
+            lightboxCollect.textContent = '✧';
+            // Hide for owner
+            if (this.currentUser && image && image.username && this.currentUser.username === image.username) {
+                lightboxCollect.style.display = 'none';
+            } else {
+                lightboxCollect.style.display = '';
+                // Initially reflect collected status based on cached state
+                const cached = this._myCollectedSet || new Set();
+                if (cached.has(String(image.id))) {
+                    lightboxCollect.classList.add('collected');
+                    lightboxCollect.textContent = '✦';
+                } else {
+                    lightboxCollect.classList.remove('collected');
+                    lightboxCollect.textContent = '✧';
+                }
+                lightboxCollect.onclick = async () => {
+                    await this.toggleCollect(image.id, lightboxCollect);
+                    // Update cache
+                    if (!this._myCollectedSet) this._myCollectedSet = new Set();
+                    if (lightboxCollect.classList.contains('collected')) this._myCollectedSet.add(String(image.id));
+                    else this._myCollectedSet.delete(String(image.id));
+                };
+            }
+        }
         // Render caption (sanitized markdown) in lightbox
         if (lightboxCaption) {
             lightboxCaption.innerHTML = image.caption ? this.sanitizeAndRenderMarkdown(String(image.caption)) : '';
@@ -1745,19 +1911,26 @@ class TroughApp {
         if (closeBtn) closeBtn.addEventListener('click', () => this.closeLightbox());
     }
 
-    async toggleLike(imageId) {
+    
+
+    async toggleCollect(imageId, btnEl=null) {
         if (!this.currentUser) { this.showAuthModal(); return; }
-        const likeBtn = document.getElementById('lightbox-like');
-        const wasLiked = likeBtn.classList.contains('liked');
-        likeBtn.classList.toggle('liked');
+        const btn = btnEl || document.getElementById('lightbox-collect');
+        if (!btn) return;
+        const was = btn.classList.contains('collected');
+        btn.classList.toggle('collected');
+        btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
         try {
-            const response = await fetch(`/api/images/${imageId}/like`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
+            const response = await fetch(`/api/images/${imageId}/collect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
             if (!response.ok) {
-                likeBtn.classList.toggle('liked');
-                if (response.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); this.currentUser = null; this.checkAuth(); this.showAuthModal(); }
-                else { this.showNotification('Like failed', 'error'); }
+                btn.classList.toggle('collected');
+                btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
+                if (response.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); this.currentUser = null; await this.checkAuth(); this.showAuthModal(); }
+                else { this.showNotification('Collect failed', 'error'); }
             }
-        } catch { likeBtn.classList.toggle('liked'); }
+            // Update my in-memory collected set for persistence across routes
+            if (btn.classList.contains('collected')) this._myCollectedSet.add(String(imageId)); else this._myCollectedSet.delete(String(imageId));
+        } catch { btn.classList.toggle('collected'); btn.textContent = btn.classList.contains('collected') ? '✦' : '✧'; }
     }
 
     setupUpload() {
@@ -3007,6 +3180,8 @@ class TroughApp {
         if (this.profileTop) this.profileTop.innerHTML = '';
         this.gallery.innerHTML = '';
         this.gallery.classList.add('settings-mode');
+        // Ensure my collected set is hydrated for button state
+        await this.seedMyCollectedSet();
         let data = null;
         try {
             const r = await fetch(`/api/images/${encodeURIComponent(id)}`);
@@ -3041,7 +3216,10 @@ class TroughApp {
               <h1 class="single-title" title="${this.escapeHTML(String(title))}">${this.escapeHTML(String(title))}</h1>
               <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
             </div>
-            <div style="display:flex;justify-content:center"><img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/></div>
+            <div style="position:relative;display:flex;justify-content:center">
+              <img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;border:1px solid var(--border)"/>
+              <button id="single-collect" class="like-btn collect-btn" title="Collect" style="position:absolute;right:10px;bottom:10px;width:44px;height:44px;font-size:18px;backdrop-filter:blur(6px)">✧</button>
+            </div>
             ${captionHtml}
           </div>`;
         this.gallery.appendChild(wrap);
@@ -3177,6 +3355,22 @@ class TroughApp {
             // Only toggle via explicit controls
             toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); doToggle(); });
             toggleInsideBtn.addEventListener('click', (e) => { e.stopPropagation(); doToggle(); });
+        }
+        // Wire collect on single image page (disallow owner)
+        const collectBtn = document.getElementById('single-collect');
+        if (collectBtn) {
+            if (this.currentUser && this.currentUser.username === username) {
+                collectBtn.style.display = 'none';
+            } else {
+                // Reflect cache if present
+                if (this._myCollectedSet && this._myCollectedSet.has(String(data.id))) { collectBtn.classList.add('collected'); collectBtn.textContent = '✦'; }
+                else { collectBtn.classList.remove('collected'); collectBtn.textContent = '✧'; }
+                collectBtn.onclick = async () => {
+                    await this.toggleCollect(data.id, collectBtn);
+                    if (!this._myCollectedSet) this._myCollectedSet = new Set();
+                    if (collectBtn.classList.contains('collected')) this._myCollectedSet.add(String(data.id)); else this._myCollectedSet.delete(String(data.id));
+                };
+            }
         }
     }
 

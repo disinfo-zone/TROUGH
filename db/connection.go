@@ -100,9 +100,19 @@ func Migrate() error {
 			PRIMARY KEY (user_id, image_id)
 		);
 
+		-- Collections: users can collect images uploaded by others
+		CREATE TABLE IF NOT EXISTS collections (
+			user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+			image_id UUID REFERENCES images(id) ON DELETE CASCADE,
+			created_at TIMESTAMP DEFAULT NOW(),
+			PRIMARY KEY (user_id, image_id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_images_user ON images(user_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_likes_image ON likes(image_id);
+		CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id);
+		CREATE INDEX IF NOT EXISTS idx_collections_image ON collections(image_id);
 
 		-- Site settings (single row, id=1)
 		CREATE TABLE IF NOT EXISTS site_settings (

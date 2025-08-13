@@ -275,6 +275,7 @@ func main() {
 	userRepo := models.NewUserRepository(db.DB)
 	imageRepo := models.NewImageRepository(db.DB)
 	likeRepo := models.NewLikeRepository(db.DB)
+	collectRepo := models.NewCollectRepository(db.DB)
 	siteRepo := models.NewSiteSettingsRepository(db.DB)
 
 	maybeSeedAdmin(userRepo)
@@ -288,8 +289,8 @@ func main() {
 		storage = services.NewLocalStorage("uploads")
 	}
 	services.SetCurrentStorage(storage)
-	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage)
-	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo)
+	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage).WithCollect(collectRepo)
+	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo).WithCollect(collectRepo)
 	inviteRepo := models.NewInviteRepository(db.DB)
 	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo)
 	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
@@ -469,12 +470,15 @@ func main() {
 	api.Get("/feed", imageHandler.GetFeed)
 	api.Get("/images/:id", imageHandler.GetImage)
 	api.Post("/upload", authMW, imageHandler.Upload)
+	// Likes are deprecated; route retained for compatibility but returns 410
 	api.Post("/images/:id/like", authMW, imageHandler.LikeImage)
+	api.Post("/images/:id/collect", authMW, imageHandler.CollectImage)
 	api.Patch("/images/:id", authMW, imageHandler.UpdateImage)
 	api.Delete("/images/:id", authMW, imageHandler.DeleteImage)
 
 	api.Get("/users/:username", userHandler.GetProfile)
 	api.Get("/users/:username/images", userHandler.GetUserImages)
+	api.Get("/users/:username/collections", userHandler.GetUserCollections)
 	api.Get("/me/profile", authMW, userHandler.GetMyProfile)
 	api.Patch("/me/profile", authMW, userHandler.UpdateMyProfile)
 	api.Get("/me/account", authMW, userHandler.GetMyAccount)

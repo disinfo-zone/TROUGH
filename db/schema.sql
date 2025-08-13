@@ -38,7 +38,17 @@ CREATE TABLE likes (
     PRIMARY KEY (user_id, image_id)
 );
 
+-- Collections: users can collect images uploaded by others (enforced in handler)
+CREATE TABLE collections (
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    image_id UUID REFERENCES images(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (user_id, image_id)
+);
+
 -- Indexes for performance
 CREATE INDEX idx_images_created ON images(created_at DESC);
 CREATE INDEX idx_images_user ON images(user_id, created_at DESC);
 CREATE INDEX idx_likes_image ON likes(image_id);
+CREATE INDEX idx_collections_user ON collections(user_id);
+CREATE INDEX idx_collections_image ON collections(image_id);
