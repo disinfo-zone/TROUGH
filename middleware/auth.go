@@ -80,8 +80,14 @@ func Protected() fiber.Handler {
 			if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
 				tokenString = tokenString[7:]
 			}
-		} else {
-			// Fallback to auth cookie if Authorization header is absent
+		}
+		// Treat placeholder tokens from localStorage (e.g., "null", "undefined") as missing
+		switch strings.ToLower(strings.TrimSpace(tokenString)) {
+		case "", "null", "undefined", "\"null\"", "\"undefined\"":
+			tokenString = ""
+		}
+		if tokenString == "" {
+			// Fallback to auth cookie if Authorization header is absent or placeholder
 			if v := c.Cookies("auth_token"); strings.TrimSpace(v) != "" {
 				tokenString = v
 			}
@@ -133,6 +139,11 @@ func OptionalUserID(c *fiber.Ctx) uuid.UUID {
 	tokenString := c.Get("Authorization")
 	if tokenString != "" && len(tokenString) > 7 && tokenString[:7] == "Bearer " {
 		tokenString = tokenString[7:]
+	}
+	// Treat placeholder tokens as empty to allow cookie fallback
+	switch strings.ToLower(strings.TrimSpace(tokenString)) {
+	case "", "null", "undefined", "\"null\"", "\"undefined\"":
+		tokenString = ""
 	}
 	if tokenString == "" {
 		// Fallback to cookie when header missing

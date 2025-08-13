@@ -2773,7 +2773,7 @@ class TroughApp {
             // Wire storage test
             const btnTestStorage = document.getElementById('btn-test-storage');
             if (btnTestStorage) btnTestStorage.onclick = async () => {
-                const r = await fetch('/api/admin/site/test-storage', { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+                const r = await fetch('/api/admin/site/test-storage', { method:'POST', credentials:'include' });
                 const statusEl = document.getElementById('storage-status');
                 if (r.ok) {
                     const d = await r.json().catch(()=>({}));
@@ -2807,20 +2807,20 @@ class TroughApp {
                 left.innerHTML = `<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">@${this.escapeHTML(String(u.username))}</div><div class="id">${this.escapeHTML(String(u.id))}</div>`;
                 const right = document.createElement('div'); right.className='actions';
                 const modBtn = document.createElement('button'); modBtn.className='nav-btn'; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod';
-                modBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify({ is_moderator: !u.is_moderator }) }); if (r.ok) { u.is_moderator = !u.is_moderator; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod'; } };
+                modBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_moderator: !u.is_moderator }) }); if (r.ok) { u.is_moderator = !u.is_moderator; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod'; } };
                 right.appendChild(modBtn);
                 if (isAdminLocal) {
                     const adminBtn = document.createElement('button'); adminBtn.className='nav-btn'; adminBtn.textContent = u.is_admin ? 'Revoke admin' : 'Make admin';
-                    adminBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify({ is_admin: !u.is_admin }) }); if (r.ok) { u.is_admin = !u.is_admin; adminBtn.textContent = u.is_admin ? 'Revoke admin' : 'Make admin'; } };
+                    adminBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_admin: !u.is_admin }) }); if (r.ok) { u.is_admin = !u.is_admin; adminBtn.textContent = u.is_admin ? 'Revoke admin' : 'Make admin'; } };
                     right.appendChild(adminBtn);
                     const disableBtn = document.createElement('button'); disableBtn.className='nav-btn'; disableBtn.textContent = u.is_disabled ? 'Enable' : 'Disable';
-                    disableBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type':'application/json' }, body: JSON.stringify({ is_disabled: !u.is_disabled }) }); if (r.ok) { u.is_disabled = !u.is_disabled; disableBtn.textContent = u.is_disabled ? 'Enable' : 'Disable'; } };
+                    disableBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_disabled: !u.is_disabled }) }); if (r.ok) { u.is_disabled = !u.is_disabled; disableBtn.textContent = u.is_disabled ? 'Enable' : 'Disable'; } };
                     right.appendChild(disableBtn);
                     const verifyBtn = document.createElement('button'); verifyBtn.className='nav-btn'; verifyBtn.textContent='Send verify';
-                    verifyBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}/send-verification`, { method:'POST', headers:{ 'Authorization': `Bearer ${localStorage.getItem('token')}` } }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); } };
+                    verifyBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}/send-verification`, { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); } };
                     right.appendChild(verifyBtn);
                     const delBtn = document.createElement('button'); delBtn.className='nav-btn'; delBtn.style.background='var(--color-danger)'; delBtn.style.color='#fff'; delBtn.textContent='Delete';
-                    delBtn.onclick = async () => { const ok = await this.showConfirm('Delete user?'); if (!ok) return; const r = await fetch(`/api/admin/users/${u.id}`, { method:'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }}); if (r.status===204) { row.remove(); } else { this.showNotification('Delete failed','error'); } };
+                    delBtn.onclick = async () => { const ok = await this.showConfirm('Delete user?'); if (!ok) return; const r = await fetch(`/api/admin/users/${u.id}`, { method:'DELETE', credentials:'include' }); if (r.status===204) { row.remove(); } else { this.showNotification('Delete failed','error'); } };
                     right.appendChild(delBtn);
                 }
                 row.appendChild(left); row.appendChild(right); results.appendChild(row);
@@ -2842,7 +2842,7 @@ class TroughApp {
 
         const doSearch = async (q, page = 1) => {
             if (!q) { results.innerHTML = ''; updatePager(1, 0, 0); return; }
-            const r = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}&page=${page}&limit=${pageSize}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }});
+            const r = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}&page=${page}&limit=${pageSize}`, { credentials: 'include' });
             if (r.ok) {
                 const d = await r.json();
                 renderRows(d.users||[]);
