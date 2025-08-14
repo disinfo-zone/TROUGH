@@ -121,7 +121,7 @@ class TroughApp {
                 if (s && s.site_name) {
                     const logo = document.querySelector('.logo');
                     if (logo) { logo.textContent = s.site_name; logo.setAttribute('data-text', s.site_name); }
-                    if (!location.pathname.startsWith('/i/')) {
+                    if (location.pathname === '/') {
                         document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
                     }
                 }
@@ -372,6 +372,15 @@ class TroughApp {
             } else {
                 // Home feed: restore saved state if present
                 await this.restoreListState('/');
+                // Ensure home SEO sticks after SPA/back nav
+                try {
+                    const cached = localStorage.getItem('site_settings');
+                    let s = null; try { s = JSON.parse(cached||'null'); } catch { s = null; }
+                    const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || s?.site_name || 'TROUGH';
+                    const title = s?.seo_title || `${siteTitle} · AI IMAGERY`;
+                    document.title = title;
+                    this.applySiteDefaultMeta({ overrideTitle: title, overrideUrl: location.href });
+                } catch {}
             }
             if (this.magneticScroll && this.magneticScroll.updateEnabledState) {
                 this.magneticScroll.updateEnabledState();
@@ -607,7 +616,8 @@ class TroughApp {
             if (s.site_name) {
                 const logo = document.querySelector('.logo');
                 if (logo) { logo.textContent = s.site_name; logo.setAttribute('data-text', s.site_name); }
-                if (!location.pathname.startsWith('/i/')) {
+                // Only set the site-wide title on the home route.
+                if (location.pathname === '/') {
                     document.title = s.seo_title || `${s.site_name} · AI IMAGERY`;
                 }
             }
@@ -622,9 +632,60 @@ class TroughApp {
                 if (!m) { m = document.createElement('meta'); m.setAttribute('name', name); document.head.appendChild(m); }
                 m.setAttribute('content', content);
             };
-            if (!location.pathname.startsWith('/i/')) {
+            // Only set the site description on the home route; profile/CMS routes manage their own.
+            if (location.pathname === '/') {
                 setMeta('description', s.seo_description || '');
+                // Ensure OG/Twitter reflect site defaults on the home page
+                this.applySiteDefaultMeta({ settings: s });
             }
+        } catch {}
+    }
+
+    // Ensure OG/Twitter tags reflect site defaults (index SEO). Allows overriding the title/url.
+    applySiteDefaultMeta(opts={}) {
+        try {
+            const s = opts.settings || JSON.parse(localStorage.getItem('site_settings')||'null') || {};
+            const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || s.site_name || 'TROUGH';
+            const title = String(opts.overrideTitle || document.title || s.seo_title || `${siteTitle} · AI IMAGERY`);
+            const desc = String(s.seo_description || '');
+            const ensureProp = (prop) => { let m = document.querySelector(`meta[property="${prop}"]`); if (!m) { m = document.createElement('meta'); m.setAttribute('property', prop); document.head.appendChild(m); } return m; };
+            const ensureName = (name) => { let m = document.querySelector(`meta[name="${name}"]`); if (!m) { m = document.createElement('meta'); m.setAttribute('name', name); document.head.appendChild(m); } return m; };
+            const toAbs = (u) => {
+                if (!u) return '';
+                if (/^https?:\/\//i.test(u)) return u;
+                if (u.startsWith('/')) return location.origin + u;
+                return u;
+            };
+            const img = toAbs(String(s.social_image_url||''));
+            ensureProp('og:site_name').setAttribute('content', siteTitle);
+            ensureProp('og:title').setAttribute('content', title);
+            if (desc) ensureProp('og:description').setAttribute('content', desc);
+            ensureProp('og:type').setAttribute('content', 'website');
+            ensureProp('og:url').setAttribute('content', String(opts.overrideUrl || location.href));
+            if (img) {
+                ensureProp('og:image').setAttribute('content', img);
+                ensureProp('og:image:alt').setAttribute('content', title);
+            }
+            const card = img ? 'summary_large_image' : 'summary';
+            ensureName('twitter:card').setAttribute('content', card);
+            ensureName('twitter:title').setAttribute('content', title);
+            if (desc) ensureName('twitter:description').setAttribute('content', desc);
+            if (img) {
+                ensureName('twitter:image').setAttribute('content', img);
+                ensureName('twitter:image:alt').setAttribute('content', title);
+            }
+        } catch {}
+    }
+
+    // Apply home page SEO (title + default OG/Twitter) using cached settings
+    applyHomeSEO() {
+        try {
+            const cached = localStorage.getItem('site_settings');
+            let s = null; try { s = JSON.parse(cached||'null'); } catch { s = null; }
+            const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || s?.site_name || 'TROUGH';
+            const title = s?.seo_title || `${siteTitle} · AI IMAGERY`;
+            document.title = title;
+            this.applySiteDefaultMeta({ overrideTitle: title, overrideUrl: location.href });
         } catch {}
     }
 
@@ -732,7 +793,7 @@ class TroughApp {
                 }
             } catch {}
             history.pushState({}, '', href);
-        if (href.startsWith('/i/')) {
+            if (href.startsWith('/i/')) {
                 const id = href.split('/')[2];
             await this.renderImagePage(id);
             // Ensure single-image is in single-column mode only
@@ -756,9 +817,18 @@ class TroughApp {
                 window.scrollTo(0, 0);
                 this.beginRender('home');
                 this.enableManagedMasonry();
+                this.applyHomeSEO();
                 await this.seedMyCollectedSet();
                 await this.loadImages();
                 this.setupInfiniteScroll();
+            } else if (/^\/[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(href)) {
+                // Single-segment CMS page
+                const slug = href.slice(1);
+                const ok = await this.renderCMSPage(slug);
+                if (!ok) {
+                    // Fallback to hard navigation if render failed
+                    location.href = href;
+                }
             }
         };
         if (this.gallery) this.gallery.addEventListener('click', handleInternalLink, true);
@@ -781,6 +851,7 @@ class TroughApp {
                 // Scroll to top synchronously before loading, to avoid race with magnetic/IO
                 try { window.scrollTo(0, 0); } catch {}
                 this.beginRender('home');
+                this.applyHomeSEO();
                 // Ensure my collected set is fresh so feed buttons render correctly
                 await this.seedMyCollectedSet();
                 await this.loadImages();
@@ -1471,6 +1542,62 @@ class TroughApp {
             await this.seedMyCollectedSet();
             await loadPosts();
         }
+
+        // Update document title and social meta for profile pages
+        try {
+            const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || 'TROUGH';
+            document.title = `@${String(user.username)} - ${siteTitle}`;
+            const ensureMeta = (name) => {
+                let m = document.querySelector(`meta[name="${name}"]`);
+                if (!m) { m = document.createElement('meta'); m.setAttribute('name', name); document.head.appendChild(m); }
+                return m;
+            };
+            const ensureProp = (prop) => {
+                let m = document.querySelector(`meta[property="${prop}"]`);
+                if (!m) { m = document.createElement('meta'); m.setAttribute('property', prop); document.head.appendChild(m); }
+                return m;
+            };
+            // Plain-text description from bio (strip simple markdown), fallback to site description
+            const stripMD = (s) => String(s||'')
+                .replace(/\!\[[^\]]*\]\([^)]*\)/g,'')
+                .replace(/\[[^\]]*\]\([^)]*\)/g,'$1')
+                .replace(/[\*_`>#~]/g,'')
+                .replace(/\s+/g,' ')
+                .trim();
+            let desc = stripMD(user.bio || '');
+            if (!desc) {
+                try { const ss = JSON.parse(localStorage.getItem('site_settings')||'null'); desc = String(ss?.seo_description||''); } catch {}
+            }
+            if (desc.length > 280) desc = desc.slice(0, 280);
+            if (desc) ensureMeta('description').setAttribute('content', desc);
+            // Image: latest user image, else site social image
+            let imgAbs = '';
+            const first = (imgs.images||[])[0];
+            if (first && first.filename) {
+                const fn = String(first.filename);
+                imgAbs = (/^https?:\/\//i.test(fn)) ? fn : (location.origin + '/uploads/' + fn);
+            } else {
+                try { const ss = JSON.parse(localStorage.getItem('site_settings')||'null'); const si = String(ss?.social_image_url||''); if (si) { imgAbs = si.startsWith('http') ? si : (si.startsWith('/') ? (location.origin + si) : si); } } catch {}
+            }
+            const ogType = 'profile';
+            ensureProp('og:site_name').setAttribute('content', siteTitle);
+            ensureProp('og:title').setAttribute('content', `@${String(user.username)} - ${siteTitle}`);
+            if (desc) ensureProp('og:description').setAttribute('content', desc);
+            ensureProp('og:type').setAttribute('content', ogType);
+            ensureProp('og:url').setAttribute('content', location.href);
+            if (imgAbs) {
+                ensureProp('og:image').setAttribute('content', imgAbs);
+                ensureProp('og:image:alt').setAttribute('content', `@${String(user.username)} profile image`);
+            }
+            const twCard = imgAbs ? 'summary_large_image' : 'summary';
+            ensureMeta('twitter:card').setAttribute('content', twCard);
+            ensureMeta('twitter:title').setAttribute('content', `@${String(user.username)} - ${siteTitle}`);
+            if (desc) ensureMeta('twitter:description').setAttribute('content', desc);
+            if (imgAbs) {
+                ensureMeta('twitter:image').setAttribute('content', imgAbs);
+                ensureMeta('twitter:image:alt').setAttribute('content', `@${String(user.username)} profile image`);
+            }
+        } catch {}
     }
 
     // Gallery/loading functions
@@ -3680,15 +3807,13 @@ class TroughApp {
                     try { history.pushState({}, '', `#${id}`); } catch {}
                 }, { once: true });
             }
-            // Update title/meta for SPA nav
+            // Update title for SPA nav; inherit index SEO for everything else
             try {
                 const siteTitle = document.querySelector('.logo')?.getAttribute('data-text') || 'TROUGH';
-                document.title = (d.meta_title && String(d.meta_title).trim()) || `${String(d.title||'Page')} - ${siteTitle}`;
-                const ensure = (sel, create) => { let m = document.querySelector(sel); if (!m) { m = document.createElement('meta'); create(m); document.head.appendChild(m);} return m; };
-                ensure('meta[name="description"]', m=>m.setAttribute('name','description')).setAttribute('content', String(d.meta_description||''));
-                ensure('meta[property="og:title"]', m=>m.setAttribute('property','og:title')).setAttribute('content', String(d.meta_title||d.title||''));
-                ensure('meta[property="og:type"]', m=>m.setAttribute('property','og:type')).setAttribute('content', 'article');
-                ensure('meta[property="og:url"]', m=>m.setAttribute('property','og:url')).setAttribute('content', location.href);
+                const newTitle = (d.meta_title && String(d.meta_title).trim()) || `${String(d.title||'Page')} - ${siteTitle}`;
+                document.title = newTitle;
+                // Re-apply site default OG/Twitter meta but with the page title and URL
+                this.applySiteDefaultMeta({ overrideTitle: newTitle, overrideUrl: location.href });
             } catch {}
             // Inline page editor for admins
             const edit = document.getElementById('page-edit');

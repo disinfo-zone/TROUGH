@@ -67,8 +67,14 @@ func maybeSeedAdmin(userRepo models.UserRepositoryInterface) {
 }
 
 // indexWithMetaHandler serves index.html with server-side SEO/OG meta tags injected from site settings
-// and, for /i/:id routes, from the specific image.
-func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, imageRepo models.ImageRepositoryInterface) fiber.Handler {
+// and, for /i/:id routes, from the specific image. For /@:username, it uses the user's bio and latest image.
+// For single-segment CMS pages, it keeps index SEO but adjusts the <title> to the page title (or meta title).
+func indexWithMetaHandler(
+	siteRepo models.SiteSettingsRepositoryInterface,
+	imageRepo models.ImageRepositoryInterface,
+	userRepo models.UserRepositoryInterface,
+	pageRepo models.PageRepositoryInterface,
+) fiber.Handler {
 	// Precompile regexes once
 	titleRe := regexp.MustCompile(`(?is)<title>.*?</title>`)
 	descRe := regexp.MustCompile(`(?is)<meta\s+name=["']description["'][^>]*>`)
@@ -134,6 +140,74 @@ func indexWithMetaHandler(siteRepo models.SiteSettingsRepositoryInterface, image
 						siteTitle := strings.TrimSpace(set.SiteName)
 						if siteTitle == "" {
 							siteTitle = "TROUGH"
+						} else if strings.HasPrefix(c.Path(), "/@") {
+							// Profile page meta: @user - SiteTitle, description from bio, image from latest user image
+							username := strings.TrimSpace(c.Params("username"))
+							if username == "" {
+								username = strings.TrimPrefix(c.Path(), "/@")
+								username = strings.TrimSpace(username)
+							}
+							if username != "" && userRepo != nil {
+								if u, err := userRepo.GetByUsername(username); err == nil && u != nil {
+									siteTitle := strings.TrimSpace(set.SiteName)
+									if siteTitle == "" {
+										siteTitle = "TROUGH"
+									}
+									// Title: "@username - SiteTitle"
+									title = "@" + u.Username + " - " + siteTitle
+									// Description from bio when available; fallback to site description
+									if u.Bio != nil {
+										bio := strings.TrimSpace(*u.Bio)
+										if bio != "" {
+											if len(bio) > 280 {
+												bio = bio[:280]
+											}
+											description = bio
+										}
+									}
+									// Latest user image for social card
+									if imageRepo != nil {
+										if imgs, _, err := imageRepo.GetUserImages(u.ID, 1, 1); err == nil && len(imgs) > 0 {
+											fn := strings.TrimSpace(imgs[0].Filename)
+											if fn != "" {
+												lowerFn := strings.ToLower(fn)
+												if strings.HasPrefix(lowerFn, "http://") || strings.HasPrefix(lowerFn, "https://") {
+													imageURL = fn
+												} else {
+													imageURL = origin + "/uploads/" + fn
+												}
+											}
+										}
+									}
+									ogType = "profile"
+								}
+							}
+						} else {
+							// Single-segment CMS page: inherit index SEO but change only <title>
+							slug := strings.Trim(strings.TrimSpace(c.Path()), "/")
+							if slug != "" && !strings.Contains(slug, "/") {
+								// Reserved prefixes that are not CMS slugs
+								reserved := map[string]bool{"api": true, "uploads": true, "assets": true, "@": true, "i": true, "register": true, "reset": true, "verify": true, "settings": true, "admin": true}
+								if !reserved[slug] && pageRepo != nil {
+									if p, err := pageRepo.GetPublishedBySlug(strings.ToLower(slug)); err == nil && p != nil {
+										siteTitle := strings.TrimSpace(set.SiteName)
+										if siteTitle == "" {
+											siteTitle = "TROUGH"
+										}
+										// Prefer page meta title when provided; otherwise use "Page - SiteTitle"
+										if p.MetaTitle != nil && strings.TrimSpace(*p.MetaTitle) != "" {
+											title = strings.TrimSpace(*p.MetaTitle)
+										} else {
+											pt := strings.TrimSpace(p.Title)
+											if pt == "" {
+												pt = "Page"
+											}
+											title = pt + " - " + siteTitle
+										}
+										// Keep description/image/ogType from site defaults to inherit index SEO
+									}
+								}
+							}
 						}
 						// Title from image (original_name acts as title)
 						imgTitle := "Untitled"
@@ -424,7 +498,7 @@ func main() {
 	})
 
 	// Serve SPA entry with server-side meta tags for key routes
-	index := indexWithMetaHandler(siteRepo, imageRepo)
+	index := indexWithMetaHandler(siteRepo, imageRepo, userRepo, pageRepo)
 	app.Get("/", index)
 	app.Get("/@:username", index)
 	app.Get("/settings", index)
