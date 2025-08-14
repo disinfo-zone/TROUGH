@@ -2991,8 +2991,8 @@ class TroughApp {
             </div>
           </div>
           <div id="invite-list" style="display:grid;gap:8px"></div>
-          <div id="invite-pagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-            <div style="display:flex;gap:8px;align-items:center">
+          <div id="invite-pagination" class="pager">
+            <div class="pager-controls">
               <button id="inv-prev" class="nav-btn" disabled>Prev</button>
               <button id="inv-next" class="nav-btn" disabled>Next</button>
             </div>
@@ -3005,9 +3005,9 @@ class TroughApp {
         usersSection.innerHTML = `
           <div class="settings-label">User management</div>
           <input id="user-search" class="settings-input" placeholder="Search users by name or email"/>
-          <div id="user-results" style="display:grid;gap:8px"></div>
-          <div id="user-pagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-            <div style="display:flex;gap:8px;align-items:center">
+          <div id="user-results" class="user-results"></div>
+          <div id="user-pagination" class="pager">
+            <div class="pager-controls">
               <button id="user-prev" class="nav-btn" disabled>Prev</button>
               <button id="user-next" class="nav-btn" disabled>Next</button>
             </div>
@@ -3194,17 +3194,19 @@ class TroughApp {
                 } else {
                     invites.forEach(inv => {
                         const row = document.createElement('div');
-                        row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:8px';
+                        row.className = 'invite-row';
                         const usesStr = inv.max_uses == null ? `${inv.uses} used (unlimited)` : `${inv.uses}/${inv.max_uses}`;
                         const expStr = inv.expires_at ? new Date(inv.expires_at).toLocaleString() : 'No expiration';
                         row.innerHTML = `
-                          <div style="display:grid;gap:4px">
-                            <div style="font-family:var(--font-mono);word-break:break-all">${inv.code}</div>
-                            <div class="meta" style="opacity:.8">Uses: ${usesStr} • Expires: ${expStr}</div>
+                          <div class="left">
+                            <div class="code">${this.escapeHTML(String(inv.code))}</div>
+                            <div class="invite-meta">Uses: ${this.escapeHTML(String(usesStr))} • Expires: ${this.escapeHTML(String(expStr))}</div>
                           </div>
-                          <button class="nav-btn" data-act="copy">Copy link</button>
-                          <button class="nav-btn" data-act="copy-code">Copy code</button>
-                          <button class="nav-btn nav-btn-danger" data-act="revoke">Revoke</button>`;
+                          <div class="invite-actions">
+                            <button class="nav-btn" data-act="copy">Copy link</button>
+                            <button class="nav-btn" data-act="copy-code">Copy code</button>
+                            <button class="nav-btn nav-btn-danger" data-act="revoke">Revoke</button>
+                          </div>`;
                         row.querySelector('[data-act="copy"]').onclick = () => copyToClipboard(buildLink(inv.code));
                         row.querySelector('[data-act="copy-code"]').onclick = () => copyToClipboard(inv.code);
                         row.querySelector('[data-act="revoke"]').onclick = async () => {
@@ -3217,7 +3219,7 @@ class TroughApp {
                     });
                     // Add prune link when invites exist
                     const prune = document.createElement('div');
-                    prune.style.cssText = 'margin-top:8px;display:flex;justify-content:flex-end';
+                    prune.className = 'invite-prune';
                     prune.innerHTML = '<button id="inv-prune" class="link-btn">Clear Used and Expired codes</button>';
                     invList.appendChild(prune);
                     const pruneBtn = document.getElementById('inv-prune');
@@ -3317,11 +3319,19 @@ class TroughApp {
         let timer;
         const renderRows = (users=[]) => {
             results.innerHTML = '';
+            if (!users || users.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'meta';
+                empty.style.opacity = '.8';
+                empty.textContent = 'No users found';
+                results.appendChild(empty);
+                return;
+            }
             users.forEach(u => {
                 const row = document.createElement('div');
                 row.className = 'user-row';
-                const left = document.createElement('div'); left.className = 'left'; left.style.minWidth='0';
-                left.innerHTML = `<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">@${this.escapeHTML(String(u.username))}</div><div class="id">${this.escapeHTML(String(u.id))}</div>`;
+                const left = document.createElement('div'); left.className = 'left';
+                left.innerHTML = `<div class="handle">@${this.escapeHTML(String(u.username))}</div><div class="id">${this.escapeHTML(String(u.id))}</div>`;
                 const right = document.createElement('div'); right.className='actions';
                 const modBtn = document.createElement('button'); modBtn.className='nav-btn'; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod';
                 modBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_moderator: !u.is_moderator }) }); if (r.ok) { u.is_moderator = !u.is_moderator; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod'; } };

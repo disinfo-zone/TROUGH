@@ -1317,11 +1317,16 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 .tab-btn[aria-pressed="true"] { background: var(--text-primary); color: var(--surface); box-shadow: var(--shadow-sm); }
 
 /* Admin user search result rows */
+.user-results { display:grid; gap:8px; }
 .user-row { display:flex; gap:8px; align-items:center; justify-content:space-between; border:1px solid var(--border); border-radius:8px; padding:8px; background: var(--surface-elevated); max-width:100%; overflow:hidden; }
 .user-row .actions { display:flex; gap:8px; flex-wrap:wrap; }
 .user-row .left { min-width:0; }
+.user-row .left .handle { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .user-row .left .id { font-size:12px; color: var(--text-secondary); word-break: break-all; }
-@media (max-width: 600px) { .user-row { flex-direction: column; align-items: stretch; gap:6px; } }
+@media (max-width: 600px) {
+  .user-row { flex-direction: column; align-items: stretch; gap:6px; }
+  .user-row .actions .nav-btn { width: 100%; }
+}
 
 /* Avatar preview */
 .avatar-row { display:flex; align-items:center; gap:12px; }
@@ -1346,3 +1351,26 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
   border-radius: var(--radius-full);
 }
 .pw-eye:hover { opacity: 1; background: var(--surface); }
+
+/* Admin Invites: responsive cards */
+.invite-row { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid var(--border); border-radius:8px; padding:8px; background: var(--surface-elevated); }
+.invite-row .left { min-width:0; }
+.invite-row .left .code { font-family: var(--font-mono); word-break: break-all; }
+.invite-row .left .invite-meta { font-size:12px; color: var(--text-secondary); opacity:.8; }
+.invite-row .invite-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+@media (max-width: 600px) {
+  .invite-row { grid-template-columns: 1fr; }
+  .invite-row .invite-actions { justify-content: stretch; }
+  .invite-row .invite-actions .nav-btn { width: 100%; }
+}
+
+/* Pager unify styling */
+.pager { display:flex; align-items:center; justify-content:space-between; margin-top:8px; }
+.pager .pager-controls { display:flex; gap:8px; align-items:center; }
+@media (max-width: 600px) {
+  .pager { flex-direction: column; align-items: stretch; gap:6px; }
+  .pager .pager-controls { justify-content: space-between; }
+}
+
+/* Invite prune link spacing */
+.invite-prune { margin-top:8px; display:flex; justify-content:flex-end; }
