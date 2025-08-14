@@ -1041,6 +1041,13 @@ class TroughApp {
             return;
         }
 
+        // Require explicit agreement to Terms + Privacy
+        const tos = document.getElementById('register-tos');
+        if (tos && !tos.checked) {
+            this.showAuthError('Please agree to the ToS and Privacy');
+            return;
+        }
+
         if (password !== confirm) {
             this.showAuthError('Passwords do not match');
             return;

@@ -810,14 +810,14 @@ input, button {
 .auth-form {
     display: flex;
     flex-direction: column;
-    gap: var(--space-xl);
+    gap: var(--space-lg);
 }
 
 .form-group {
     display: flex;
     flex-direction: column;
-    gap: var(--space-md);
-    margin-bottom: var(--space-xl);
+    gap: 10px;
+    margin-bottom: var(--space-lg);
 }
 
 .auth-form input {
@@ -831,6 +831,15 @@ input, button {
     transition: all var(--duration-fast) var(--ease-out);
 }
 
+/* Do not apply text input styles to checkboxes inside auth forms */
+.auth-form input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    padding: 0;
+    border: none;
+    background: none;
+}
+
 .auth-form input:focus {
     border-color: var(--text-primary);
     box-shadow: 0 0 0 2px rgba(122,240,255,0.2);
@@ -839,6 +848,10 @@ input, button {
 .auth-form input::placeholder {
     color: var(--text-tertiary);
 }
+
+/* Slightly reduce vertical padding for auth inputs to compact layout */
+.auth-form input { padding-top: 12px; padding-bottom: 12px; }
+.auth-form .auth-submit { margin-top: 2px; }
 
 .auth-submit {
     padding: var(--space-lg);
@@ -884,6 +897,23 @@ input, button {
     justify-content: center;
     padding: var(--space-xl);
 }
+
+/* ToS/Privacy consent row in auth modal */
+.auth-legal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    gap: 6px;
+    color: var(--text-tertiary);
+    font-size: 0.8rem;
+    line-height: 1.2;
+    text-align: center;
+    margin-top: 4px;
+}
+.auth-legal a { color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+.auth-legal a:hover { color: var(--text-primary); }
+.auth-legal input { width: 14px; height: 14px; flex: 0 0 auto; accent-color: var(--color-ok); }
 
 .upload-zone.active {
     display: flex;
@@ -1014,6 +1044,13 @@ input, button {
     .auth-content {
         padding: var(--space-xl);
     }
+}
+
+/* Mobile: nudge auth modal toward top for keyboard usability */
+@media (max-width: 600px) {
+    .auth-modal { align-items: flex-start; padding: var(--space-md); overflow-y: auto; }
+    .auth-container { margin-top: max(12px, env(safe-area-inset-top)); }
+    .auth-content { max-height: calc(100vh - 24px - env(safe-area-inset-top)); overflow: auto; }
 }
 
 /* REDUCED MOTION */
