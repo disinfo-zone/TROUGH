@@ -601,6 +601,7 @@ class TroughApp {
             // Cache for next load to avoid logo/name flash
             try { localStorage.setItem('site_settings', JSON.stringify(s)); } catch {}
             window.__SITE_EMAIL_ENABLED__ = !!s.email_enabled;
+            window.__REQUIRE_VERIFY__ = !!s.require_email_verification;
             window.__PUBLIC_REG_ENABLED__ = s.public_registration_enabled !== false; // default true
             if (s.from_email) window.__SITE_FROM_EMAIL__ = s.from_email;
             if (s.site_name) {
@@ -789,14 +790,13 @@ class TroughApp {
     }
 
     // Sign out clears auth and updates UI
-    signOut() {
-        // Clear server-side cookie session
-        fetch('/api/logout', { method: 'POST', credentials: 'include' }).finally(() => {
-            try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch {}
-            this.currentUser = null;
-            this.updateAuthButton();
-            this._myCollectedSet = new Set();
-        });
+    async signOut() {
+        // Clear server-side cookie session; keepalive ensures it completes during navigation
+        try { await fetch('/api/logout', { method: 'POST', credentials: 'include', keepalive: true }); } catch {}
+        try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch {}
+        this.currentUser = null;
+        this.updateAuthButton();
+        this._myCollectedSet = new Set();
     }
 
     setupAuthModal() {
@@ -1203,10 +1203,33 @@ class TroughApp {
             try { avatarEl.style.backgroundImage = `url('${encodeURI(safeAvatar)}')`; } catch {}
         }
         this.profileTop.appendChild(header);
+        // If owner and unverified, show banner with resend action
+        if (isOwner && this.currentUser && this.currentUser.email_verified === false) {
+            const banner = document.createElement('section');
+            banner.className = 'mono-col';
+            banner.style.cssText = 'margin:4px auto 8px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface-elevated);color:var(--text-primary);display:flex;gap:10px;align-items:center;justify-content:space-between';
+            banner.innerHTML = `
+              <div style="font-family:var(--font-mono);line-height:1.4">
+                <div style="font-weight:700;letter-spacing:-0.01em">Email not verified — uploads locked</div>
+                <div style="color:var(--text-secondary);font-size:0.9em">Verify your email to upload. You can still collect images.</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button id="banner-resend" class="nav-btn">Resend verification</button>
+              </div>`;
+            this.profileTop.appendChild(banner);
+            const btn = banner.querySelector('#banner-resend');
+            if (btn) btn.onclick = async () => {
+                try {
+                    const r = await fetch('/api/me/resend-verification', { method:'POST', credentials:'include' });
+                    if (r.status === 204) this.showNotification('Verification sent');
+                    else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); }
+                } catch {}
+            };
+        }
         if (isOwner) {
             const sBtn = document.getElementById('profile-settings'); if (sBtn) sBtn.onclick = () => { try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
             const aBtn = document.getElementById('profile-admin'); if (aBtn) aBtn.onclick = () => { try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/admin'); this.renderAdminPage(); };
-            const logoutBtn = document.getElementById('profile-logout'); if (logoutBtn) logoutBtn.onclick = () => { this.signOut(); window.location.href = '/'; };
+            const logoutBtn = document.getElementById('profile-logout'); if (logoutBtn) logoutBtn.onclick = async () => { await this.signOut(); window.location.href = '/'; };
             // Mobile menu wiring
             const toggle = document.getElementById('profile-actions-toggle');
             const panel = document.getElementById('profile-actions-panel');
@@ -1280,7 +1303,7 @@ class TroughApp {
             }
             const mSettings = document.getElementById('menu-settings'); if (mSettings) mSettings.onclick = () => { closePanel(); try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/settings'); this.renderSettingsPage(); };
             const mAdmin = document.getElementById('menu-admin'); if (mAdmin) mAdmin.onclick = () => { closePanel(); try { if (location.pathname === '/' || location.pathname.startsWith('/@')) this.persistListState(); } catch {} history.pushState({}, '', '/admin'); this.renderAdminPage(); };
-            const mSign = document.getElementById('menu-signout'); if (mSign) mSign.onclick = () => { closePanel(); this.signOut(); window.location.href = '/'; };
+            const mSign = document.getElementById('menu-signout'); if (mSign) mSign.onclick = async () => { closePanel(); await this.signOut(); window.location.href = '/'; };
         }
 
         // Upload panel (owner only) unchanged styling minimal
@@ -2007,8 +2030,20 @@ class TroughApp {
         const wrap = document.createElement('div');
         wrap.className = 'settings-wrap';
         const avatarURL = (this.currentUser && this.currentUser.avatar_url) ? this.currentUser.avatar_url : '';
-        const needVerify = !!window.__SITE_EMAIL_ENABLED__ && this.currentUser && this.currentUser.email_verified === false;
+        const needVerify = !!this.currentUser && this.currentUser.email_verified === false;
+        // Optional top-of-page verify banner
+        const verifyBanner = needVerify ? `
+          <section class="settings-group" style="border-color:var(--border-strong)">
+            <div class="mono-col" style="display:flex;gap:10px;align-items:center;justify-content:space-between">
+              <div style="font-family:var(--font-mono)">
+                <div style="font-weight:700">Email not verified — uploads locked</div>
+                <div style="color:var(--text-secondary);font-size:0.9em">Verify your email to upload. You can still collect images.</div>
+              </div>
+              <button id="settings-resend-verify" class="nav-btn">Resend verification</button>
+            </div>
+          </section>` : '';
         wrap.innerHTML = `
+          ${verifyBanner}
           <section class="settings-group">
             <div class="settings-label">Profile</div>
             <div class="avatar-row" style="align-items:flex-start;gap:12px">
@@ -2168,7 +2203,7 @@ class TroughApp {
         };
         document.getElementById('btn-delete').onclick = async () => {
             const conf = document.getElementById('delete-confirm').value.trim(); if (conf !== 'DELETE') { document.getElementById('err-delete').textContent='Type DELETE to confirm'; return; }
-            try { const resp = await fetch('/api/me', { method:'DELETE', headers: authHeader, body: JSON.stringify({ confirm:'DELETE' }) }); if (resp.status !== 204) throw await resp.json(); this.signOut(); window.location.href='/'; } catch (e) { document.getElementById('err-delete').textContent = e.error || 'Failed'; }
+            try { const resp = await fetch('/api/me', { method:'DELETE', headers: authHeader, body: JSON.stringify({ confirm:'DELETE' }) }); if (resp.status !== 204) throw await resp.json(); await this.signOut(); window.location.href='/'; } catch (e) { document.getElementById('err-delete').textContent = e.error || 'Failed'; }
         };
 
         // Avatar upload
@@ -2187,8 +2222,12 @@ class TroughApp {
             } catch (e) { this.showNotification(e.error || 'Upload failed', 'error'); }
         };
         if (needVerify) {
-            const btn = document.getElementById('btn-resend-verify');
-            if (btn) btn.onclick = async () => {
+            const btn1 = document.getElementById('btn-resend-verify');
+            if (btn1) btn1.onclick = async () => {
+                try { const r = await fetch('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
+            };
+            const btn2 = document.getElementById('settings-resend-verify');
+            if (btn2) btn2.onclick = async () => {
                 try { const r = await fetch('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
             };
         }
@@ -2224,6 +2263,10 @@ class TroughApp {
                 this.currentUser = null;
                 this.checkAuth();
                 this.showAuthModal();
+            } else if (response.status === 403) {
+                const error = await response.json().catch(() => ({}));
+                const msg = error.error || 'Uploads are disabled until you verify your email.';
+                await this.showErrorModal('Email verification required', msg + '\n\nUse Settings → Resend verification to get a new link.');
             } else {
                 const error = await response.json().catch(() => ({}));
                 await this.showErrorModal('Upload failed', error.error || 'Unknown error');

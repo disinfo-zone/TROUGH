@@ -289,7 +289,7 @@ func main() {
 		storage = services.NewLocalStorage("uploads")
 	}
 	services.SetCurrentStorage(storage)
-	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage).WithCollect(collectRepo)
+	imageHandler := handlers.NewImageHandler(imageRepo, likeRepo, userRepo, *config, storage).WithCollect(collectRepo).WithSettings(siteRepo)
 	pageRepo := models.NewPageRepository(db.DB)
 	// Seed default CMS pages once per boot if missing (respect tombstones)
 	seedDefaultPages(pageRepo, siteRepo)
@@ -483,7 +483,8 @@ func main() {
 	api.Post("/register", limiter(10, time.Minute), authHandler.Register)
 	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
 	api.Post("/login", limiter(15, time.Minute), authHandler.Login)
-	api.Post("/logout", authMW, authHandler.Logout)
+	// Allow logout without auth guard so clients can always clear cookies
+	api.Post("/logout", authHandler.Logout)
 	api.Post("/forgot-password", limiter(5, 5*time.Minute), authHandler.ForgotPassword)
 	api.Post("/reset-password", limiter(10, time.Minute), authHandler.ResetPassword)
 	api.Post("/verify-email", limiter(20, time.Minute), authHandler.VerifyEmail)

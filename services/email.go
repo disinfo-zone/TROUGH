@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"mime"
 	"net"
 	"net/smtp"
 	"net/url"
@@ -57,6 +58,37 @@ func NewMailer(cfg *models.SiteSettings) *Mailer {
 // Allows swapping in tests
 var NewMailSender = func(cfg *models.SiteSettings) MailSender { return NewMailer(cfg) }
 
+// BuildVerificationEmail returns a subject and plain-text body for email verification.
+// It is intentionally whimsical and text-only (UTF-8) to keep compatibility while feeling distinct.
+func BuildVerificationEmail(siteName, siteURL, link string) (string, string) {
+	if strings.TrimSpace(siteName) == "" {
+		siteName = "TROUGH"
+	}
+	// Normalize siteURL for display
+	siteURL = strings.TrimSpace(siteURL)
+	// Subject keeps it short and eye-catching with unicode arrows and blocks.
+	subject := "▣ Verify your email · " + siteName
+
+	// Body: retro-cyber ASCII/Unicode style, no HTML.
+	// Keep lines relatively short to render nicely in plain-text clients.
+	body := "" +
+		"┌──────────────────────────────────────────────┐\n" +
+		"│   " + siteName + " — SIGNAL CONFIRMATION RITUAL   │\n" +
+		"└──────────────────────────────────────────────┘\n\n" +
+		"greetings operator,\n\n" +
+		"to complete your account setup you must verify your email.\n" +
+		"this proves you control this address and unlocks uploads.\n\n" +
+		"→ verification link (valid ~24 hours)\n" +
+		link + "\n\n" +
+		"if the link is not clickable, copy + paste it into your browser.\n" +
+		"keep this link secret; it works once.\n\n" +
+		"site: " + siteURL + "\n" +
+		"time: " + time.Now().Format(time.RFC1123) + "\n\n" +
+		"— " + siteName + " // see you on the other side ✷\n"
+
+	return subject, body
+}
+
 // HashToken computes a hex-encoded SHA-256 of an opaque token string. Use for storing verification/reset tokens at rest.
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
@@ -64,12 +96,24 @@ func HashToken(token string) string {
 }
 
 func (s *Mailer) Send(to, subject, body string) error {
+	headerSafe := func(v string) string {
+		// Strip CR/LF to prevent header injection; headers must be single-line
+		v = strings.ReplaceAll(v, "\r", "")
+		v = strings.ReplaceAll(v, "\n", "")
+		return v
+	}
+	encodeHeader := func(v string) string {
+		// RFC 2047 encoded-word for non-ASCII
+		return mime.QEncoding.Encode("utf-8", headerSafe(v))
+	}
 	// Build dial address; net.Dial supports bracketed IPv6
 	hostPort := net.JoinHostPort(s.host, fmt.Sprintf("%d", s.port))
-	msg := []byte("From: " + s.from + "\r\n" +
-		"To: " + to + "\r\n" +
-		"Subject: " + subject + "\r\n" +
-		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body + "\r\n")
+	safeFrom := headerSafe(s.from)
+	safeTo := headerSafe(to)
+	msg := []byte("From: " + safeFrom + "\r\n" +
+		"To: " + safeTo + "\r\n" +
+		"Subject: " + encodeHeader(subject) + "\r\n" +
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" + body + "\r\n")
 	auth := smtp.PlainAuth("", s.user, s.pass, s.host)
 	// Common dialer with timeouts for non-implicit TLS path
 	dialer := &net.Dialer{Timeout: 10 * time.Second}

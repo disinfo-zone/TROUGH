@@ -41,12 +41,13 @@ func extractStorageKey(filenameOrURL string) string {
 }
 
 type ImageHandler struct {
-	imageRepo   models.ImageRepositoryInterface
-	likeRepo    models.LikeRepositoryInterface
-	userRepo    models.UserRepositoryInterface
-	config      services.Config
-	storage     services.Storage
-	collectRepo models.CollectRepositoryInterface
+	imageRepo    models.ImageRepositoryInterface
+	likeRepo     models.LikeRepositoryInterface
+	userRepo     models.UserRepositoryInterface
+	config       services.Config
+	storage      services.Storage
+	collectRepo  models.CollectRepositoryInterface
+	settingsRepo models.SiteSettingsRepositoryInterface
 }
 
 func NewImageHandler(imageRepo models.ImageRepositoryInterface, likeRepo models.LikeRepositoryInterface, userRepo models.UserRepositoryInterface, config services.Config, storage services.Storage) *ImageHandler {
@@ -64,10 +65,29 @@ func (h *ImageHandler) WithCollect(r models.CollectRepositoryInterface) *ImageHa
 	return h
 }
 
+func (h *ImageHandler) WithSettings(r models.SiteSettingsRepositoryInterface) *ImageHandler {
+	h.settingsRepo = r
+	return h
+}
+
 func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 	if userID == uuid.Nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication required"})
+	}
+	// Gate uploads for unverified users when email verification is enabled
+	if h.userRepo != nil {
+		if u, err := h.userRepo.GetByID(userID); err == nil && u != nil {
+			// Read settings via cache for performance; treat missing repo as disabled
+			var requireVerify bool
+			if h.settingsRepo != nil {
+				set := services.GetCachedSettings(h.settingsRepo)
+				requireVerify = set.RequireEmailVerification && set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != ""
+			}
+			if requireVerify && !u.EmailVerified {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Email not verified. Verify your email to upload images."})
+			}
+		}
 	}
 
 	file, err := c.FormFile("image")

@@ -160,8 +160,10 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			token := uuid.New().String()
 			exp := time.Now().Add(24 * time.Hour)
 			_ = models.CreateEmailVerification(u.ID, services.HashToken(token), exp)
-			link := set.SiteURL + "/verify?token=" + token
-			services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
+			link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
+			subj, bodyTxt := services.BuildVerificationEmail(set.SiteName, set.SiteURL, link)
+			// Send asynchronously via queue only (avoid duplicate immediate send)
+			services.EnqueueMail(u.Email, subj, bodyTxt)
 		}
 	}
 	token, err := middleware.GenerateToken(user.ID, user.Username)
@@ -212,18 +214,13 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if !user.CheckPassword(req.Password) {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 	}
-	set, _ := h.settingsRepo.Get()
-	if set.RequireEmailVerification && (set.SMTPHost != "") {
-		if !user.EmailVerified {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Email not verified"})
-		}
-	}
+	// Allow login even if email is not verified. We only gate privileged actions (uploads).
 	token, err := middleware.GenerateToken(user.ID, user.Username)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
 	// Also set HttpOnly cookie for auth
-	secure := strings.EqualFold(c.Protocol(), "https")
+	secure := strings.EqualFold(c.Protocol(), "https") || strings.EqualFold(strings.TrimSpace(c.Get("X-Forwarded-Proto")), "https")
 	if os.Getenv("FORCE_SECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("FORCE_SECURE_COOKIES"), "true") {
 		secure = true
 	}
@@ -239,6 +236,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		SameSite: "Lax",
 		MaxAge:   24 * 60 * 60,
 	})
+	// Return user as-is; frontend can detect email_verified flag and display banner/actions
 	return c.JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }
 
@@ -259,14 +257,15 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 // Logout clears the auth cookie for the current session
 func (h *AuthHandler) Logout(c *fiber.Ctx) error {
 	// Overwrite cookie with empty value and immediate expiry
-	secure := strings.EqualFold(c.Protocol(), "https")
+	secure := strings.EqualFold(c.Protocol(), "https") || strings.EqualFold(strings.TrimSpace(c.Get("X-Forwarded-Proto")), "https")
 	if os.Getenv("FORCE_SECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("FORCE_SECURE_COOKIES"), "true") {
 		secure = true
 	}
 	if os.Getenv("ALLOW_INSECURE_COOKIES") == "1" || strings.EqualFold(os.Getenv("ALLOW_INSECURE_COOKIES"), "true") {
 		secure = false
 	}
-	c.Cookie(&fiber.Cookie{Name: "auth_token", Value: "", Path: "/", HTTPOnly: true, Secure: secure, SameSite: "Lax", MaxAge: -1})
+	// Include an explicit past Expires to ensure deletion across browsers/proxies
+	c.Cookie(&fiber.Cookie{Name: "auth_token", Value: "", Path: "/", HTTPOnly: true, Secure: secure, SameSite: "Lax", MaxAge: -1, Expires: time.Unix(0, 0)})
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -297,7 +296,7 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	if err := models.CreatePasswordReset(u.ID, hashed, expires); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	link := set.SiteURL + "/reset?token=" + token
+	link := strings.TrimRight(set.SiteURL, "/") + "/reset?token=" + token
 	// Plain-text, ASCII-styled message with clear instructions and expiry notice
 	body := "" +
 		"============================\n" +
@@ -314,10 +313,7 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 		"This link expires in 1 hour or after it is used once.\n" +
 		"For security, never share this link.\n\n" +
 		"— TROUGH\n"
-		// Try async path; also attempt sync for immediate error surface
-	if err := h.newMailSender(set).Send(u.Email, "Reset your password", body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
-	}
+	// Queue async send only to avoid duplicate emails
 	services.EnqueueMail(u.Email, "Reset your password", body)
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -413,10 +409,9 @@ func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
 	if err := models.CreateEmailVerification(uid, services.HashToken(token), exp); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	link := set.SiteURL + "/verify?token=" + token
-	if err := h.newMailSender(set).Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
-	}
-	services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
+	link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
+	subj, bodyTxt := services.BuildVerificationEmail(set.SiteName, set.SiteURL, link)
+	// Queue async send only to avoid duplicate emails
+	services.EnqueueMail(u.Email, subj, bodyTxt)
 	return c.SendStatus(fiber.StatusNoContent)
 }

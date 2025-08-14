@@ -241,6 +241,15 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 	}
 	// Normalize email
 	body.Email = strings.ToLower(strings.TrimSpace(body.Email))
+	// Validate email format to prevent invalid or header-injection values from entering DB/email headers
+	if h.validator != nil {
+		type e struct {
+			Email string `validate:"required,email"`
+		}
+		if err := h.validator.Struct(e{Email: body.Email}); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid email address"})
+		}
+	}
 	// Conflict check
 	if existing, err := h.userRepo.GetByEmail(body.Email); err == nil && existing != nil {
 		if existing.ID != userID {
@@ -258,9 +267,9 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 		exp := time.Now().Add(24 * time.Hour)
 		_ = models.CreateEmailVerification(userID, services.HashToken(token), exp)
 		link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
-		// Sync send for user feedback; enqueue for background retry
-		_ = h.newMailSender(set).Send(body.Email, "Verify your email", "Click to verify: "+link)
-		services.EnqueueMail(body.Email, "Verify your email", "Click to verify: "+link)
+		subj, bodyTxt := services.BuildVerificationEmail(set.SiteName, set.SiteURL, link)
+		// Send asynchronously via queue to avoid duplicate sends
+		services.EnqueueMail(body.Email, subj, bodyTxt)
 	}
 	return c.JSON(fiber.Map{"email": body.Email})
 }
@@ -726,11 +735,10 @@ func (h *UserHandler) AdminSendVerification(c *fiber.Ctx) error {
 	if err := models.CreateEmailVerification(id, services.HashToken(token), exp); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed"})
 	}
-	link := set.SiteURL + "/verify?token=" + token
-	if err := services.NewMailSender(set).Send(u.Email, "Verify your email", "Click to verify: "+link); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "SMTP send failed", "details": err.Error()})
-	}
-	services.EnqueueMail(u.Email, "Verify your email", "Click to verify: "+link)
+	link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
+	subj, bodyTxt := services.BuildVerificationEmail(set.SiteName, set.SiteURL, link)
+	// Use async queue only to avoid duplicates
+	services.EnqueueMail(u.Email, subj, bodyTxt)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
