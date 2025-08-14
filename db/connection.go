@@ -109,7 +109,9 @@ func Migrate() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_images_created_id ON images(created_at DESC, id DESC);
 		CREATE INDEX IF NOT EXISTS idx_images_user ON images(user_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_images_user_created_id ON images(user_id, created_at DESC, id DESC);
 		CREATE INDEX IF NOT EXISTS idx_likes_image ON likes(image_id);
 		CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id);
 		CREATE INDEX IF NOT EXISTS idx_collections_image ON collections(image_id);
@@ -194,6 +196,11 @@ func Migrate() error {
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS umami_website_id TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS plausible_src TEXT DEFAULT '';
 		ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS plausible_domain TEXT DEFAULT '';
+
+			-- Backup scheduler settings
+			ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS backup_enabled BOOLEAN DEFAULT FALSE;
+			ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS backup_interval TEXT DEFAULT '24h';
+			ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS backup_keep_days INTEGER DEFAULT 7;
 
 			-- Invitation codes for gated registration
 		CREATE TABLE IF NOT EXISTS invites (

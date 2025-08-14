@@ -325,7 +325,7 @@ func (h *ImageHandler) GetFeed(c *fiber.Ctx) error {
 	if cursor != "" {
 		images, next, err := h.imageRepo.GetFeedSeek(limit, showNSFW, cursor)
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images"})
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images", "details": err.Error()})
 		}
 		return c.JSON(models.FeedResponse{Images: images, NextCursor: next})
 	}
@@ -348,7 +348,7 @@ func (h *ImageHandler) GetFeed(c *fiber.Ctx) error {
 	// Backward-compatible page/offset fallback
 	images, total, err := h.imageRepo.GetFeed(page, limit, showNSFW)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch images", "details": err.Error()})
 	}
 	return c.JSON(models.FeedResponse{Images: images, Page: page, Total: total})
 }

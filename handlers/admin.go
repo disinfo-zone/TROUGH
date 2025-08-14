@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -598,6 +599,137 @@ func (h *AdminHandler) TestStorage(c *fiber.Ctx) error {
 		"public":          st.PublicURL(""),
 		"public_base_url": set.PublicBaseURL,
 	})
+}
+
+// ---- Backups ----
+
+// AdminCreateBackup creates a new backup and returns it as a downloadable file (application/gzip).
+func (h *AdminHandler) AdminCreateBackup(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	b, name, err := services.CreateBackup(c.Context(), models.DB())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create backup"})
+	}
+	c.Set("Content-Type", "application/gzip")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", name))
+	return c.Send(b)
+}
+
+// AdminListBackups lists locally stored backup files (in backups/ directory).
+func (h *AdminHandler) AdminListBackups(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	list, err := services.ListBackups("backups")
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to list backups"})
+	}
+	return c.JSON(fiber.Map{"backups": list})
+}
+
+// AdminSaveBackup writes a backup to server disk (backups/) and returns path metadata.
+func (h *AdminHandler) AdminSaveBackup(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	path, err := services.SaveBackupFile(c.Context(), models.DB(), "backups")
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save backup"})
+	}
+	return c.JSON(fiber.Map{"path": path})
+}
+
+// AdminDeleteBackup deletes a named backup from server disk.
+func (h *AdminHandler) AdminDeleteBackup(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	name := strings.TrimSpace(c.Params("name"))
+	if name == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Name required"})
+	}
+	if err := services.DeleteBackup("backups", name); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Delete failed"})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// AdminRestoreBackup restores from an uploaded backup file.
+func (h *AdminHandler) AdminRestoreBackup(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file provided"})
+	}
+	f, err := fileHeader.Open()
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to open file"})
+	}
+	defer f.Close()
+	var r io.Reader = f
+	if err := services.RestoreBackup(c.Context(), models.DB(), r); err != nil {
+		log.Printf("Admin: restore failed: %v", err)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Restore failed", "details": err.Error()})
+	}
+	// Invalidate caches that may depend on DB
+	services.InvalidateSettingsCache()
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// AdminDownloadSavedBackup streams a previously-saved backup file by name.
+func (h *AdminHandler) AdminDownloadSavedBackup(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	name := strings.TrimSpace(c.Params("name"))
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid name"})
+	}
+	path := filepath.Join("backups", name)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Not found"})
+	}
+	c.Set("Content-Type", "application/gzip")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", name))
+	return c.Send(b)
+}
+
+// AdminDiag returns quick sanity counts for core tables.
+func (h *AdminHandler) AdminDiag(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	type stat struct {
+		Count int `json:"count"`
+	}
+	db := models.DB()
+	out := fiber.Map{}
+	var v int
+	// helpers
+	count := func(table string) int {
+		v = 0
+		_ = db.Get(&v, "SELECT COUNT(*) FROM "+table)
+		return v
+	}
+	out["users"] = count("users")
+	out["images"] = count("images")
+	out["collections"] = count("collections")
+	out["likes"] = count("likes")
+	out["pages"] = count("pages")
+	// sample ids
+	type row struct {
+		ID        string    `db:"id" json:"id"`
+		CreatedAt time.Time `db:"created_at" json:"created_at"`
+	}
+	var img row
+	_ = db.Get(&img, `SELECT id, created_at FROM images ORDER BY created_at DESC LIMIT 1`)
+	out["latest_image"] = img
+	return c.JSON(out)
 }
 
 // ---- CMS Pages (Admin) ----

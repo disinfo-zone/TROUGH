@@ -39,6 +39,10 @@ type SiteSettings struct {
 	UmamiWebsiteID    string `db:"umami_website_id" json:"umami_website_id"`
 	PlausibleSrc      string `db:"plausible_src" json:"plausible_src"`
 	PlausibleDomain   string `db:"plausible_domain" json:"plausible_domain"`
+	// Backups
+	BackupEnabled  bool   `db:"backup_enabled" json:"backup_enabled"`
+	BackupInterval string `db:"backup_interval" json:"backup_interval"`
+	BackupKeepDays int    `db:"backup_keep_days" json:"backup_keep_days"`
 }
 
 type SiteSettingsRepository struct{ db *sqlx.DB }
@@ -59,7 +63,7 @@ func (r *SiteSettingsRepository) Get() (*SiteSettings, error) {
 	err := r.db.Get(&s, `SELECT * FROM site_settings WHERE id = 1`)
 	if err != nil {
 		// Safe defaults when no settings row exists yet
-		return &SiteSettings{ID: 1, SiteName: "TROUGH", PublicRegistrationEnabled: true}, nil
+		return &SiteSettings{ID: 1, SiteName: "TROUGH", PublicRegistrationEnabled: true, BackupInterval: "24h", BackupKeepDays: 7}, nil
 	}
 	return &s, nil
 }
@@ -73,6 +77,7 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
             s3_access_key, s3_secret_key, s3_force_path_style, public_base_url,
             analytics_enabled, analytics_provider, ga4_measurement_id, umami_src, umami_website_id,
             plausible_src, plausible_domain,
+            backup_enabled, backup_interval, backup_keep_days,
             updated_at
         ) VALUES (
             1, $1, $2, $3, $4, $5,
@@ -81,6 +86,7 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
             $17, $18, $19, $20,
             $21, $22, $23, $24, $25,
             $26, $27,
+            $28, $29, $30,
             NOW()
         )
         ON CONFLICT (id) DO UPDATE SET
@@ -111,6 +117,9 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
             umami_website_id = EXCLUDED.umami_website_id,
             plausible_src = EXCLUDED.plausible_src,
             plausible_domain = EXCLUDED.plausible_domain,
+            backup_enabled = EXCLUDED.backup_enabled,
+            backup_interval = EXCLUDED.backup_interval,
+            backup_keep_days = EXCLUDED.backup_keep_days,
             updated_at = NOW()
     `,
 		s.SiteName, s.SiteURL, s.SEOTitle, s.SEODescription, s.SocialImageURL,
@@ -119,6 +128,7 @@ func (r *SiteSettingsRepository) Upsert(s *SiteSettings) error {
 		s.S3AccessKey, s.S3SecretKey, s.S3ForcePathStyle, s.PublicBaseURL,
 		s.AnalyticsEnabled, s.AnalyticsProvider, s.GA4MeasurementID, s.UmamiSrc, s.UmamiWebsiteID,
 		s.PlausibleSrc, s.PlausibleDomain,
+		s.BackupEnabled, s.BackupInterval, s.BackupKeepDays,
 	)
 	return err
 }

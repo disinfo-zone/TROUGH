@@ -162,7 +162,7 @@ func (h *UserHandler) GetUserCollections(c *fiber.Ctx) error {
 	}
 	images, total, err := h.collectRepo.GetUserCollections(user.ID, page, limit)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch collections"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch collections", "details": err.Error()})
 	}
 	return c.JSON(models.FeedResponse{Images: images, Page: page, Total: total})
 }

@@ -255,6 +255,7 @@ class TroughApp {
                 scrollY: typeof window !== 'undefined' ? window.scrollY : 0,
                 firstVisibleIndex,
                 firstVisibleId,
+                profileTab: this.profileTab || 'posts',
                 savedAt: Date.now(),
             };
             console.log('[TROUGH] Persisting list state:', { key, state });
@@ -286,7 +287,9 @@ class TroughApp {
                 this.hasMore = true;
                 await this.loadImages();
             } else if (path.startsWith('/@')) {
-                // Profile pages fetch page 1 only; rendering is handled by caller
+                // Fresh render of profile page 1 when no saved page info exists
+                const username = decodeURIComponent(path.slice(2));
+                await this.renderProfilePage(username);
                 try { if (typeof state?.scrollY === 'number') window.scrollTo(0, state.scrollY); } catch {}
             }
             return;
@@ -306,18 +309,37 @@ class TroughApp {
                 // Immediately reveal a small batch so the anchor card exists in DOM
                 this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
             }
-            this.isRestoring = false;
             // Prefer anchoring by id, then index; fallback to scrollY
+            const prevRestore = this.isRestoring;
+            this.isRestoring = true; // force synchronous reveals during anchoring
             let targetCard = null;
             if (state.firstVisibleId) {
-                targetCard = document.querySelector(`.image-card[data-image-id="${CSS.escape(String(state.firstVisibleId))}"]`);
+                const selector = `.image-card[data-image-id="${CSS.escape(String(state.firstVisibleId))}"]`;
+                targetCard = document.querySelector(selector);
+                // If not present yet, progressively reveal/fetch until it exists or we run out
+                let guard = 0;
+                while (!targetCard && guard < 50) {
+                    let revealed = 0;
+                    if (this.unrendered && this.unrendered.length) {
+                        revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+                    } else if (this.hasMore && !this.loading && (this.routeMode === 'home' || this.routeMode === 'profile')) {
+                        await this.loadImages();
+                        revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+                    } else {
+                        break;
+                    }
+                    if (!revealed) break;
+                    targetCard = document.querySelector(selector);
+                    guard++;
+                }
             }
             if (!targetCard && Number.isFinite(state.firstVisibleIndex) && state.firstVisibleIndex > 0) {
-                const cards = Array.from(document.querySelectorAll('.image-card'));
+                let cards = Array.from(document.querySelectorAll('.image-card'));
                 // If the indexed card doesn't exist yet, try revealing until it does or we run out
                 while (!cards[state.firstVisibleIndex] && (this.unrendered && this.unrendered.length)) {
                     const revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
                     if (!revealed) break;
+                    cards = Array.from(document.querySelectorAll('.image-card'));
                 }
                 const cards2 = Array.from(document.querySelectorAll('.image-card'));
                 targetCard = cards2[state.firstVisibleIndex] || null;
@@ -332,19 +354,71 @@ class TroughApp {
                 try { window.scrollTo(0, state.scrollY); } catch {}
                 await this.topUpBelowViewport(4);
             }
+            this.isRestoring = prevRestore;
         } else if (path.startsWith('/@')) {
-            // For profiles, fetch the page 1 images, then scroll to saved position
+            // For profiles, rebuild up to the saved page and anchor like home
+            const username = decodeURIComponent(path.slice(2));
+            const targetPage = Math.max(1, state.page);
+            const targetTab = state.profileTab || 'posts';
+            // Fresh render honoring the saved tab
+            this.gallery.classList.remove('settings-mode');
+            this.gallery.innerHTML = '';
+            if (this.profileTop) this.profileTop.innerHTML = '';
+            this.page = 1;
+            this.hasMore = true;
             this.isRestoring = true;
-            try {
-                // Re-render profile (page 1 already fetched by renderProfilePage when navigated via back)
-                // If we are on a fresh load and calling restore explicitly, ensure DOM exists
-                const username = decodeURIComponent(path.slice(2));
-                if (!document.querySelector('.image-card')) {
-                    await this.renderProfilePage(username);
+            await this.renderProfilePage(username, { defaultTab: targetTab, suppressInfinite: true });
+            // Load subsequent pages up to target
+            while (this.page <= targetPage && this.hasMore) {
+                await this.loadImages();
+                this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+            }
+            // Anchor by id or index if available
+            const prevRestore2 = this.isRestoring;
+            this.isRestoring = true; // force synchronous reveals during anchoring
+            let targetCard = null;
+            if (state.firstVisibleId) {
+                const selector = `.image-card[data-image-id="${CSS.escape(String(state.firstVisibleId))}"]`;
+                targetCard = document.querySelector(selector);
+                // If not present yet, progressively reveal/fetch until it exists or we run out
+                let guard = 0;
+                while (!targetCard && guard < 50) {
+                    let revealed = 0;
+                    if (this.unrendered && this.unrendered.length) {
+                        revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+                    } else if (this.hasMore && !this.loading && (this.routeMode === 'home' || this.routeMode === 'profile')) {
+                        await this.loadImages();
+                        revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+                    } else {
+                        break;
+                    }
+                    if (!revealed) break;
+                    targetCard = document.querySelector(selector);
+                    guard++;
                 }
-            } catch {}
-            this.isRestoring = false;
-            if (typeof state.scrollY === 'number') { try { window.scrollTo(0, state.scrollY); } catch {} }
+            }
+            if (!targetCard && Number.isFinite(state.firstVisibleIndex) && state.firstVisibleIndex > 0) {
+                let cards = Array.from(document.querySelectorAll('.image-card'));
+                while (!cards[state.firstVisibleIndex] && (this.unrendered && this.unrendered.length)) {
+                    const revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 6 : 10);
+                    if (!revealed) break;
+                    cards = Array.from(document.querySelectorAll('.image-card'));
+                }
+                const cards2 = Array.from(document.querySelectorAll('.image-card'));
+                targetCard = cards2[state.firstVisibleIndex] || null;
+            }
+            if (targetCard) {
+                const rect = targetCard.getBoundingClientRect();
+                const y = rect.top + window.scrollY - (document.getElementById('nav')?.offsetHeight || 0) - 8;
+                try { window.scrollTo(0, Math.max(0, y)); } catch {}
+                await this.topUpBelowViewport(4);
+            } else if (typeof state.scrollY === 'number') {
+                try { window.scrollTo(0, state.scrollY); } catch {}
+                await this.topUpBelowViewport(4);
+            }
+            this.isRestoring = prevRestore2;
+            // Re-enable infinite scrolling after anchoring
+            this.setupInfiniteScroll();
         }
     }
 
@@ -360,14 +434,8 @@ class TroughApp {
                 const id2 = location.pathname.split('/')[2];
                 await this.renderImagePage(id2);
             } else if (location.pathname.startsWith('/@')) {
-                const u = decodeURIComponent(location.pathname.slice(2));
-                // Render synchronously for restoration to avoid duplicate/staggered inserts
-                this.isRestoring = true;
-                // Ensure multi-column gallery mode for profiles
-                this.gallery.classList.remove('settings-mode');
-                await this.renderProfilePage(u);
+                // Delegate rendering and anchoring to the state restorer
                 await this.restoreListState(location.pathname);
-                this.isRestoring = false;
             } else if (location.pathname === '/settings') {
                 await this.renderSettingsPage();
             } else if (location.pathname === '/admin') {
@@ -1195,10 +1263,11 @@ class TroughApp {
         return text;
     }
 
-    async renderProfilePage(username) {
+    async renderProfilePage(username, opts = {}) {
         this.beginRender('profile');
         this.profileUsername = username;
-        this.profileTab = 'posts';
+        this.profileTab = String(opts.defaultTab || 'posts');
+        const suppressInfinite = !!opts.suppressInfinite;
         // Ensure gallery uses multi-column layout (remove single-column mode from image page)
         this.gallery.classList.remove('settings-mode');
         if (this.profileTop) this.profileTop.innerHTML = '';
@@ -1502,7 +1571,7 @@ class TroughApp {
                 this.hasMore = false;
             }
             // Enable infinite scroll sentinel for profiles as well
-            this.setupInfiniteScroll();
+            if (!suppressInfinite) this.setupInfiniteScroll();
         };
 
         const loadCollections = async () => {
@@ -1526,7 +1595,7 @@ class TroughApp {
                     this.hasMore = false;
                 }
                 // Enable infinite scroll sentinel for profiles as well
-                this.setupInfiniteScroll();
+                if (!suppressInfinite) this.setupInfiniteScroll();
             } catch {}
         };
 
@@ -1537,16 +1606,23 @@ class TroughApp {
                 postsBtn.setAttribute('aria-pressed','true');
                 colBtn.setAttribute('aria-pressed','false');
                 await loadPosts();
+                try { this.persistListState(); } catch {}
             };
             colBtn.onclick = async () => {
                 postsBtn.setAttribute('aria-pressed','false');
                 colBtn.setAttribute('aria-pressed','true');
                 await loadCollections();
+                try { this.persistListState(); } catch {}
             };
         }
 
-        // Default to posts; if user has no posts, show collections
-        if ((imgs.images || []).length === 0) {
+        // Default to posts or collections based on opts; fallback to posts if available
+        if (opts && opts.defaultTab === 'collections') {
+            postsBtn.setAttribute('aria-pressed','false');
+            colBtn.setAttribute('aria-pressed','true');
+            await this.seedMyCollectedSet();
+            await loadCollections();
+        } else if ((imgs.images || []).length === 0) {
             postsBtn.setAttribute('aria-pressed','false');
             colBtn.setAttribute('aria-pressed','true');
             await loadCollections();
@@ -1645,11 +1721,11 @@ class TroughApp {
                     this.hasMore = false;
                 }
             } else {
-                if (this.page === 1 && this.routeMode === 'home') this.renderDemoImages();
+                // Do not render demo content on failures
                 this.hasMore = false;
             }
         } catch (e) {
-            if (this.page === 1 && this.routeMode === 'home') this.renderDemoImages();
+            // Do not render demo content on failures
             this.hasMore = false;
         } finally {
             this.loading = false;
@@ -2563,6 +2639,11 @@ class TroughApp {
 
     // Managed masonry: explicit column containers for efficient initial load
     enableManagedMasonry() {
+        // Temporarily disable managed masonry on profile pages to fix a desktop rendering issue
+        if (this.routeMode === 'profile') {
+            this.disableManagedMasonry();
+            return;
+        }
         const g = this.gallery;
         if (!g) return;
         // On mobile, keep single column and native flow
@@ -3050,10 +3131,12 @@ class TroughApp {
         const tabPages = isAdmin ? mkTab('pages', 'Add/Edit Pages') : null;
         const tabInv = mkTab('invites', 'Invitations');
         const tabUsers = mkTab('users', 'User management');
+        const tabBackups = isAdmin ? mkTab('backups', 'Backups') : null;
         tabsWrap.appendChild(tabSite);
         if (tabPages) tabsWrap.appendChild(tabPages);
         tabsWrap.appendChild(tabInv);
         tabsWrap.appendChild(tabUsers);
+        if (tabBackups) tabsWrap.appendChild(tabBackups);
         wrap.appendChild(tabsWrap);
         // Sections container
         const sections = document.createElement('div');
@@ -3061,10 +3144,42 @@ class TroughApp {
         if (isAdmin) sections.appendChild(pagesSection);
         sections.appendChild(invitesSection);
         sections.appendChild(usersSection);
+        let backupsSection = null;
+        if (isAdmin) {
+            backupsSection = document.createElement('section');
+            backupsSection.className = 'settings-group';
+            backupsSection.innerHTML = `
+              <div class="settings-label" style="display:flex;align-items:center;justify-content:space-between"><span>Backups</span><small class="meta" style="opacity:.8">Database only; images are not included</small></div>
+              <div style="display:grid;gap:8px">
+                <div class="settings-actions" style="gap:8px;align-items:center">
+                  <button id="btn-backup-download" class="nav-btn">Create & download backup</button>
+                  <button id="btn-backup-save" class="nav-btn">Create & save on server</button>
+                </div>
+                <div style="display:grid;gap:8px">
+                  <label class="settings-label">Restore</label>
+                  <input id="backup-file" type="file" accept=".gz,.json"/>
+                  <button id="btn-backup-restore" class="nav-btn">Restore from file</button>
+                </div>
+                <div style="display:grid;gap:8px">
+                  <label class="settings-label">Automatic backups</label>
+                  <label style="display:flex;gap:8px;align-items:center"><input id="backup-enabled" type="checkbox"/> Enable scheduler</label>
+                  <div style="display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+                    <div style="display:grid;gap:6px"><label class="settings-label">Interval</label><input id="backup-interval" class="settings-input" placeholder="e.g., 24h, 7h"/></div>
+                    <div style="display:grid;gap:6px"><label class="settings-label">Keep days</label><input id="backup-keep" class="settings-input no-spinner" type="number" min="1"/></div>
+                  </div>
+                  <div class="settings-actions" style="gap:8px;align-items:center"><button id="btn-save-backup-settings" class="nav-btn">Save backup settings</button></div>
+                </div>
+                <div style="display:grid;gap:8px">
+                  <label class="settings-label">Saved backups</label>
+                  <div id="backup-list" style="display:grid;gap:6px"></div>
+                </div>
+              </div>`;
+            sections.appendChild(backupsSection);
+        }
         wrap.appendChild(sections);
         const showSection = (name) => {
-            const map = { site: siteSection, pages: pagesSection, invites: invitesSection, users: usersSection };
-            [siteSection, pagesSection, invitesSection, usersSection].forEach(sec => { if (sec) sec.style.display = 'none'; });
+            const map = { site: siteSection, pages: pagesSection, invites: invitesSection, users: usersSection, backups: backupsSection };
+            [siteSection, pagesSection, invitesSection, usersSection, backupsSection].forEach(sec => { if (sec) sec.style.display = 'none'; });
             if (map[name]) map[name].style.display = 'block';
             const setActive = (btn, on) => {
                 if (!btn) return;
@@ -3077,7 +3192,7 @@ class TroughApp {
                     btn.classList.remove('active');
                 }
             };
-            setActive(tabSite, name==='site'); setActive(tabPages, name==='pages'); setActive(tabInv, name==='invites'); setActive(tabUsers, name==='users');
+            setActive(tabSite, name==='site'); setActive(tabPages, name==='pages'); setActive(tabInv, name==='invites'); setActive(tabUsers, name==='users'); setActive(tabBackups, name==='backups');
         };
         // Default tab
         showSection('site');
@@ -3086,10 +3201,96 @@ class TroughApp {
         if (tabPages) tabPages.onclick = () => showSection('pages');
         tabInv.onclick = () => showSection('invites');
         tabUsers.onclick = () => showSection('users');
+        if (tabBackups) tabBackups.onclick = () => showSection('backups');
         
         this.gallery.appendChild(wrap);
 
         if (isAdmin) {
+            // Initialize backups tab
+            const initBackups = async () => {
+                try {
+                    // Seed form with site settings values
+                    const rs = await fetch('/api/admin/site', { credentials:'include' });
+                    const s = rs.ok ? await rs.json() : {};
+                    const be = backupsSection.querySelector('#backup-enabled');
+                    const bi = backupsSection.querySelector('#backup-interval');
+                    const bk = backupsSection.querySelector('#backup-keep');
+                    if (be) be.checked = !!s.backup_enabled;
+                    if (bi) bi.value = s.backup_interval || '24h';
+                    if (bk) bk.value = s.backup_keep_days || 7;
+                } catch {}
+                // Load server backups list
+                const listEl = backupsSection.querySelector('#backup-list');
+                const loadList = async () => {
+                    const r = await fetch('/api/admin/backups', { credentials:'include' });
+                    listEl.innerHTML = '';
+                    if (!r.ok) return;
+                    const d = await r.json().catch(()=>({backups:[]}));
+                    (d.backups||[]).forEach(f => {
+                        const row = document.createElement('div');
+                        row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:8px;';
+                        const sizeMB = (f.size/1024/1024).toFixed(2);
+                        row.innerHTML = `<div><div style="font-weight:600">${this.escapeHTML(String(f.name||''))}</div><div class="meta" style="opacity:.8">${sizeMB} MB • ${new Date(f.mod_time).toLocaleString()}</div></div><button class="nav-btn" data-act="download">Download</button><button class="nav-btn nav-btn-danger" data-act="remove">Delete</button>`;
+                        row.querySelector('[data-act="download"]').onclick = () => {
+                            const a = document.createElement('a'); a.href = `/api/admin/backups/${encodeURIComponent(f.name)}`; a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+                        };
+                        row.querySelector('[data-act="remove"]').onclick = async () => {
+                            const ok = await this.showConfirm('Delete this backup?'); if (!ok) return;
+                            const rr = await fetch(`/api/admin/backups/${encodeURIComponent(f.name)}`, { method:'DELETE', credentials:'include' });
+                            if (rr.status===204) { this.showNotification('Deleted'); loadList(); } else { this.showNotification('Delete failed','error'); }
+                        };
+                        listEl.appendChild(row);
+                    });
+                };
+                await loadList();
+                // Wire actions
+                const dlBtn = backupsSection.querySelector('#btn-backup-download');
+                if (dlBtn) dlBtn.onclick = async () => {
+                    try {
+                        const r = await fetch('/api/admin/backups/download', { method:'POST', credentials:'include' });
+                        if (!r.ok) { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); return; }
+                        const blob = await r.blob();
+                        const cd = r.headers.get('Content-Disposition')||'';
+                        const name = (/filename="?([^";]+)"?/i.exec(cd)||[])[1] || `trough-backup-${Date.now()}.json.gz`;
+                        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+                    } catch { this.showNotification('Failed','error'); }
+                };
+                const saveBtn = backupsSection.querySelector('#btn-backup-save');
+                if (saveBtn) saveBtn.onclick = async () => {
+                    const r = await fetch('/api/admin/backups/save', { method:'POST', credentials:'include' });
+                    if (r.ok) { this.showNotification('Saved'); await loadList(); }
+                    else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); }
+                };
+                const restoreBtn = backupsSection.querySelector('#btn-backup-restore');
+                const fileInp = backupsSection.querySelector('#backup-file');
+                if (restoreBtn) restoreBtn.onclick = async () => {
+                    const f = fileInp && fileInp.files && fileInp.files[0]; if (!f) { this.showNotification('Choose a backup file','error'); return; }
+                    const ok = await this.showConfirm('Restore will replace existing data. Continue?'); if (!ok) return;
+                    const fd = new FormData(); fd.append('file', f);
+                    const r = await fetch('/api/admin/backups/restore', { method:'POST', credentials:'include', body: fd });
+                    if (r.status===204) { this.showNotification('Restored'); }
+                    else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Restore failed','error'); }
+                };
+                const saveSettingsBtn = backupsSection.querySelector('#btn-save-backup-settings');
+                if (saveSettingsBtn) saveSettingsBtn.onclick = async () => {
+                    const rs = await fetch('/api/admin/site', { credentials:'include' });
+                    const s = rs.ok ? await rs.json() : {};
+                    const body = {
+                        site_name: s.site_name||'', site_url: s.site_url||'', seo_title: s.seo_title||'', seo_description: s.seo_description||'', social_image_url: s.social_image_url||'',
+                        storage_provider: s.storage_provider||'local', s3_endpoint: s.s3_endpoint||'', s3_bucket: s.s3_bucket||'', s3_access_key: s.s3_access_key||'', s3_secret_key: s.s3_secret_key||'', s3_force_path_style: !!s.s3_force_path_style, public_base_url: s.public_base_url||'',
+                        smtp_host: s.smtp_host||'', smtp_port: s.smtp_port||0, smtp_username: s.smtp_username||'', smtp_password: s.smtp_password||'', smtp_from_email: s.smtp_from_email||'', smtp_tls: !!s.smtp_tls,
+                        require_email_verification: !!s.require_email_verification, public_registration_enabled: s.public_registration_enabled!==false,
+                        analytics_enabled: !!s.analytics_enabled, analytics_provider: s.analytics_provider||'', ga4_measurement_id: s.ga4_measurement_id||'', umami_src: s.umami_src||'', umami_website_id: s.umami_website_id||'', plausible_src: s.plausible_src||'', plausible_domain: s.plausible_domain||'',
+                        backup_enabled: backupsSection.querySelector('#backup-enabled')?.checked || false,
+                        backup_interval: backupsSection.querySelector('#backup-interval')?.value || '24h',
+                        backup_keep_days: parseInt(backupsSection.querySelector('#backup-keep')?.value||'7',10)
+                    };
+                    const r = await fetch('/api/admin/site', { method:'PUT', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
+                    if (r.ok) { this.showNotification('Saved'); }
+                    else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Save failed','error'); }
+                };
+            };
+            if (backupsSection) { initBackups(); }
             // Pages management
             const pgSlug = pagesSection.querySelector('#pg-slug');
             const pgTitle = pagesSection.querySelector('#pg-title');

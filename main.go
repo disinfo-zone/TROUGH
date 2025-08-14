@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"html"
 	"log"
 	"os"
@@ -390,6 +391,28 @@ func main() {
 		JSONDecoder:  gjson.Unmarshal,
 	})
 
+	// Start backup scheduler goroutine (best-effort, non-blocking)
+	go func() {
+		// Simple ticker-based scheduler using settings cache
+		for {
+			set := services.GetCachedSettings(siteRepo)
+			if set.BackupEnabled {
+				// Parse interval; fallback to 24h
+				d, err := time.ParseDuration(strings.TrimSpace(set.BackupInterval))
+				if err != nil || d <= 0 {
+					d = 24 * time.Hour
+				}
+				// Perform backup and cleanup
+				if _, err := services.SaveBackupFile(context.Background(), db.DB, "backups"); err == nil {
+					_ = services.CleanupBackups("backups", set.BackupKeepDays)
+				}
+				time.Sleep(d)
+				continue
+			}
+			time.Sleep(30 * time.Minute)
+		}
+	}()
+
 	// Lightweight rate-limiting for sensitive endpoints (login/register/reset)
 	// Without external deps: simple token bucket per IP in-memory
 	type rlEntry struct {
@@ -615,6 +638,14 @@ func main() {
 	api.Post("/admin/site/export-uploads", authMW, adminHandler.ExportLocalUploadsToStorage)
 	api.Post("/admin/site/test-storage", authMW, adminHandler.TestStorage)
 	// Admin CMS pages
+	// Admin backups
+	api.Post("/admin/backups/download", authMW, adminHandler.AdminCreateBackup)
+	api.Get("/admin/backups", authMW, adminHandler.AdminListBackups)
+	api.Post("/admin/backups/save", authMW, adminHandler.AdminSaveBackup)
+	api.Delete("/admin/backups/:name", authMW, adminHandler.AdminDeleteBackup)
+	api.Post("/admin/backups/restore", authMW, adminHandler.AdminRestoreBackup)
+	api.Get("/admin/backups/:name", authMW, adminHandler.AdminDownloadSavedBackup)
+	api.Get("/admin/diag", authMW, adminHandler.AdminDiag)
 	api.Get("/admin/pages", authMW, adminHandler.AdminListPages)
 	api.Post("/admin/pages", authMW, adminHandler.AdminCreatePage)
 	api.Put("/admin/pages/:id", authMW, adminHandler.AdminUpdatePage)

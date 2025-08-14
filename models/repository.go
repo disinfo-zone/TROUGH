@@ -204,9 +204,13 @@ func (r *ImageRepository) GetFeed(page, limit int, showNSFW bool) ([]ImageWithUs
 	}
 
 	query := `
-        SELECT i.*, u.username, u.avatar_url
+        SELECT 
+            i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+            i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+            COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+            u.username, u.avatar_url
         FROM images i
-        JOIN users u ON i.user_id = u.id
+        LEFT JOIN users u ON i.user_id = u.id
         WHERE ($1 OR i.is_nsfw = false)
         ORDER BY i.created_at DESC, i.id DESC
         LIMIT $2 OFFSET $3`
@@ -267,9 +271,13 @@ func (r *ImageRepository) GetFeedSeek(limit int, showNSFW bool, cursorEncoded st
 	if cur == nil {
 		// First page
 		q := `
-            SELECT i.*, u.username, u.avatar_url
+            SELECT 
+                i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+                i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+                COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+                u.username, u.avatar_url
             FROM images i
-            JOIN users u ON i.user_id = u.id
+            LEFT JOIN users u ON i.user_id = u.id
             WHERE ($1 OR i.is_nsfw = false)
             ORDER BY i.created_at DESC, i.id DESC
             LIMIT $2`
@@ -278,9 +286,13 @@ func (r *ImageRepository) GetFeedSeek(limit int, showNSFW bool, cursorEncoded st
 		}
 	} else {
 		q := `
-            SELECT i.*, u.username, u.avatar_url
+            SELECT 
+                i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+                i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+                COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+                u.username, u.avatar_url
             FROM images i
-            JOIN users u ON i.user_id = u.id
+            LEFT JOIN users u ON i.user_id = u.id
             WHERE ($1 OR i.is_nsfw = false)
               AND (i.created_at < $2 OR (i.created_at = $2 AND i.id < $3))
             ORDER BY i.created_at DESC, i.id DESC
@@ -307,10 +319,14 @@ func (r *ImageRepository) CountFeed(showNSFW bool) (int, error) {
 func (r *ImageRepository) GetByID(id uuid.UUID) (*ImageWithUser, error) {
 	var image ImageWithUser
 	query := `
-		SELECT i.*, u.username, u.avatar_url
-		FROM images i
-		JOIN users u ON i.user_id = u.id
-		WHERE i.id = $1`
+        SELECT 
+            i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+            i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+            COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+            u.username, u.avatar_url
+        FROM images i
+        LEFT JOIN users u ON i.user_id = u.id
+        WHERE i.id = $1`
 
 	err := r.db.Get(&image, query, id)
 	if err != nil {
@@ -332,12 +348,16 @@ func (r *ImageRepository) GetUserImages(userID uuid.UUID, page, limit int) ([]Im
 	}
 
 	query := `
-		SELECT i.*, u.username, u.avatar_url
-		FROM images i
-		JOIN users u ON i.user_id = u.id
-		WHERE i.user_id = $1
-		ORDER BY i.created_at DESC
-		LIMIT $2 OFFSET $3`
+        SELECT 
+            i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+            i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+            COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+            u.username, u.avatar_url
+        FROM images i
+        LEFT JOIN users u ON i.user_id = u.id
+        WHERE i.user_id = $1
+        ORDER BY i.created_at DESC
+        LIMIT $2 OFFSET $3`
 
 	err = r.db.Select(&images, query, userID, limit, offset)
 	if err != nil {
@@ -356,9 +376,13 @@ func (r *ImageRepository) GetUserImagesSeek(userID uuid.UUID, limit int, cursorE
 	var images []ImageWithUser
 	if cur == nil {
 		q := `
-            SELECT i.*, u.username, u.avatar_url
+            SELECT 
+                i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+                i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+                COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+                u.username, u.avatar_url
             FROM images i
-            JOIN users u ON i.user_id = u.id
+            LEFT JOIN users u ON i.user_id = u.id
             WHERE i.user_id = $1
             ORDER BY i.created_at DESC, i.id DESC
             LIMIT $2`
@@ -367,9 +391,13 @@ func (r *ImageRepository) GetUserImagesSeek(userID uuid.UUID, limit int, cursorE
 		}
 	} else {
 		q := `
-            SELECT i.*, u.username, u.avatar_url
+            SELECT 
+                i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+                i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+                COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+                u.username, u.avatar_url
             FROM images i
-            JOIN users u ON i.user_id = u.id
+            LEFT JOIN users u ON i.user_id = u.id
             WHERE i.user_id = $1 AND (i.created_at < $2 OR (i.created_at = $2 AND i.id < $3))
             ORDER BY i.created_at DESC, i.id DESC
             LIMIT $4`
@@ -585,10 +613,14 @@ func (r *CollectRepository) GetUserCollections(userID uuid.UUID, page, limit int
 		return nil, 0, err
 	}
 	q := `
-        SELECT i.*, u.username, u.avatar_url
+        SELECT 
+            i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+            i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+            COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+            u.username, u.avatar_url
         FROM collections c
         JOIN images i ON c.image_id = i.id
-        JOIN users u ON i.user_id = u.id
+        LEFT JOIN users u ON i.user_id = u.id
         WHERE c.user_id = $1
         ORDER BY i.created_at DESC, i.id DESC
         LIMIT $2 OFFSET $3`
@@ -606,10 +638,14 @@ func (r *CollectRepository) GetUserCollectionsSeek(userID uuid.UUID, limit int, 
 	var images []ImageWithUser
 	if cur == nil {
 		q := `
-            SELECT i.*, u.username, u.avatar_url
+            SELECT 
+                i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+                i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+                COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+                u.username, u.avatar_url
             FROM collections c
             JOIN images i ON c.image_id = i.id
-            JOIN users u ON i.user_id = u.id
+            LEFT JOIN users u ON i.user_id = u.id
             WHERE c.user_id = $1
             ORDER BY i.created_at DESC, i.id DESC
             LIMIT $2`
@@ -619,10 +655,14 @@ func (r *CollectRepository) GetUserCollectionsSeek(userID uuid.UUID, limit int, 
 	} else {
 		// For seek pagination: use images.created_at as primary order when available; fallback to collections.created_at
 		q := `
-            SELECT i.*, u.username, u.avatar_url
+            SELECT 
+                i.id, i.user_id, i.filename, i.original_name, i.file_size, i.width, i.height,
+                i.blurhash, i.dominant_color, i.is_nsfw, i.ai_signature, i.ai_provider,
+                COALESCE(i.exif_data, 'null'::jsonb) AS exif_data, i.caption, i.likes_count, i.created_at,
+                u.username, u.avatar_url
             FROM collections c
             JOIN images i ON c.image_id = i.id
-            JOIN users u ON i.user_id = u.id
+            LEFT JOIN users u ON i.user_id = u.id
             WHERE c.user_id = $1 AND (i.created_at < $2 OR (i.created_at = $2 AND i.id < $3))
             ORDER BY i.created_at DESC, i.id DESC
             LIMIT $4`
