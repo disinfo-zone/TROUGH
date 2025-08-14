@@ -37,6 +37,9 @@ class TroughApp {
         this._forcedColumnIndex = null;
 		// Track my collected image ids for UI state
 		this._myCollectedSet = new Set();
+        // Profile state for chunked loading
+        this.profileUsername = null;
+        this.profileTab = 'posts';
         
         // DOM elements
         this.gallery = document.getElementById('gallery');
@@ -1194,6 +1197,8 @@ class TroughApp {
 
     async renderProfilePage(username) {
         this.beginRender('profile');
+        this.profileUsername = username;
+        this.profileTab = 'posts';
         // Ensure gallery uses multi-column layout (remove single-column mode from image page)
         this.gallery.classList.remove('settings-mode');
         if (this.profileTop) this.profileTop.innerHTML = '';
@@ -1480,57 +1485,50 @@ class TroughApp {
         this.profileTop.appendChild(tabs);
 
         const loadPosts = async () => {
-			this.gallery.innerHTML = '';
-			this.enableManagedMasonry();
-            const epoch = this.renderEpoch;
-            const list = imgs.images || [];
-            if (this.isRestoring) {
-                list.forEach((img) => this.createImageCard(img));
+            this.profileTab = 'posts';
+            this.gallery.innerHTML = '';
+            this.enableManagedMasonry();
+            // Reset chunking state
+            this.unrendered = [];
+            this.page = 1;
+            this.hasMore = true;
+            // Use pre-fetched page 1 results
+            const firstPage = imgs.images || [];
+            if (firstPage.length > 0) {
+                this.enqueueUnrendered(firstPage);
+                this.maybeRevealCards();
+                this.page = 2;
             } else {
-                list.forEach((img, index) => {
-                    const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
-                    const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
-                });
-				// Desktop fallback: if managed masonry fails to paint any cards quickly, disable it and render directly
-				const failSafe = setTimeout(() => {
-					if (epoch !== this.renderEpoch) return;
-					const hasCards = !!this.gallery.querySelector('.image-card');
-					if (!hasCards && this.masonry && this.masonry.enabled) {
-						this.disableManagedMasonry();
-						this.gallery.innerHTML = '';
-						list.forEach((img) => this.createImageCard(img));
-					}
-				}, 500);
-				this.trackTimeout(failSafe);
+                this.hasMore = false;
             }
+            // Enable infinite scroll sentinel for profiles as well
+            this.setupInfiniteScroll();
         };
 
-		const loadCollections = async () => {
-			this.gallery.innerHTML = '';
-			this.enableManagedMasonry();
-			try {
-				const resp = await fetch(`/api/users/${encodeURIComponent(username)}/collections?page=1`);
-				if (!resp.ok) { this.showNotification('Failed to load collections','error'); return; }
-				const data = await resp.json();
-				const epoch = this.renderEpoch;
-				const list = data.images || [];
-				list.forEach((img, index) => {
-					const delay = this.masonry?.enabled ? Math.min(40, index * 20) : (index * 80);
-					const tid = this.trackTimeout(setTimeout(() => { this.untrackTimeout(tid); if (epoch !== this.renderEpoch) return; this.createImageCard(img); }, delay));
-				});
-				// Desktop fallback similar to posts
-				const failSafe = setTimeout(() => {
-					if (epoch !== this.renderEpoch) return;
-					const hasCards = !!this.gallery.querySelector('.image-card');
-					if (!hasCards && this.masonry && this.masonry.enabled) {
-						this.disableManagedMasonry();
-						this.gallery.innerHTML = '';
-						list.forEach((img) => this.createImageCard(img));
-					}
-				}, 500);
-				this.trackTimeout(failSafe);
-			} catch {}
-		};
+        const loadCollections = async () => {
+            this.profileTab = 'collections';
+            this.gallery.innerHTML = '';
+            this.enableManagedMasonry();
+            // Reset chunking state
+            this.unrendered = [];
+            this.page = 1;
+            this.hasMore = true;
+            try {
+                const resp = await fetch(`/api/users/${encodeURIComponent(username)}/collections?page=1`);
+                if (!resp.ok) { this.showNotification('Failed to load collections','error'); return; }
+                const data = await resp.json();
+                const firstPage = data.images || [];
+                if (firstPage.length > 0) {
+                    this.enqueueUnrendered(firstPage);
+                    this.maybeRevealCards();
+                    this.page = 2;
+                } else {
+                    this.hasMore = false;
+                }
+                // Enable infinite scroll sentinel for profiles as well
+                this.setupInfiniteScroll();
+            } catch {}
+        };
 
         const postsBtn = tabs.querySelector('#tab-posts');
         const colBtn = tabs.querySelector('#tab-collections');
@@ -1617,13 +1615,24 @@ class TroughApp {
 
     // Gallery/loading functions
     async loadImages() {
-        // Only load the home feed in the feed route
-        if (this.routeMode !== 'home') return;
+        // Load home feed or profile pages depending on route
+        if (this.routeMode !== 'home' && this.routeMode !== 'profile') return;
         if (this.loading || !this.hasMore) return;
         this.loading = true;
         this.showLoader();
         try {
-            const resp = await fetch(`/api/feed?page=${this.page}`, { credentials: 'include' });
+            let resp = null;
+            if (this.routeMode === 'home') {
+                resp = await fetch(`/api/feed?page=${this.page}`, { credentials: 'include' });
+            } else {
+                // Profiles: choose endpoint based on active tab
+                const uname = this.profileUsername || decodeURIComponent(location.pathname.slice(2));
+                const tab = this.profileTab || 'posts';
+                const url = (tab === 'collections')
+                    ? `/api/users/${encodeURIComponent(uname)}/collections?page=${this.page}`
+                    : `/api/users/${encodeURIComponent(uname)}/images?page=${this.page}`;
+                resp = await fetch(url, { credentials: 'include' });
+            }
             if (resp.ok) {
                 const data = await resp.json();
                 if (data.images && data.images.length > 0) {
@@ -1636,11 +1645,11 @@ class TroughApp {
                     this.hasMore = false;
                 }
             } else {
-                if (this.page === 1) this.renderDemoImages();
+                if (this.page === 1 && this.routeMode === 'home') this.renderDemoImages();
                 this.hasMore = false;
             }
         } catch (e) {
-            if (this.page === 1) this.renderDemoImages();
+            if (this.page === 1 && this.routeMode === 'home') this.renderDemoImages();
             this.hasMore = false;
         } finally {
             this.loading = false;
@@ -1724,7 +1733,7 @@ class TroughApp {
             let revealed = 0;
             if (this.unrendered && this.unrendered.length > 0) {
                 revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 4 : 8);
-            } else if (this.hasMore && !this.loading && this.routeMode === 'home') {
+            } else if (this.hasMore && !this.loading && (this.routeMode === 'home' || this.routeMode === 'profile')) {
                 await this.loadImages();
                 revealed = this.maybeRevealCards((window.innerWidth <= 600) ? 4 : 8);
             } else {
