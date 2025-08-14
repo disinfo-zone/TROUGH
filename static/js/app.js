@@ -1284,14 +1284,22 @@ class TroughApp {
         // If owner and unverified, show banner with resend action
         if (isOwner && this.currentUser && this.currentUser.email_verified === false) {
             const banner = document.createElement('section');
-            banner.className = 'mono-col';
-            banner.style.cssText = 'margin:4px auto 8px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface-elevated);color:var(--text-primary);display:flex;gap:10px;align-items:center;justify-content:space-between';
+            banner.className = 'mono-col verify-banner';
             banner.innerHTML = `
-              <div style="font-family:var(--font-mono);line-height:1.4">
-                <div style="font-weight:700;letter-spacing:-0.01em">Email not verified — uploads locked</div>
-                <div style="color:var(--text-secondary);font-size:0.9em">Verify your email to upload. You can still collect images.</div>
+              <div class="vb-body">
+                <div class="vb-icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M22 12a10 10 0 1 1-10-10 10 10 0 0 1 10 10z"></path>
+                    <path d="M12 7v6"></path>
+                    <circle cx="12" cy="17" r="1"></circle>
+                  </svg>
+                </div>
+                <div class="vb-text">
+                  <div class="vb-title">Email not verified — uploads locked</div>
+                  <div class="vb-subtitle">Verify your email to upload. You can still collect images.</div>
+                </div>
               </div>
-              <div style="display:flex;gap:8px;align-items:center">
+              <div class="vb-actions">
                 <button id="banner-resend" class="nav-btn">Resend verification</button>
               </div>`;
             this.profileTop.appendChild(banner);
