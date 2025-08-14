@@ -1395,7 +1395,58 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 .tab-group { display:flex; gap:8px; align-items:center; border-radius: 12px; padding:0; background: transparent; border: none; margin-bottom: 8px; }
 .tab-btn { padding:8px 12px; border-radius:8px; color: var(--text-secondary); background: transparent; border: none; font-family: var(--font-family); }
 .tab-btn:hover { background: var(--surface); color: var(--text-primary); }
-.tab-btn[aria-pressed="true"] { background: var(--text-primary); color: var(--surface); box-shadow: var(--shadow-sm); }
+.tab-btn[aria-pressed="true"], .tab-btn.active, .tab-btn[aria-selected="true"] { background: var(--text-primary); color: var(--surface); box-shadow: var(--shadow-sm); }
+
+/* Admin tabs: segmented pill w/ scroll on small screens */
+.admin-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  padding: 8px;
+  border-radius: 999px;
+  overflow: visible;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.admin-tabs::-webkit-scrollbar { height: 6px; }
+.admin-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+.admin-tabs .tab-btn {
+  padding: 8px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+/* Keyboard focus ring */
+.admin-tabs .tab-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(122,240,255,0.25), inset 0 0 0 1px var(--border);
+}
+@media (max-width: 600px) {
+  .admin-tabs { gap: 4px; padding: 4px; }
+  .admin-tabs .tab-btn { padding: 8px 12px; }
+}
+
+/* Mobile: stack tabs vertically, full-width buttons, no horizontal scroll */
+@media (max-width: 600px) {
+  .admin-tabs {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 12px;
+    width: 100%;
+  }
+  .admin-tabs .tab-btn {
+    width: 100%;
+    text-align: center;
+    padding: 10px 14px;
+    white-space: normal;
+  }
+}
 
 /* Admin user search result rows */
 .user-results { display:grid; gap:8px; }

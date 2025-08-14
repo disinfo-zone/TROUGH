@@ -3042,9 +3042,10 @@ class TroughApp {
         wrap.appendChild(siteSection);
         // Build tabs
         const tabsWrap = document.createElement('div');
-        tabsWrap.className = 'tab-group';
-        tabsWrap.style.cssText = 'margin:0 auto 12px;display:flex;gap:8px;flex-wrap:wrap;';
-        const mkTab = (id, label) => { const b = document.createElement('button'); b.className='tab-btn'; b.dataset.tab=id; b.textContent=label; return b; };
+        tabsWrap.className = 'tab-group admin-tabs';
+        tabsWrap.setAttribute('role', 'tablist');
+        tabsWrap.style.cssText = 'margin:0 auto 12px;';
+        const mkTab = (id, label) => { const b = document.createElement('button'); b.className='tab-btn'; b.dataset.tab=id; b.textContent=label; b.setAttribute('role','tab'); b.setAttribute('aria-selected','false'); b.setAttribute('aria-pressed','false'); return b; };
         const tabSite = mkTab('site', 'Site settings');
         const tabPages = isAdmin ? mkTab('pages', 'Add/Edit Pages') : null;
         const tabInv = mkTab('invites', 'Invitations');
@@ -3065,7 +3066,17 @@ class TroughApp {
             const map = { site: siteSection, pages: pagesSection, invites: invitesSection, users: usersSection };
             [siteSection, pagesSection, invitesSection, usersSection].forEach(sec => { if (sec) sec.style.display = 'none'; });
             if (map[name]) map[name].style.display = 'block';
-            const setActive = (btn, on) => { if (!btn) return; if (on) btn.classList.add('active'); else btn.classList.remove('active'); };
+            const setActive = (btn, on) => {
+                if (!btn) return;
+                btn.setAttribute('aria-selected', on ? 'true' : 'false');
+                btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+                if (on) {
+                    btn.classList.add('active');
+                    try { btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } catch { try { btn.scrollIntoView(); } catch {} }
+                } else {
+                    btn.classList.remove('active');
+                }
+            };
             setActive(tabSite, name==='site'); setActive(tabPages, name==='pages'); setActive(tabInv, name==='invites'); setActive(tabUsers, name==='users');
         };
         // Default tab
