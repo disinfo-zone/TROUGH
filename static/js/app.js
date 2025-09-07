@@ -2600,11 +2600,17 @@ class TroughApp {
 					if (this.loading) continue;
 
 					// Before user interaction: only auto-fill once if viewport isn't filled yet
+					// After user interaction: allow normal infinite scrolling behavior
 					const doc = document.documentElement;
 					const needsFill = (doc.scrollHeight <= (window.innerHeight + 200));
 					if (!this._userInteracted) {
+						// Before first interaction: be conservative about auto-filling
 						if (this._autoFillDone || !needsFill) continue;
 						this._autoFillDone = true;
+					} else {
+						// After first interaction: allow normal infinite scrolling
+						// Only prevent loading if we don't need more content and have nothing queued
+						if (!needsFill && this.unrendered.length === 0) continue;
 					}
 
 					this._infinitePendingExit = true;
