@@ -3,13 +3,15 @@ package services
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	AISignatures []AISignature `yaml:"ai_signatures"`
-	Aesthetic    Aesthetic     `yaml:"aesthetic"`
+	AISignatures  []AISignature  `yaml:"ai_signatures"`
+	Aesthetic     Aesthetic      `yaml:"aesthetic"`
+	RateLimiting  RateLimitConfig `yaml:"rate_limiting"`
 }
 
 type AISignature struct {
@@ -43,6 +45,13 @@ func LoadConfig(path string) (*Config, error) {
 				ThumbnailQuality: 85,
 				MaxWidth:         2048,
 				Formats:          []string{".jpg", ".jpeg", ".png", ".webp"},
+			},
+			RateLimiting: RateLimitConfig{
+				MaxEntries:      1000,
+				CleanupInterval: 1 * time.Minute,
+				EntryTTL:        30 * time.Minute,
+				TrustedProxies:  []string{"127.0.0.1", "::1"},
+				EnableDebug:     false,
 			},
 		}, nil
 	}

@@ -368,9 +368,13 @@ func main() {
 	pageRepo := models.NewPageRepository(db.DB)
 	// Seed default CMS pages once per boot if missing (respect tombstones)
 	seedDefaultPages(pageRepo, siteRepo)
+	
+	// Create rate limiter for enhanced security
+	rateLimiter := services.NewRateLimiter(config.RateLimiting)
+	
 	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo).WithCollect(collectRepo).WithPages(pageRepo)
 	inviteRepo := models.NewInviteRepository(db.DB)
-	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo).WithPages(pageRepo)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo).WithPages(pageRepo).WithRateLimiter(rateLimiter)
 	pageHandler := handlers.NewPageHandler(pageRepo)
 	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
 	// Initialize async mail queue if SMTP is configured
@@ -413,33 +417,8 @@ func main() {
 		}
 	}()
 
-	// Lightweight rate-limiting for sensitive endpoints (login/register/reset)
-	// Without external deps: simple token bucket per IP in-memory
-	type rlEntry struct {
-		tokens   int
-		refillAt time.Time
-	}
-	var rlMu sync.Mutex
-	rl := make(map[string]*rlEntry)
-	limiter := func(capacity int, refill time.Duration) fiber.Handler {
-		return func(c *fiber.Ctx) error {
-			ip := c.IP()
-			now := time.Now()
-			rlMu.Lock()
-			e, ok := rl[ip]
-			if !ok || now.After(e.refillAt) {
-				e = &rlEntry{tokens: capacity, refillAt: now.Add(refill)}
-				rl[ip] = e
-			}
-			if e.tokens <= 0 {
-				rlMu.Unlock()
-				return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{"error": "Too many requests"})
-			}
-			e.tokens--
-			rlMu.Unlock()
-			return c.Next()
-		}
-	}
+	// Cleanup rate limiter on shutdown
+	defer rateLimiter.Stop()
 
 	// Application logger; skip noise for static and health endpoints
 	app.Use(logger.New(logger.Config{
@@ -577,14 +556,14 @@ func main() {
 	// Build auth middleware once to reuse its small cache
 	authMW := middleware.Protected()
 
-	api.Post("/register", limiter(10, time.Minute), authHandler.Register)
+	api.Post("/register", rateLimiter.Middleware(5, time.Minute), authHandler.Register)
 	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
-	api.Post("/login", limiter(15, time.Minute), authHandler.Login)
+	api.Post("/login", rateLimiter.Middleware(10, time.Minute), authHandler.Login)
 	// Allow logout without auth guard so clients can always clear cookies
 	api.Post("/logout", authHandler.Logout)
-	api.Post("/forgot-password", limiter(5, 5*time.Minute), authHandler.ForgotPassword)
-	api.Post("/reset-password", limiter(10, time.Minute), authHandler.ResetPassword)
-	api.Post("/verify-email", limiter(20, time.Minute), authHandler.VerifyEmail)
+	api.Post("/forgot-password", rateLimiter.Middleware(3, 5*time.Minute), authHandler.ForgotPassword)
+	api.Post("/reset-password", rateLimiter.Middleware(5, time.Minute), authHandler.ResetPassword)
+	api.Post("/verify-email", rateLimiter.Middleware(10, time.Minute), authHandler.VerifyEmail)
 	api.Get("/validate-invite", authHandler.ValidateInvite)
 	api.Post("/me/resend-verification", authMW, authHandler.ResendVerification)
 	api.Get("/me", authMW, authHandler.Me)
@@ -646,6 +625,7 @@ func main() {
 	api.Post("/admin/backups/restore", authMW, adminHandler.AdminRestoreBackup)
 	api.Get("/admin/backups/:name", authMW, adminHandler.AdminDownloadSavedBackup)
 	api.Get("/admin/diag", authMW, adminHandler.AdminDiag)
+	api.Get("/admin/rate-limiter-stats", authMW, adminHandler.AdminRateLimiterStats)
 	api.Get("/admin/pages", authMW, adminHandler.AdminListPages)
 	api.Post("/admin/pages", authMW, adminHandler.AdminCreatePage)
 	api.Put("/admin/pages/:id", authMW, adminHandler.AdminUpdatePage)
