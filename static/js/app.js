@@ -149,6 +149,7 @@ class TroughApp {
 		// CMS pages (single-segment slugs)
 		if (/^\/[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(location.pathname)) {
 			const slug = location.pathname.slice(1);
+			this.beginRender('cms');
 			const ok = await this.renderCMSPage(slug);
 			if (ok) return;
 		}
@@ -425,10 +426,11 @@ class TroughApp {
     setupHistoryHandler() {
         window.onpopstate = async () => {
             // Bump epoch at the start of any history-driven navigation
+            const isCMSPage = /^\/[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(location.pathname);
             this.beginRender(
                 location.pathname === '/' ? 'home' :
                 location.pathname.startsWith('/@') ? 'profile' :
-                (location.pathname === '/settings' ? 'settings' : (location.pathname === '/admin' ? 'admin' : 'image'))
+                (location.pathname === '/settings' ? 'settings' : (location.pathname === '/admin' ? 'admin' : (isCMSPage ? 'cms' : 'image')))
             );
             if (location.pathname.startsWith('/i/')) {
                 const id2 = location.pathname.split('/')[2];
@@ -437,9 +439,20 @@ class TroughApp {
                 // Delegate rendering and anchoring to the state restorer
                 await this.restoreListState(location.pathname);
             } else if (location.pathname === '/settings') {
+                // Clear gallery before rendering settings to avoid CSS conflicts
+                this.gallery.innerHTML = '';
+                if (this.profileTop) this.profileTop.innerHTML = '';
                 await this.renderSettingsPage();
             } else if (location.pathname === '/admin') {
                 await this.renderAdminPage();
+            } else if (isCMSPage) {
+                // Handle CMS pages
+                const slug = location.pathname.slice(1);
+                const ok = await this.renderCMSPage(slug);
+                if (!ok) {
+                    // Fallback to home if CMS page fails
+                    await this.restoreListState('/');
+                }
             } else {
                 // Home feed: restore saved state if present
                 await this.restoreListState('/');
@@ -458,16 +471,16 @@ class TroughApp {
             }
 
             // After any route change, normalize gallery mode classes:
-            if (location.pathname.startsWith('/i/')) {
+            if (location.pathname.startsWith('/i/') || location.pathname === '/settings' || location.pathname === '/admin') {
                 this.gallery.classList.add('settings-mode');
             } else {
                 this.gallery.classList.remove('settings-mode');
+            }
             // Ensure managed masonry on list-like pages
             if (this.routeMode === 'home' || this.routeMode === 'profile') {
                 this.enableManagedMasonry();
             } else {
                 this.disableManagedMasonry();
-            }
             }
         };
     }
@@ -895,6 +908,7 @@ class TroughApp {
             } else if (/^\/[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(href)) {
                 // Single-segment CMS page
                 const slug = href.slice(1);
+                this.beginRender('cms');
                 const ok = await this.renderCMSPage(slug);
                 if (!ok) {
                     // Fallback to hard navigation if render failed
