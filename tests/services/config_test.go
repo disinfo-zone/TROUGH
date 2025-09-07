@@ -25,15 +25,15 @@ aesthetic:
   max_width: 1024
   formats: [".jpg"]
 `
-	
+
 	tempFile, err := os.CreateTemp("", "test-config-*.yaml")
 	assert.NoError(t, err)
 	defer os.Remove(tempFile.Name())
-	
+
 	_, err = tempFile.WriteString(configData)
 	assert.NoError(t, err)
 	tempFile.Close()
-	
+
 	config, err := services.LoadConfig(tempFile.Name())
 	assert.NoError(t, err)
 	assert.NotNil(t, config)

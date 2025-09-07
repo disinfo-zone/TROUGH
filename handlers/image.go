@@ -95,9 +95,9 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No image file provided"})
 	}
-	
+
 	// DEBUG: Log file information
-	
+
 	title := strings.TrimSpace(c.FormValue("title"))
 	isNSFW := strings.ToLower(strings.TrimSpace(c.FormValue("is_nsfw"))) == "true"
 	caption := strings.TrimSpace(c.FormValue("caption"))
@@ -114,12 +114,12 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
 	defer src.Close()
-	
+
 	// DEBUG: Check the file header immediately after opening
 	headerBytes := make([]byte, 8)
 	n, _ := src.Read(headerBytes)
 	if n > 0 {
-				// Seek back to beginning for further processing
+		// Seek back to beginning for further processing
 		src.Seek(0, 0)
 	}
 
@@ -137,22 +137,22 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 			postDecodeHeader := make([]byte, 8)
 			n, _ := src.Read(postDecodeHeader)
 			if n > 0 {
-							}
+			}
 		}
 	}
-	
+
 	// OPTIMIZED: Early format-based rejection for better performance
 	// Some formats are very unlikely to contain AI metadata
 	formatContentType := file.Header.Get("Content-Type")
 	if strings.Contains(formatContentType, "bmp") || strings.Contains(formatContentType, "gif") {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "BMP and GIF formats rarely contain AI metadata. Please use JPEG, PNG, or WebP."})
 	}
-	
+
 	var aiSignature string
 	var aiOK bool
 	var aiRes services.AIDetectionResult
 	var xmpOriginal []byte
-	
+
 	// OPTIMIZED: Stream-based AI detection to avoid full file buffering
 	// For large files (>2MB), use streaming detection first
 	var originalBytes []byte
@@ -173,21 +173,21 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		// For small files, buffer immediately
 		if buf, err := io.ReadAll(src); err == nil {
 			originalBytes = buf
-					} else {
+		} else {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to buffer upload"})
 		}
 	}
-	
+
 	// FAST PATH: Quick AI detection first (rejects obvious non-AI immediately)
 	if aiOK, aiRes = services.DetectAIFast(originalBytes); aiOK {
 		aiSignature = aiRes.Details
 		goto ai_validated
 	}
-	
+
 	// FALLBACK: Full concurrent AI detection for edge cases
 	xmpOriginal = services.ExtractXMPXMLFromBytes(originalBytes)
-		aiOK, aiRes = services.DetectAIProvenanceConcurrent(originalBytes, xmpOriginal)
-		if !aiOK {
+	aiOK, aiRes = services.DetectAIProvenanceConcurrent(originalBytes, xmpOriginal)
+	if !aiOK {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Upload rejected. Only AI-generated images with verifiable metadata (EXIF or XMP; C2PA optional) are accepted."})
 	}
 	aiSignature = aiRes.Details
@@ -569,9 +569,9 @@ func (h *ImageHandler) DeleteImage(c *fiber.Ctx) error {
 func detectAIStreaming(src multipart.File, fileSize int64) (bool, services.AIDetectionResult) {
 	// Create a buffer for reading sections
 	buf := make([]byte, 32*1024) // 32KB buffer
-	
+
 	// Strategy: Check multiple strategic sections of the file
-	
+
 	// 1. First check the beginning for PNG signature and early metadata
 	src.Seek(0, 0)
 	n, _ := src.Read(buf)
@@ -582,7 +582,7 @@ func detectAIStreaming(src multipart.File, fileSize int64) (bool, services.AIDet
 			isPNG = buf[0] == 0x89 && buf[1] == 0x50 && buf[2] == 0x4E && buf[3] == 0x47 &&
 				buf[4] == 0x0D && buf[5] == 0x0A && buf[6] == 0x1A && buf[7] == 0x0A
 		}
-		
+
 		var scanStart int
 		if isPNG {
 			// For PNG files, skip only the 8-byte signature
@@ -591,12 +591,12 @@ func detectAIStreaming(src multipart.File, fileSize int64) (bool, services.AIDet
 			// For other files, skip headers to avoid false positives
 			scanStart = min(1000, n)
 		}
-		
+
 		if ok, res := services.DetectAIFast(buf[scanStart:n]); ok {
 			return ok, res
 		}
 	}
-	
+
 	// 2. Check middle section for embedded metadata
 	middlePos := fileSize / 2
 	src.Seek(middlePos, 0)
@@ -608,7 +608,7 @@ func detectAIStreaming(src multipart.File, fileSize int64) (bool, services.AIDet
 			return ok, res
 		}
 	}
-	
+
 	// 3. Check end section (often contains metadata in some formats)
 	endPos := fileSize - int64(len(buf))
 	if endPos > 0 {
@@ -620,7 +620,7 @@ func detectAIStreaming(src multipart.File, fileSize int64) (bool, services.AIDet
 			}
 		}
 	}
-	
+
 	return false, services.AIDetectionResult{}
 }
 

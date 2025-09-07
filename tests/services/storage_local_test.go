@@ -34,4 +34,3 @@ func TestLocalStorage_Save_Delete(t *testing.T) {
 	_, err = os.Stat(filepath.Join("test-uploads", "avatars", "foo.txt"))
 	assert.True(t, os.IsNotExist(err))
 }
-

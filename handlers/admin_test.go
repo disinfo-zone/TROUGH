@@ -21,7 +21,9 @@ func (f *fakeSettingsRepo) UpdateSocialImageURL(path string) error { return nil 
 
 type fakeUserRepo struct{ models.UserRepositoryInterface }
 
-type fakeImageRepo struct{ models.ImageRepositoryInterface }
+type fakeImageRepo struct {
+	models.ImageRepositoryInterface
+}
 
 type fakeSender struct {
 	fail error
