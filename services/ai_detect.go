@@ -23,6 +23,21 @@ var (
 	guidRegex        = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	c2paSniffRegex   = regexp.MustCompile(`(?is)(c2pa|jumbf|contentcredentials)`)
 	iptcTrainedMedia = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+	
+	// Specific AI model patterns - replacing generic "model"
+	aiModelPatterns = []string{"sdxl", "flux", "wan", "midjourney", "dall-e", "stability", "dreamshaper", "realistic vision", "epic realism", "deliberate", "anything v", "counterfeit", "protogen", "rev animated", "chilloutmix", "meinamix", "f222", "anime", "sd_xl", "stable-diffusion-xl", "txt2img", "img2img", "controlnet", "lora", "hypernetwork", "embeddings", "textual_inversion", "vae", "clip_skip"}
+	
+	// Expanded Stable Diffusion terms
+	sdxlTerms = []string{"sdxl", "stable diffusion", "sd_xl", "stable-diffusion-xl", "txt2img", "img2img", "controlnet", "lora", "hypernetwork", "embeddings", "textual_inversion", "vae", "clip_skip", "ksampler", "sampler_name", "negativeprompt", "negative_prompt", "cfg", "steps"}
+	
+	// Expanded ComfyUI patterns
+	comfyuiPatterns = []string{"comfyui", "comfy", "workflow", "node", "k_sampler", "checkpoint_loader", "clip_text_encode", "vae_decode", "empty_latent_image", "latent_upscale", "filename_prefix"}
+	
+	// More prompt variations
+	promptVariations = []string{"prompt", "prompts", "positive_prompt", "negative_prompt", "text_prompt", "input_prompt", "ai_prompt", "generation_prompt"}
+	
+	// Generic AI terms
+	genericAITerms = []string{"ai_art", "ai_generated", "ai_artwork", "machine_learning", "neural_network", "gan", "generative", "synthetic", "computer_vision", "deep_learning", "text_to_image", "artificial", "generator", "synthetic"}
 )
 
 // DetectAIProvenance attempts to determine if an image has AI provenance markers.
@@ -127,7 +142,12 @@ func detectFromEXIFBytes(b []byte) (bool, AIDetectionResult) {
 	}
 	if softwareVal != "" {
 		low := strings.ToLower(softwareVal)
-		if strings.Contains(low, "ai") || strings.Contains(low, "diffusion") {
+		if strings.Contains(low, "ai") || strings.Contains(low, "diffusion") ||
+			// Add more AI-specific terms
+			strings.Contains(low, "artificial") || strings.Contains(low, "generator") || 
+			strings.Contains(low, "synthetic") || strings.Contains(low, "stability") ||
+			strings.Contains(low, "midjourney") || strings.Contains(low, "dall-e") ||
+			strings.Contains(low, "flux") || containsAnyFold(low, aiModelPatterns) {
 			return true, AIDetectionResult{Provider: "AI (Software)", Method: "exif", Details: softwareVal}
 		}
 	}
@@ -139,16 +159,22 @@ func detectFromBinaryTextBytes(b []byte) (bool, AIDetectionResult) {
 	if strings.Contains(s, "grok image prompt") || strings.Contains(s, "grok image upsampled prompt") || strings.Contains(s, "\x00grok\x00") || strings.Contains(s, " g r o k ") || strings.Contains(s, "grok:") || strings.Contains(s, "\"grok\"") {
 		return true, AIDetectionResult{Provider: "Grok", Method: "binary", Details: "Grok prompt fields in image"}
 	}
-	if strings.Contains(s, "\"filename_prefix\":\"comfyui\"") || strings.Contains(s, "comfyui") || strings.Contains(s, "prompt\t{") || (strings.Contains(s, "prompt") && strings.Contains(s, "workflow")) {
+	if containsAnyFold(s, comfyuiPatterns) || (strings.Contains(s, "prompt") && strings.Contains(s, "workflow")) {
 		return true, AIDetectionResult{Provider: "ComfyUI", Method: "binary", Details: "ComfyUI markers present"}
 	}
-	if strings.Contains(s, "sdxl") || strings.Contains(s, "sdxlpromptstyler") || strings.Contains(s, "stable diffusion") || strings.Contains(s, "ksampler") || strings.Contains(s, "sampler_name") || strings.Contains(s, "negativeprompt") || strings.Contains(s, "negative_prompt") || strings.Contains(s, "cfg") || strings.Contains(s, "steps") {
+	if containsAnyFold(s, sdxlTerms) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SDXL/SD params present"}
 	}
 	if strings.Contains(s, "flux") || strings.Contains(s, "black forest labs") || strings.Contains(s, "bfl") {
 		return true, AIDetectionResult{Provider: "FLUX", Method: "binary", Details: "Flux markers present"}
 	}
-	if strings.Contains(s, "\"prompt\"") || strings.Contains(s, "prompt:") || strings.Contains(s, "\nprompt") || strings.Contains(s, " prompt ") || bytes.Contains(b, buildUTF16LEPattern("prompt")) || bytes.Contains(b, buildUTF16BEPattern("prompt")) {
+	// Generic AI terms detection
+	if containsAnyFold(s, genericAITerms) {
+		return true, AIDetectionResult{Provider: "AI (Generic Terms)", Method: "binary", Details: "Generic AI terminology present"}
+	}
+	
+	// Enhanced prompt detection with more variations
+	if containsAnyFold(s, promptVariations) {
 		return true, AIDetectionResult{Provider: "AI (Prompt Embedded)", Method: "binary", Details: "Prompt-like text present"}
 	}
 	return false, AIDetectionResult{}
@@ -294,7 +320,12 @@ func detectFromEXIF(imagePath string) (bool, AIDetectionResult) {
 	// Fallback: if Software value suggests, accept generically
 	if softwareVal != "" {
 		low := strings.ToLower(softwareVal)
-		if strings.Contains(low, "ai") || strings.Contains(low, "diffusion") {
+		if strings.Contains(low, "ai") || strings.Contains(low, "diffusion") ||
+			// Add more AI-specific terms
+			strings.Contains(low, "artificial") || strings.Contains(low, "generator") || 
+			strings.Contains(low, "synthetic") || strings.Contains(low, "stability") ||
+			strings.Contains(low, "midjourney") || strings.Contains(low, "dall-e") ||
+			strings.Contains(low, "flux") || containsAnyFold(low, aiModelPatterns) {
 			return true, AIDetectionResult{Provider: "AI (Software)", Method: "exif", Details: softwareVal}
 		}
 	}
@@ -323,7 +354,7 @@ func detectFromXMP(xmp []byte) (bool, AIDetectionResult) {
 	}
 
 	// ComfyUI: Prompt and Workflow fields
-	if strings.Contains(s, ">prompt<") && strings.Contains(s, ">workflow<") {
+	if strings.Contains(s, ">prompt<") && strings.Contains(s, ">workflow<") || containsAnyFold(s, comfyuiPatterns) {
 		return true, AIDetectionResult{Provider: "ComfyUI", Method: "xmp", Details: "Prompt + Workflow"}
 	}
 
@@ -338,7 +369,7 @@ func detectFromXMP(xmp []byte) (bool, AIDetectionResult) {
 	}
 
 	// Stable Diffusion / SDXL in XMP: look for prompt-like keys or SD terms
-	if strings.Contains(s, "\"prompt\"") || strings.Contains(s, "negativeprompt") || strings.Contains(s, "negative_prompt") || strings.Contains(s, ">prompt<") || strings.Contains(s, "sdxl") || strings.Contains(s, "stable diffusion") || strings.Contains(s, "ksampler") || strings.Contains(s, "sampler_name") {
+	if strings.Contains(s, "\"prompt\"") || strings.Contains(s, "negativeprompt") || strings.Contains(s, "negative_prompt") || strings.Contains(s, ">prompt<") || containsAnyFold(s, sdxlTerms) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "xmp", Details: "Prompt/SD terms in XMP"}
 	}
 
@@ -366,13 +397,19 @@ func looksLikePromptJSON(s string) bool {
 		low := strings.ToLower(s)
 		if strings.Contains(low, "prompt") || strings.Contains(low, "negativeprompt") || strings.Contains(low, "negative_prompt") ||
 			strings.Contains(low, "sampler") || strings.Contains(low, "steps") || strings.Contains(low, "cfg") ||
-			strings.Contains(low, "seed") || strings.Contains(low, "model") || strings.Contains(low, "sui_image_params") {
+			strings.Contains(low, "seed") || strings.Contains(low, "sui_image_params") ||
+			// Add more AI-specific terms instead of generic "model"
+			strings.Contains(low, "sdxl") || strings.Contains(low, "flux") || strings.Contains(low, "checkpoint") ||
+			strings.Contains(low, "lora") || strings.Contains(low, "controlnet") || strings.Contains(low, "embeddings") ||
+			strings.Contains(low, "vae") || strings.Contains(low, "clip_skip") || strings.Contains(low, "hypernetwork") {
 			return true
 		}
 	}
 	// If not valid JSON, check for prompt-like content anyway
 	low := strings.ToLower(s)
-	if strings.Contains(low, "prompt") && (strings.Contains(low, "sampler") || strings.Contains(low, "steps") || strings.Contains(low, "cfg") || strings.Contains(low, "seed")) {
+	if strings.Contains(low, "prompt") && (strings.Contains(low, "sampler") || strings.Contains(low, "steps") || 
+		strings.Contains(low, "cfg") || strings.Contains(low, "seed") || strings.Contains(low, "checkpoint") ||
+		strings.Contains(low, "lora") || strings.Contains(low, "controlnet") || strings.Contains(low, "vae")) {
 		return true
 	}
 	return false
@@ -402,17 +439,17 @@ func detectFromBinaryText(imagePath string) (bool, AIDetectionResult) {
 	}
 
 	// ComfyUI markers: filename prefix, literal keys, or general mentions
-	if strings.Contains(s, "\"filename_prefix\":\"comfyui\"") || strings.Contains(s, "comfyui") || strings.Contains(s, "prompt\t{") || (strings.Contains(s, "prompt") && strings.Contains(s, "workflow")) {
+	if containsAnyFold(s, comfyuiPatterns) || (strings.Contains(s, "prompt") && strings.Contains(s, "workflow")) {
 		return true, AIDetectionResult{Provider: "ComfyUI", Method: "binary", Details: "ComfyUI markers present"}
 	}
 
 	// SDXL / Stable Diffusion hints in embedded params (ASCII)
-	if strings.Contains(s, "sdxl") || strings.Contains(s, "sdxlpromptstyler") || strings.Contains(s, "stable diffusion") || strings.Contains(s, "ksampler") || strings.Contains(s, "sampler_name") || strings.Contains(s, "negativeprompt") || strings.Contains(s, "negative_prompt") || strings.Contains(s, "cfg") || strings.Contains(s, "steps") {
+	if containsAnyFold(s, sdxlTerms) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SDXL/SD params present"}
 	}
 
 	// SDXL / Stable Diffusion hints in embedded params (UTF-16 in EXIF, e.g., UserComment)
-	utf16Needles := []string{"sui_image_params", "prompt", "negativeprompt", "negative_prompt", "sampler", "steps", "cfg", "seed", "model"}
+	utf16Needles := []string{"sui_image_params", "prompt", "negativeprompt", "negative_prompt", "sampler", "steps", "cfg", "seed", "checkpoint", "lora", "vae", "embeddings"}
 	for _, n := range utf16Needles {
 		if bytes.Contains(b, buildUTF16LEPattern(n)) || bytes.Contains(b, buildUTF16BEPattern(n)) {
 			return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "UTF-16 prompt/params present"}
@@ -424,8 +461,13 @@ func detectFromBinaryText(imagePath string) (bool, AIDetectionResult) {
 		return true, AIDetectionResult{Provider: "FLUX", Method: "binary", Details: "Flux markers present"}
 	}
 
-	// Generic prompt presence as a last resort
-	if strings.Contains(s, "\"prompt\"") || strings.Contains(s, "prompt:") || strings.Contains(s, "\nprompt") || strings.Contains(s, " prompt ") || bytes.Contains(b, buildUTF16LEPattern("prompt")) || bytes.Contains(b, buildUTF16BEPattern("prompt")) {
+	// Generic AI terms detection
+	if containsAnyFold(s, genericAITerms) {
+		return true, AIDetectionResult{Provider: "AI (Generic Terms)", Method: "binary", Details: "Generic AI terminology present"}
+	}
+	
+	// Enhanced prompt detection with more variations
+	if containsAnyFold(s, promptVariations) {
 		return true, AIDetectionResult{Provider: "AI (Prompt Embedded)", Method: "binary", Details: "Prompt-like text present"}
 	}
 	return false, AIDetectionResult{}
