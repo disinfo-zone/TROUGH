@@ -395,6 +395,13 @@ func main() {
 		JSONDecoder:  gjson.Unmarshal,
 	})
 
+	// Initialize security components
+	csrfProtection := middleware.NewCSRFProtection(os.Getenv("CSRF_SECRET"))
+	securityHeaders := services.NewSecurityHeaders(nil)
+	
+	// Apply security headers globally
+	app.Use(securityHeaders.Middleware())
+
 	// Start backup scheduler goroutine (best-effort, non-blocking)
 	go func() {
 		// Simple ticker-based scheduler using settings cache
@@ -473,29 +480,10 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Security headers
+	// Security headers - using the security headers service for consistency
 	app.Use(func(c *fiber.Ctx) error {
-		c.Set("X-Content-Type-Options", "nosniff")
-		c.Set("Referrer-Policy", "no-referrer")
-		c.Set("X-Frame-Options", "SAMEORIGIN")
-		c.Set("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()")
-		// For HTTPS deployments only; safe to set, browsers ignore on HTTP
-		c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
-		// Basic CSP allowing self resources and https images; SSR may inject analytics scripts from configured hosts.
-		// Keep img-src https: to avoid breaking remote images on custom domains. Allow inline styles for existing CSS.
-		csp := []string{
-			"default-src 'self'",
-			"img-src 'self' data: https:",
-			// Allow Google Fonts stylesheet
-			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-			// Allow Google Fonts font files
-			"font-src 'self' https://fonts.gstatic.com data:",
-			// Disallow inline scripts; allow https script sources (analytics are served from https)
-			"script-src 'self' https:",
-			"connect-src 'self' https:",
-			"frame-ancestors 'self'",
-		}
-		c.Set("Content-Security-Policy", strings.Join(csp, "; "))
+		// Let the security headers service handle most CSP/security headers
+		// This ensures consistency with the rest of the security implementation
 		return c.Next()
 	})
 
@@ -555,6 +543,9 @@ func main() {
 	api := app.Group("/api")
 	// Build auth middleware once to reuse its small cache
 	authMW := middleware.Protected()
+	
+	// Apply CSRF protection to API routes that change state
+	api.Use(csrfProtection.Middleware())
 
 	api.Post("/register", rateLimiter.Middleware(5, time.Minute), authHandler.Register)
 	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
@@ -565,6 +556,23 @@ func main() {
 	api.Post("/reset-password", rateLimiter.Middleware(5, time.Minute), authHandler.ResetPassword)
 	api.Post("/verify-email", rateLimiter.Middleware(10, time.Minute), authHandler.VerifyEmail)
 	api.Get("/validate-invite", authHandler.ValidateInvite)
+	
+	// Public CSRF token endpoint for initial page load
+	api.Get("/csrf", func(c *fiber.Ctx) error {
+		// Only set a new CSRF token if one doesn't already exist
+		existingToken := csrfProtection.GetCSRFToken(c)
+		if existingToken == "" {
+			if err := csrfProtection.SetCSRFToken(c); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": "Failed to generate CSRF token",
+				})
+			}
+			existingToken = csrfProtection.GetCSRFToken(c)
+		}
+		return c.JSON(fiber.Map{
+			"csrf_token": existingToken,
+		})
+	})
 	api.Post("/me/resend-verification", authMW, authHandler.ResendVerification)
 	api.Get("/me", authMW, authHandler.Me)
 

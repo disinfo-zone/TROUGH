@@ -1,6 +1,11 @@
 // PREMIUM GALLERY APPLICATION
 class TroughApp {
     constructor() {
+        // CSRF token handling
+        this.csrfToken = null;
+        this.csrfTokenPromise = null;
+        
+        // Original properties
         this.images = [];
         this.page = 1;
         this.loading = false;
@@ -82,6 +87,81 @@ class TroughApp {
         
         this.init();
     }
+    
+    // CSRF token handling methods
+    async initCSRFToken() {
+        // Always fetch CSRF token on app start, regardless of auth status
+        await this.fetchCSRFToken();
+    }
+    
+    async fetchCSRFToken() {
+        if (this.csrfTokenPromise) {
+            return this.csrfTokenPromise;
+        }
+        
+        this.csrfTokenPromise = (async () => {
+            try {
+                const response = await fetch('/api/csrf', { credentials: 'include' });
+                if (response.ok) {
+                    const data = await response.json();
+                    this.csrfToken = data.csrf_token;
+                    // Also extract from cookie as fallback
+                    if (!this.csrfToken) {
+                        const cookie = document.cookie
+                            .split('; ')
+                            .find(row => row.startsWith('csrf_token='));
+                        if (cookie) {
+                            this.csrfToken = cookie.split('=')[1];
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn('Failed to fetch CSRF token:', error);
+            }
+            return this.csrfToken;
+        })();
+        
+        return this.csrfTokenPromise;
+    }
+    
+    async fetchWithCSRF(url, options = {}) {
+        if (!options.method || ['GET', 'HEAD', 'OPTIONS'].includes(options.method.toUpperCase())) {
+            return fetch(url, options);
+        }
+        
+        // Skip CSRF for authentication endpoints
+        if (url.includes('/api/register') || 
+            url.includes('/api/login') ||
+            url.includes('/api/logout') ||
+            url.includes('/api/forgot-password') ||
+            url.includes('/api/reset-password') ||
+            url.includes('/api/verify-email') ||
+            url.includes('/api/validate-invite') ||
+            url.includes('/api/me/resend-verification') ||
+            url.includes('/send-verification')) {
+            return fetch(url, options);
+        }
+        
+        // For state-changing requests, ensure we have a CSRF token
+        if (!this.csrfToken) {
+            await this.fetchCSRFToken();
+        }
+        
+        const headers = {
+            ...options.headers,
+            'X-CSRF-Token': this.csrfToken
+        };
+        
+        // For multipart forms, add CSRF token as form field
+        if (options.body && options.body instanceof FormData) {
+            options.body.append('csrf_token', this.csrfToken);
+        }
+        
+        return fetch(url, {
+            ...options,
+            headers
+        });
+    }
 
     async seedMyCollectedSet() {
         try {
@@ -130,6 +210,10 @@ class TroughApp {
                 }
             }
         } catch {}
+        
+        // Initialize CSRF token immediately
+        await this.initCSRFToken();
+        
         await this.checkAuth();
 		// Seed my collection state early for correct UI on first paint
 		await this.seedMyCollectedSet();
@@ -1498,9 +1582,9 @@ class TroughApp {
             const pick = document.createElement('input'); pick.type = 'file'; pick.accept = 'image/*'; pick.multiple = true; pick.style.display = 'none'; uploadPanel.appendChild(pick);
             const handleFiles = async (files) => {
                 for (const f of files) {
-                    const uploaded = await this.uploadImage(f, {});
+                    const uploaded = await app.uploadImage(f, {});
                     if (uploaded) {
-                        this.openEditModal({ id: uploaded.id, original_name: uploaded.original_name, caption: uploaded.caption || '', is_nsfw: false, filename: uploaded.filename }, null);
+                        app.openEditModal({ id: uploaded.id, original_name: uploaded.original_name, caption: uploaded.caption || '', is_nsfw: false, filename: uploaded.filename }, null);
                     }
                 }
             };
@@ -1549,7 +1633,7 @@ class TroughApp {
                 input.addEventListener('input', updateCount); updateCount();
                 area.querySelector('#bio-cancel').onclick = () => { this.renderProfilePage(username); };
                 area.querySelector('#bio-save').onclick = async () => {
-            const resp = await fetch('/api/me/profile', { method:'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ bio: input.value.slice(0,500) }) });
+            const resp = await this.fetchWithCSRF('/api/me/profile', { method:'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ bio: input.value.slice(0,500) }) });
                     if (resp.ok) { this.showNotification('Bio updated'); this.renderProfilePage(username); }
                     else { const err = await resp.json().catch(()=>({})); this.showNotification(err.error||'Save failed','error'); }
                 };
@@ -1956,7 +2040,7 @@ class TroughApp {
                     btn.classList.toggle('collected');
                     btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
                     try {
-                        const resp = await fetch(`/api/images/${id}/collect`, { method:'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
+                        const resp = await this.fetchWithCSRF(`/api/images/${id}/collect`, { method:'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
                         if (!resp.ok) {
                             btn.classList.toggle('collected');
                             btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
@@ -1970,7 +2054,7 @@ class TroughApp {
                 } else if (act === 'delete') {
                     const ok = await this.showConfirm('Delete image?');
                     if (ok) {
-                        const resp = await fetch(`/api/images/${id}`, { method: 'DELETE', credentials: 'include' });
+                        const resp = await this.fetchWithCSRF(`/api/images/${id}`, { method: 'DELETE', credentials: 'include' });
                         if (resp.status === 204) { card.remove(); this.showNotification('Image deleted'); } else { this.showNotification('Delete failed', 'error'); }
                     }
                 } else if (act === 'edit') {
@@ -2093,7 +2177,7 @@ class TroughApp {
         panel.querySelector('#e-cancel').onclick = () => overlay.remove();
         panel.querySelector('#e-save').onclick = async () => {
             const body = { title: panel.querySelector('#e-title').value, caption: panel.querySelector('#e-caption').value, is_nsfw: panel.querySelector('#e-nsfw').checked };
-            const resp = await fetch(`/api/images/${image.id}`, { method:'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+            const resp = await this.fetchWithCSRF(`/api/images/${image.id}`, { method:'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
             if (resp.ok) { overlay.remove(); this.showNotification('Saved'); location.reload(); } else { this.showNotification('Save failed', 'error'); }
         };
     }
@@ -2191,7 +2275,7 @@ class TroughApp {
         btn.classList.toggle('collected');
         btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
         try {
-            const response = await fetch(`/api/images/${imageId}/collect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
+            const response = await this.fetchWithCSRF(`/api/images/${imageId}/collect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
             if (!response.ok) {
                 btn.classList.toggle('collected');
                 btn.textContent = btn.classList.contains('collected') ? '✦' : '✧';
@@ -2220,6 +2304,37 @@ class TroughApp {
                 }
             }
         };
+        
+        // Create file input for click-to-upload functionality
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/*';
+        fileInput.multiple = true;
+        fileInput.style.display = 'none';
+        document.body.appendChild(fileInput);
+        
+        const handleFileSelect = async (e) => {
+            const files = Array.from(e.target.files || []);
+            for (const file of files) {
+                const uploaded = await this.uploadImage(file, {});
+                if (uploaded) {
+                    this.openEditModal({ id: uploaded.id, original_name: uploaded.original_name, caption: uploaded.caption || '', is_nsfw: false, filename: uploaded.filename }, null);
+                }
+            }
+            // Clear the input to allow selecting the same file again
+            e.target.value = '';
+        };
+        
+        // Add click handler to upload zone
+        this.uploadZone.addEventListener('click', (e) => {
+            // Only trigger if clicking on the upload content, not the backdrop
+            if (e.target.closest('.upload-content')) {
+                fileInput.click();
+            }
+        });
+        
+        fileInput.addEventListener('change', handleFileSelect);
+        
         document.addEventListener('dragenter', handleDragEnter);
         document.addEventListener('dragleave', handleDragLeave);
         document.addEventListener('dragover', handleDragOver);
@@ -2389,7 +2504,7 @@ class TroughApp {
         (document.querySelector(`input[name='nsfw-pref'][value='${pref}']`)||document.querySelector(`input[name='nsfw-pref'][value='hide']`)).checked = true;
         document.getElementById('btn-nsfw').onclick = async () => {
             const sel = document.querySelector("input[name='nsfw-pref']:checked")?.value || 'hide';
-            try { const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ nsfw_pref: sel }) }); if (!resp.ok) throw await resp.json(); const u = await resp.json(); this.currentUser = u; localStorage.setItem('user', JSON.stringify(u)); this.showNotification('NSFW preference saved'); } catch (e) { document.getElementById('err-nsfw').textContent = e.error || 'Failed'; }
+            try { const resp = await this.fetchWithCSRF('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ nsfw_pref: sel }) }); if (!resp.ok) throw await resp.json(); const u = await resp.json(); this.currentUser = u; localStorage.setItem('user', JSON.stringify(u)); this.showNotification('NSFW preference saved'); } catch (e) { document.getElementById('err-nsfw').textContent = e.error || 'Failed'; }
         };
         document.getElementById('btn-username').onclick = async () => {
             const inputEl = document.getElementById('settings-username');
@@ -2413,7 +2528,7 @@ class TroughApp {
                 if (r && r.ok) { errEl.textContent = 'Username unavailable'; this.showNotification('Username unavailable', 'error'); return; }
             } catch {}
             try {
-                const resp = await fetch('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ username }) });
+                const resp = await this.fetchWithCSRF('/api/me/profile', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ username }) });
                 if (!resp.ok) {
                     let data = {};
                     try { data = await resp.json(); } catch {}
@@ -2435,16 +2550,16 @@ class TroughApp {
         };
         document.getElementById('btn-email').onclick = async () => {
             const v = document.getElementById('settings-email').value.trim();
-            try { const resp = await fetch('/api/me/email', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ email: v }) }); if (!resp.ok) throw await resp.json(); this.showNotification('Email updated'); } catch (e) { document.getElementById('err-email').textContent = e.error || 'Failed'; }
+            try { const resp = await this.fetchWithCSRF('/api/me/email', { method: 'PATCH', headers: authHeader, body: JSON.stringify({ email: v }) }); if (!resp.ok) throw await resp.json(); this.showNotification('Email updated'); } catch (e) { document.getElementById('err-email').textContent = e.error || 'Failed'; }
         };
         document.getElementById('btn-password').onclick = async () => {
             const current = document.getElementById('current-password').value; const next = pw.value; const confirm = pwc.value;
             if (next !== confirm) { document.getElementById('err-password').textContent = 'Passwords do not match'; return; }
-            try { const resp = await fetch('/api/me/password', { method:'PATCH', headers: authHeader, body: JSON.stringify({ current_password: current, new_password: next }) }); if (resp.status !== 204) throw await resp.json(); document.getElementById('current-password').value=''; pw.value=''; pwc.value=''; renderBar(); this.showNotification('Password changed'); } catch (e) { document.getElementById('err-password').textContent = e.error || 'Failed'; }
+            try { const resp = await this.fetchWithCSRF('/api/me/password', { method:'PATCH', headers: authHeader, body: JSON.stringify({ current_password: current, new_password: next }) }); if (resp.status !== 204) throw await resp.json(); document.getElementById('current-password').value=''; pw.value=''; pwc.value=''; renderBar(); this.showNotification('Password changed'); } catch (e) { document.getElementById('err-password').textContent = e.error || 'Failed'; }
         };
         document.getElementById('btn-delete').onclick = async () => {
             const conf = document.getElementById('delete-confirm').value.trim(); if (conf !== 'DELETE') { document.getElementById('err-delete').textContent='Type DELETE to confirm'; return; }
-            try { const resp = await fetch('/api/me', { method:'DELETE', headers: authHeader, body: JSON.stringify({ confirm:'DELETE' }) }); if (resp.status !== 204) throw await resp.json(); await this.signOut(); window.location.href='/'; } catch (e) { document.getElementById('err-delete').textContent = e.error || 'Failed'; }
+            try { const resp = await this.fetchWithCSRF('/api/me', { method:'DELETE', headers: authHeader, body: JSON.stringify({ confirm:'DELETE' }) }); if (resp.status !== 204) throw await resp.json(); await this.signOut(); window.location.href='/'; } catch (e) { document.getElementById('err-delete').textContent = e.error || 'Failed'; }
         };
 
         // Avatar upload
@@ -2452,24 +2567,29 @@ class TroughApp {
             const fileInput = document.getElementById('avatar-file'); const file = fileInput.files && fileInput.files[0]; if (!file) { this.showNotification('Choose a file first', 'error'); return; }
             const fd = new FormData(); fd.append('avatar', file);
             try {
-                const resp = await fetch('/api/me/avatar', { method:'POST', credentials: 'include', body: fd });
+                const resp = await this.fetchWithCSRF('/api/me/avatar', { method:'POST', credentials: 'include', body: fd });
                 if (!resp.ok) throw await resp.json();
                 const data = await resp.json();
-                const pv = document.getElementById('avatar-preview'); if (pv) { try { pv.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
                 this.currentUser.avatar_url = data.avatar_url; localStorage.setItem('user', JSON.stringify(this.currentUser));
-                // Also update profile header avatar if present on page
+                // Update settings page avatar preview
+                const pv = document.getElementById('avatar-preview'); if (pv) { try { pv.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; pv.style.display = 'block'; } catch {} }
+                // Update navigation avatar
+                const navAvatar = document.querySelector('.nav-avatar'); if (navAvatar) { try { navAvatar.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
+                // Update profile header avatar if present on page
                 const headerAv = document.querySelector('.avatar-preview'); if (headerAv) { try { headerAv.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
+                // Also update any avatar images in the auth button
+                const authBtnAvatar = this.authBtn.querySelector('.avatar'); if (authBtnAvatar) { try { authBtnAvatar.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
                 this.showNotification('Avatar updated');
             } catch (e) { this.showNotification(e.error || 'Upload failed', 'error'); }
         };
         if (needVerify) {
             const btn1 = document.getElementById('btn-resend-verify');
             if (btn1) btn1.onclick = async () => {
-                try { const r = await fetch('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
+                try { const r = await this.fetchWithCSRF('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
             };
             const btn2 = document.getElementById('settings-resend-verify');
             if (btn2) btn2.onclick = async () => {
-                try { const r = await fetch('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
+                try { const r = await this.fetchWithCSRF('/api/me/resend-verification', { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Unable to send','error'); } } catch {}
             };
         }
     }
@@ -2489,7 +2609,7 @@ class TroughApp {
         this.showLoader();
         
         try {
-            const response = await fetch('/api/upload', { method: 'POST', credentials: 'include', body: formData });
+            const response = await this.fetchWithCSRF('/api/upload', { method: 'POST', credentials: 'include', body: formData });
             
             if (response.ok) {
                 const image = await response.json();
@@ -2923,7 +3043,7 @@ class TroughApp {
         siteSection.className = 'settings-group';
         if (isAdmin) {
             let s = {};
-            try { const r = await fetch('/api/admin/site', { credentials: 'include' }); if (r.ok) s = await r.json(); } catch {}
+            try { const r = await this.fetchWithCSRF('/api/admin/site', { credentials: 'include' }); if (r.ok) s = await r.json(); } catch {}
             const smtpConfigured = !!(s.smtp_host && s.smtp_port && s.smtp_username && s.smtp_password);
             siteSection.innerHTML = `
               <div class="settings-label">Site settings</div>
@@ -3026,7 +3146,7 @@ class TroughApp {
             if (upFavBtn) upFavBtn.onclick = async () => {
                 const f = favInput.files[0]; if (!f) { this.showNotification('Choose a favicon file', 'error'); return; }
                 const fd = new FormData(); fd.append('favicon', f);
-                const r = await fetch('/api/admin/site/favicon', { method:'POST', credentials:'include', body: fd });
+                const r = await this.fetchWithCSRF('/api/admin/site/favicon', { method:'POST', credentials:'include', body: fd });
                 if (r.ok) { const d = await r.json(); favPreview.src = d.favicon_path || favPreview.src; favPreview.style.display='inline-block'; this.showNotification('Favicon uploaded'); await this.applyPublicSiteSettings(); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
@@ -3039,7 +3159,7 @@ class TroughApp {
             if (upSocialBtn) upSocialBtn.onclick = async () => {
                 const f = socialInput.files[0]; if (!f) { this.showNotification('Choose a social image file', 'error'); return; }
                 const fd = new FormData(); fd.append('image', f);
-                const r = await fetch('/api/admin/site/social-image', { method:'POST', credentials:'include', body: fd });
+                const r = await this.fetchWithCSRF('/api/admin/site/social-image', { method:'POST', credentials:'include', body: fd });
                 if (r.ok) { const d = await r.json(); document.getElementById('social-image').value = d.social_image_url || ''; socialPreview.src = d.social_image_url || socialPreview.src; socialPreview.style.display='inline-block'; this.showNotification('Social image uploaded'); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
@@ -3256,7 +3376,7 @@ class TroughApp {
                         };
                         row.querySelector('[data-act="remove"]').onclick = async () => {
                             const ok = await this.showConfirm('Delete this backup?'); if (!ok) return;
-                            const rr = await fetch(`/api/admin/backups/${encodeURIComponent(f.name)}`, { method:'DELETE', credentials:'include' });
+                            const rr = await this.fetchWithCSRF(`/api/admin/backups/${encodeURIComponent(f.name)}`, { method:'DELETE', credentials:'include' });
                             if (rr.status===204) { this.showNotification('Deleted'); loadList(); } else { this.showNotification('Delete failed','error'); }
                         };
                         listEl.appendChild(row);
@@ -3267,7 +3387,7 @@ class TroughApp {
                 const dlBtn = backupsSection.querySelector('#btn-backup-download');
                 if (dlBtn) dlBtn.onclick = async () => {
                     try {
-                        const r = await fetch('/api/admin/backups/download', { method:'POST', credentials:'include' });
+                        const r = await this.fetchWithCSRF('/api/admin/backups/download', { method:'POST', credentials:'include' });
                         if (!r.ok) { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); return; }
                         const blob = await r.blob();
                         const cd = r.headers.get('Content-Disposition')||'';
@@ -3277,7 +3397,7 @@ class TroughApp {
                 };
                 const saveBtn = backupsSection.querySelector('#btn-backup-save');
                 if (saveBtn) saveBtn.onclick = async () => {
-                    const r = await fetch('/api/admin/backups/save', { method:'POST', credentials:'include' });
+                    const r = await this.fetchWithCSRF('/api/admin/backups/save', { method:'POST', credentials:'include' });
                     if (r.ok) { this.showNotification('Saved'); await loadList(); }
                     else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); }
                 };
@@ -3287,7 +3407,7 @@ class TroughApp {
                     const f = fileInp && fileInp.files && fileInp.files[0]; if (!f) { this.showNotification('Choose a backup file','error'); return; }
                     const ok = await this.showConfirm('Restore will replace existing data. Continue?'); if (!ok) return;
                     const fd = new FormData(); fd.append('file', f);
-                    const r = await fetch('/api/admin/backups/restore', { method:'POST', credentials:'include', body: fd });
+                    const r = await this.fetchWithCSRF('/api/admin/backups/restore', { method:'POST', credentials:'include', body: fd });
                     if (r.status===204) { this.showNotification('Restored'); }
                     else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Restore failed','error'); }
                 };
@@ -3305,7 +3425,7 @@ class TroughApp {
                         backup_interval: backupsSection.querySelector('#backup-interval')?.value || '24h',
                         backup_keep_days: parseInt(backupsSection.querySelector('#backup-keep')?.value||'7',10)
                     };
-                    const r = await fetch('/api/admin/site', { method:'PUT', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
+                    const r = await this.fetchWithCSRF('/api/admin/site', { method:'PUT', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
                     if (r.ok) { this.showNotification('Saved'); }
                     else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Save failed','error'); }
                 };
@@ -3339,7 +3459,7 @@ class TroughApp {
                     };
                     row.querySelector('[data-act="remove"]').onclick = async () => {
                         const ok = await this.showConfirm('Delete this page?'); if (!ok) return;
-                        const rr = await fetch(`/api/admin/pages/${encodeURIComponent(p.id)}`, { method:'DELETE', credentials:'include' });
+                        const rr = await this.fetchWithCSRF(`/api/admin/pages/${encodeURIComponent(p.id)}`, { method:'DELETE', credentials:'include' });
                         if (rr.status===204) { this.showNotification('Deleted'); loadPages(1); if (selectedId===p.id) { selectedId=null; pgNew.click(); } }
                         else { const e = await rr.json().catch(()=>({})); this.showNotification(e.error||'Delete failed','error'); }
                     };
@@ -3347,7 +3467,7 @@ class TroughApp {
                 });
             };
             pgNew.onclick = () => { selectedId = null; pgSlug.value=''; pgTitle.value=''; pgRedirect.value=''; pgMarkdown.value=''; pgMetaTitle.value=''; pgMetaDesc.value=''; pgPub.checked=false; };
-            pgDel.onclick = async () => { if (!selectedId) return; const ok = await this.showConfirm('Delete this page?'); if (!ok) return; const r = await fetch(`/api/admin/pages/${encodeURIComponent(selectedId)}`, { method:'DELETE', credentials:'include' }); if (r.status===204) { this.showNotification('Deleted'); selectedId=null; pgNew.click(); loadPages(1); } else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Delete failed','error'); } };
+            pgDel.onclick = async () => { if (!selectedId) return; const ok = await this.showConfirm('Delete this page?'); if (!ok) return; const r = await this.fetchWithCSRF(`/api/admin/pages/${encodeURIComponent(selectedId)}`, { method:'DELETE', credentials:'include' }); if (r.status===204) { this.showNotification('Deleted'); selectedId=null; pgNew.click(); loadPages(1); } else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Delete failed','error'); } };
             pgSave.onclick = async () => {
                 const slug = (pgSlug.value||'').trim().toLowerCase();
                 if (!slugRe.test(slug)) { this.showNotification('Invalid slug','error'); return; }
@@ -3362,7 +3482,7 @@ class TroughApp {
                 };
                 const method = selectedId ? 'PUT' : 'POST';
                 const url = selectedId ? `/api/admin/pages/${encodeURIComponent(selectedId)}` : '/api/admin/pages';
-                const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
+                const r = await this.fetchWithCSRF(url, { method, headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
                 if (r.ok || r.status===201) { this.showNotification('Saved'); loadPages(1); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Save failed','error'); }
             };
@@ -3400,7 +3520,7 @@ class TroughApp {
                     plausible_src: document.getElementById('plausible-src')?.value || '',
                     plausible_domain: document.getElementById('plausible-domain')?.value || '',
                 };
-                const r = await fetch('/api/admin/site', { method:'PUT', headers: { 'Content-Type':'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+                const r = await this.fetchWithCSRF('/api/admin/site', { method:'PUT', headers: { 'Content-Type':'application/json' }, credentials: 'include', body: JSON.stringify(body) });
                 if (r.ok) { this.showNotification('Saved'); await this.applyPublicSiteSettings(); }
                 else { this.showNotification('Save failed','error'); }
             };
@@ -3467,7 +3587,7 @@ class TroughApp {
                         row.querySelector('[data-act="copy-code"]').onclick = () => copyToClipboard(inv.code);
                         row.querySelector('[data-act="revoke"]').onclick = async () => {
                             const ok = await this.showConfirm('Revoke this invite?'); if (!ok) return;
-                const r = await fetch(`/api/admin/invites/${inv.id}`, { method:'DELETE', credentials:'include' });
+                const r = await this.fetchWithCSRF(`/api/admin/invites/${inv.id}`, { method:'DELETE', credentials:'include' });
                             if (r.status === 204) { this.showNotification('Invite revoked'); await loadInvites(invPage); }
                             else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Revoke failed','error'); }
                         };
@@ -3483,7 +3603,7 @@ class TroughApp {
                         e.preventDefault();
                         const ok = await this.showConfirm('Clear all used and expired invites?');
                         if (!ok) return;
-                        const r = await fetch('/api/admin/invites/prune', { method:'POST', credentials:'include' });
+                        const r = await this.fetchWithCSRF('/api/admin/invites/prune', { method:'POST', credentials:'include' });
                         if (r.ok) { this.showNotification('Cleared'); await loadInvites(invPage); }
                         else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed to clear','error'); }
                     };
@@ -3510,7 +3630,7 @@ class TroughApp {
                 const body = {};
                 if (maxUsesVal !== '') { body.max_uses = parseInt(maxUsesVal, 10); }
                 if (durationVal !== '') { body.duration = durationVal; }
-                const r = await fetch('/api/admin/invites', { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify(body) });
+                const r = await this.fetchWithCSRF('/api/admin/invites', { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify(body) });
                 if (r.ok || r.status === 201) {
                     const d = await r.json().catch(()=>({}));
                     this.showNotification('Invite created');
@@ -3536,7 +3656,7 @@ class TroughApp {
             if (btnTest) btnTest.onclick = async () => {
                 const to = (document.getElementById('smtp-test-to').value||'').trim();
                 if(!to){ this.showNotification('Enter recipient','error'); return;}
-                const r = await fetch('/api/admin/site/test-smtp', { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ to }) });
+                const r = await this.fetchWithCSRF('/api/admin/site/test-smtp', { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ to }) });
                 if (r.status===204) this.showNotification('Test email sent');
                 else {
                     const e = await r.json().catch(()=>({}));
@@ -3548,7 +3668,7 @@ class TroughApp {
             // Wire storage test
             const btnTestStorage = document.getElementById('btn-test-storage');
             if (btnTestStorage) btnTestStorage.onclick = async () => {
-                const r = await fetch('/api/admin/site/test-storage', { method:'POST', credentials:'include' });
+                const r = await this.fetchWithCSRF('/api/admin/site/test-storage', { method:'POST', credentials:'include' });
                 const statusEl = document.getElementById('storage-status');
                 if (r.ok) {
                     const d = await r.json().catch(()=>({}));
@@ -3590,20 +3710,20 @@ class TroughApp {
                 left.innerHTML = `<div class="handle">@${this.escapeHTML(String(u.username))}</div><div class="id">${this.escapeHTML(String(u.id))}</div>`;
                 const right = document.createElement('div'); right.className='actions';
                 const modBtn = document.createElement('button'); modBtn.className='nav-btn'; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod';
-                modBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_moderator: !u.is_moderator }) }); if (r.ok) { u.is_moderator = !u.is_moderator; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod'; } };
+                modBtn.onclick = async () => { const r = await this.fetchWithCSRF(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_moderator: !u.is_moderator }) }); if (r.ok) { u.is_moderator = !u.is_moderator; modBtn.textContent = u.is_moderator ? 'Unmod' : 'Make mod'; } };
                 right.appendChild(modBtn);
                 if (isAdminLocal) {
                     const adminBtn = document.createElement('button'); adminBtn.className='nav-btn'; adminBtn.textContent = u.is_admin ? 'Revoke admin' : 'Make admin';
-                    adminBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_admin: !u.is_admin }) }); if (r.ok) { u.is_admin = !u.is_admin; adminBtn.textContent = u.is_admin ? 'Revoke admin' : 'Make admin'; } };
+                    adminBtn.onclick = async () => { const r = await this.fetchWithCSRF(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_admin: !u.is_admin }) }); if (r.ok) { u.is_admin = !u.is_admin; adminBtn.textContent = u.is_admin ? 'Revoke admin' : 'Make admin'; } };
                     right.appendChild(adminBtn);
                     const disableBtn = document.createElement('button'); disableBtn.className='nav-btn'; disableBtn.textContent = u.is_disabled ? 'Enable' : 'Disable';
-                    disableBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_disabled: !u.is_disabled }) }); if (r.ok) { u.is_disabled = !u.is_disabled; disableBtn.textContent = u.is_disabled ? 'Enable' : 'Disable'; } };
+                    disableBtn.onclick = async () => { const r = await this.fetchWithCSRF(`/api/admin/users/${u.id}`, { method:'PATCH', headers: { 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify({ is_disabled: !u.is_disabled }) }); if (r.ok) { u.is_disabled = !u.is_disabled; disableBtn.textContent = u.is_disabled ? 'Enable' : 'Disable'; } };
                     right.appendChild(disableBtn);
                     const verifyBtn = document.createElement('button'); verifyBtn.className='nav-btn'; verifyBtn.textContent='Send verify';
-                    verifyBtn.onclick = async () => { const r = await fetch(`/api/admin/users/${u.id}/send-verification`, { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); } };
+                    verifyBtn.onclick = async () => { const r = await this.fetchWithCSRF(`/api/admin/users/${u.id}/send-verification`, { method:'POST', credentials:'include' }); if (r.status===204) this.showNotification('Verification sent'); else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Failed','error'); } };
                     right.appendChild(verifyBtn);
                     const delBtn = document.createElement('button'); delBtn.className='nav-btn'; delBtn.style.background='var(--color-danger)'; delBtn.style.color='#fff'; delBtn.textContent='Delete';
-                    delBtn.onclick = async () => { const ok = await this.showConfirm('Delete user?'); if (!ok) return; const r = await fetch(`/api/admin/users/${u.id}`, { method:'DELETE', credentials:'include' }); if (r.status===204) { row.remove(); } else { this.showNotification('Delete failed','error'); } };
+                    delBtn.onclick = async () => { const ok = await this.showConfirm('Delete user?'); if (!ok) return; const r = await this.fetchWithCSRF(`/api/admin/users/${u.id}`, { method:'DELETE', credentials:'include' }); if (r.status===204) { row.remove(); } else { this.showNotification('Delete failed','error'); } };
                     right.appendChild(delBtn);
                 }
                 row.appendChild(left); row.appendChild(right); results.appendChild(row);
@@ -3625,7 +3745,7 @@ class TroughApp {
 
         const doSearch = async (q, page = 1) => {
             if (!q) { results.innerHTML = ''; updatePager(1, 0, 0); return; }
-            const r = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}&page=${page}&limit=${pageSize}`, { credentials: 'include' });
+            const r = await this.fetchWithCSRF(`/api/admin/users?q=${encodeURIComponent(q)}&page=${page}&limit=${pageSize}`, { credentials: 'include' });
             if (r.ok) {
                 const d = await r.json();
                 renderRows(d.users||[]);
@@ -4132,7 +4252,7 @@ class TroughApp {
                             meta_description: panel.querySelector('#pgx-meta-desc').value,
                         };
                         try {
-                            const rr = await fetch(`/api/admin/pages/${encodeURIComponent(pid)}`, { method:'PUT', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify(body) });
+                            const rr = await this.fetchWithCSRF(`/api/admin/pages/${encodeURIComponent(pid)}`, { method:'PUT', headers:{ 'Content-Type':'application/json' }, credentials:'include', body: JSON.stringify(body) });
                             if (!rr.ok) { const e = await rr.json().catch(()=>({})); this.showNotification(e.error||'Save failed','error'); return; }
                             this.showNotification('Saved'); close();
                             // Re-render page with latest
@@ -4264,7 +4384,7 @@ class TroughApp {
                 }
             }, 500);
 
-            const response = await fetch('/api/admin/site/export-uploads', {
+            const response = await this.fetchWithCSRF('/api/admin/site/export-uploads', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${localStorage.getItem('token')}`,
