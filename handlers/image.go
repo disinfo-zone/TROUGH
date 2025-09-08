@@ -123,6 +123,9 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	// Use the remaining stream for AI detection (avoids re-reading)
 	var streamReader io.Reader = remainingStream
 	
+	// Keep the original file reference for operations that need multipart.File interface
+	originalFile := src
+	
 	// Add security information to response context
 	if result.SecurityLevel == "low" {
 		// Log low security files for monitoring
@@ -146,13 +149,13 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	var originalBytes []byte
 	if file.Size > 2*1024*1024 { // 2MB threshold
 		// For large files, use streaming AI detection first
-		if ok, res := detectAIStreaming(streamReader.(multipart.File), file.Size); ok {
+		if ok, res := detectAIStreaming(originalFile, file.Size); ok {
 			aiSignature = res.Details
 			goto ai_validated
 		}
 		// If streaming detection fails, buffer the file for full detection
-		streamReader.(multipart.File).Seek(0, 0)
-		if buf, err := io.ReadAll(streamReader); err == nil {
+		originalFile.Seek(0, 0)
+		if buf, err := io.ReadAll(originalFile); err == nil {
 			originalBytes = buf
 		} else {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to buffer upload"})
@@ -183,10 +186,7 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 ai_validated:
 
 	// Now decode image for processing (only if AI validation passed)
-	if _, err := src.Seek(0, 0); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploaded file"})
-	}
-	img, format, err := image.Decode(src)
+	img, format, err := image.Decode(bytes.NewReader(originalBytes))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to decode image"})
 	}

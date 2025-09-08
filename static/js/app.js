@@ -2580,7 +2580,11 @@ class TroughApp {
                 // Also update any avatar images in the auth button
                 const authBtnAvatar = this.authBtn.querySelector('.avatar'); if (authBtnAvatar) { try { authBtnAvatar.style.backgroundImage = `url('${encodeURI(String(data.avatar_url||''))}')`; } catch {} }
                 this.showNotification('Avatar updated');
-            } catch (e) { this.showNotification(e.error || 'Upload failed', 'error'); }
+            } catch (e) { 
+                console.error('Avatar upload error:', e);
+                const errorMsg = e.error || (typeof e === 'string' ? e : 'Upload failed');
+                this.showNotification(errorMsg, 'error'); 
+            }
         };
         if (needVerify) {
             const btn1 = document.getElementById('btn-resend-verify');
@@ -3138,11 +3142,11 @@ class TroughApp {
 
             // Storage test handler will be wired up in the isAdmin block below
 
-            const favInput = document.getElementById('favicon-file');
-            const favPreview = document.getElementById('favicon-preview');
+            const favInput = siteSection.querySelector('#favicon-file');
+            const favPreview = siteSection.querySelector('#favicon-preview');
             if (favInput) favInput.onchange = () => { const f = favInput.files && favInput.files[0]; if (f) { favPreview.src = URL.createObjectURL(f); favPreview.style.display='inline-block'; } };
 
-            const upFavBtn = document.getElementById('btn-upload-favicon');
+            const upFavBtn = siteSection.querySelector('#btn-upload-favicon');
             if (upFavBtn) upFavBtn.onclick = async () => {
                 const f = favInput.files[0]; if (!f) { this.showNotification('Choose a favicon file', 'error'); return; }
                 const fd = new FormData(); fd.append('favicon', f);
@@ -3151,16 +3155,16 @@ class TroughApp {
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
 
-            const socialInput = document.getElementById('social-image-file');
-            const socialPreview = document.getElementById('social-image-preview');
+            const socialInput = siteSection.querySelector('#social-image-file');
+            const socialPreview = siteSection.querySelector('#social-image-preview');
             if (socialInput) socialInput.onchange = () => { const f = socialInput.files && socialInput.files[0]; if (f) { socialPreview.src = URL.createObjectURL(f); socialPreview.style.display='inline-block'; } };
 
-            const upSocialBtn = document.getElementById('btn-upload-social');
+            const upSocialBtn = siteSection.querySelector('#btn-upload-social');
             if (upSocialBtn) upSocialBtn.onclick = async () => {
                 const f = socialInput.files[0]; if (!f) { this.showNotification('Choose a social image file', 'error'); return; }
                 const fd = new FormData(); fd.append('image', f);
                 const r = await this.fetchWithCSRF('/api/admin/site/social-image', { method:'POST', credentials:'include', body: fd });
-                if (r.ok) { const d = await r.json(); document.getElementById('social-image').value = d.social_image_url || ''; socialPreview.src = d.social_image_url || socialPreview.src; socialPreview.style.display='inline-block'; this.showNotification('Social image uploaded'); }
+                if (r.ok) { const d = await r.json(); siteSection.querySelector('#social-image').value = d.social_image_url || ''; socialPreview.src = d.social_image_url || socialPreview.src; socialPreview.style.display='inline-block'; this.showNotification('Social image uploaded'); }
                 else { const e = await r.json().catch(()=>({})); this.showNotification(e.error||'Upload failed','error'); }
             };
 

@@ -374,8 +374,8 @@ func (h *AdminHandler) UploadFavicon(c *fiber.Ctx) error {
 	fileValidator.MaxFileSize = 5 * 1024 * 1024
 	
 	// Allow additional formats for favicon
-	fileValidator.AllowedExtensions = []string{".ico", ".jpg", ".jpeg", ".png", ".webp"}
-	fileValidator.AllowedMIMETypes = []string{"image/x-icon", "image/jpeg", "image/png", "image/webp"}
+	fileValidator.AllowedExtensions = []string{".ico", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+	fileValidator.AllowedMIMETypes = []string{"image/x-icon", "image/jpeg", "image/png", "image/webp", "image/gif"}
 	
 	src, err := file.Open()
 	if err != nil {
@@ -401,6 +401,11 @@ func (h *AdminHandler) UploadFavicon(c *fiber.Ctx) error {
 	
 	if !result.IsValid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
+	}
+	
+	// Ensure file pointer is at beginning for SaveFile
+	if _, err := src.Seek(0, 0); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset file pointer"})
 	}
 	
 	if err := os.MkdirAll(filepath.Join("uploads", "site"), 0755); err != nil {
@@ -437,9 +442,44 @@ func (h *AdminHandler) UploadSocialImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No image provided"})
 	}
-	if file.Size > 20*1024*1024 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "File too large"})
+	
+	// Use comprehensive file validation for social image
+	fileValidator := services.NewFileValidator()
+	
+	// Set size limit for social image (20MB)
+	fileValidator.MaxFileSize = 20 * 1024 * 1024
+	
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
+	defer src.Close()
+	
+	// Read a small sample for validation
+	sample := make([]byte, 512)
+	n, err := src.Read(sample)
+	if err != nil && err != io.EOF {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
+	}
+	
+	// Seek back to beginning for further processing
+	src.Seek(0, 0)
+	
+	// Validate file sample
+	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
+	}
+	
+	if !result.IsValid {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
+	}
+	
+	// Ensure file pointer is at beginning for SaveFile
+	if _, err := src.Seek(0, 0); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset file pointer"})
+	}
+	
 	if err := os.MkdirAll(filepath.Join("uploads", "site"), 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to prepare upload directory"})
 	}

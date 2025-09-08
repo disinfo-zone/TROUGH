@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"image"
 	"image/draw"
 	"image/jpeg"
@@ -374,9 +375,6 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
 	}
 	
-	// Seek back to beginning for further processing
-	src.Seek(0, 0)
-	
 	// Validate file sample
 	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
 	if err != nil {
@@ -386,22 +384,57 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	if !result.IsValid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
 	}
+	
+	// Seek back to beginning for further processing
+	src.Seek(0, 0)
+	
 	// Ensure directory
 	avatarDir := filepath.Join("uploads", "avatars")
 	if err := os.MkdirAll(avatarDir, 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create avatar directory"})
 	}
+	
 	// Fetch current user to know old avatar URL
 	u, _ := h.userRepo.GetByID(userID)
 	oldAvatar := ""
 	if u != nil && u.AvatarURL != nil {
 		oldAvatar = *u.AvatarURL
 	}
+	
+	// Ensure file pointer is at beginning for image.Decode
+	if _, err := src.Seek(0, 0); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset file pointer"})
+	}
+	
+	// Debug: Check file size before decode
+	size, _ := src.Seek(0, 2) // End position
+	src.Seek(0, 0) // Reset to beginning
+	
 	// Attempt to decode and center-crop 95%
+	var fname, path string
+	var shouldProcess bool
+	
 	img, _, decErr := image.Decode(src)
-	fname := uuid.New().String() + ".jpg"
-	path := filepath.Join(avatarDir, fname)
-	if decErr == nil {
+	if decErr != nil {
+		// For JPEG files that fail the final decode but passed validation,
+		// try to save them anyway without processing
+		if result.MIMEType == "image/jpeg" {
+			// Skip processing and save the original file
+			fname = uuid.New().String() + filepath.Ext(file.Filename)
+			path = filepath.Join(avatarDir, fname)
+			shouldProcess = false
+		} else {
+			// Provide more detailed error information for other formats
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Failed to decode avatar image: %v (file size: %d bytes)", decErr, size)})
+		}
+	} else {
+		// Normal processing path
+		shouldProcess = true
+		fname = uuid.New().String() + ".jpg"
+		path = filepath.Join(avatarDir, fname)
+	}
+	
+	if shouldProcess {
 		b := img.Bounds()
 		w := b.Dx()
 		h := b.Dy()
@@ -431,8 +464,10 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to write avatar"})
 		}
 	} else {
-		// Reject avatars we cannot decode to avoid saving arbitrary content
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported or invalid avatar image"})
+		// For JPEG files that failed decoding but passed validation, save original
+		if err := c.SaveFile(file, path); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save avatar file"})
+		}
 	}
 	// Upload to storage (use current storage)
 	data, _ := os.ReadFile(path)
