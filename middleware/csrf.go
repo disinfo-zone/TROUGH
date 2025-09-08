@@ -3,7 +3,7 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,10 +12,11 @@ import (
 
 // CSRFProtection provides CSRF protection middleware
 type CSRFProtection struct {
-	secretKey []byte
-	cookieName string
-	headerName string
-	expiry     time.Duration
+	secretKey   []byte
+	cookieName  string
+	headerName  string
+	expiry      time.Duration
+	isProduction bool
 }
 
 // NewCSRFProtection creates a new CSRF protection middleware
@@ -32,6 +33,7 @@ func NewCSRFProtection(secretKey string) *CSRFProtection {
 		cookieName:  "csrf_token",
 		headerName:  "X-CSRF-Token",
 		expiry:      24 * time.Hour,
+		isProduction: os.Getenv("GO_ENV") == "production" || os.Getenv("ENVIRONMENT") == "production",
 	}
 }
 
@@ -102,7 +104,6 @@ func (cp *CSRFProtection) Middleware() fiber.Handler {
 		// Get token from cookie
 		cookieToken := c.Cookies(cp.cookieName)
 		if cookieToken == "" {
-			fmt.Printf("CSRF Debug: No cookie token found for path: %s\n", path)
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"error": "CSRF token missing",
 			})
@@ -116,27 +117,15 @@ func (cp *CSRFProtection) Middleware() fiber.Handler {
 		}
 		
 		if requestToken == "" {
-			fmt.Printf("CSRF Debug: No request token found for path: %s, method: %s\n", path, c.Method())
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"error": "CSRF token required",
 			})
 		}
 		
-		// Debug: Print token values
-		fmt.Printf("CSRF Debug: Path: %s, Method: %s\n", path, c.Method())
-		fmt.Printf("CSRF Debug: Cookie token: %s (length: %d)\n", cookieToken, len(cookieToken))
-		fmt.Printf("CSRF Debug: Request token: %s (length: %d)\n", requestToken, len(requestToken))
-		fmt.Printf("CSRF Debug: Tokens match: %v\n", cookieToken == requestToken)
-		fmt.Printf("CSRF Debug: Cookie token valid: %v\n", cp.ValidateToken(cookieToken))
-		fmt.Printf("CSRF Debug: Request token valid: %v\n", cp.ValidateToken(requestToken))
-		
 		// Simple validation: check if tokens match and are valid format
 		if cookieToken == requestToken && cp.ValidateToken(cookieToken) {
-			fmt.Printf("CSRF Debug: Validation successful\n")
 			return c.Next()
 		}
-		
-		fmt.Printf("CSRF Debug: Validation failed\n")
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error": "Invalid CSRF token",
 		})
@@ -150,16 +139,21 @@ func (cp *CSRFProtection) SetCSRFToken(c *fiber.Ctx) error {
 		return err
 	}
 	
-	fmt.Printf("CSRF Debug: Generated new token: %s (length: %d)\n", token, len(token))
+	// Set token in cookie with security flags
+	secure := cp.isProduction
+	sameSite := fiber.CookieSameSiteLax
+	if cp.isProduction {
+		sameSite = fiber.CookieSameSiteStrict
+	}
 	
-	// Set token in cookie
 	cookie := &fiber.Cookie{
 		Name:     cp.cookieName,
 		Value:    token,
 		Expires:  time.Now().Add(cp.expiry),
 		HTTPOnly: true,
-		Secure:   false, // Allow HTTP for development
-		SameSite: "Lax",  // Less restrictive for development
+		Secure:   secure,
+		SameSite: sameSite,
+		Path:     "/",
 	}
 	
 	c.Cookie(cookie)

@@ -3,6 +3,10 @@ package services
 import (
 	"bytes"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	_ "image/webp"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -11,27 +15,39 @@ import (
 
 // FileValidator handles comprehensive file validation
 type FileValidator struct {
-	AllowedExtensions []string
-	AllowedMIMETypes  []string
-	MaxFileSize       int64
+	AllowedExtensions  []string
+	AllowedMIMETypes   []string
+	MaxFileSize        int64
+	MaxDimensions      struct{ Width, Height int }
+	MaxPixelCount      int64
+	ForbiddenPatterns []string
 }
 
 // NewFileValidator creates a new file validator
 func NewFileValidator() *FileValidator {
-	return &FileValidator{
+	fv := &FileValidator{
 		AllowedExtensions: []string{".jpg", ".jpeg", ".png", ".webp"},
 		AllowedMIMETypes:  []string{"image/jpeg", "image/png", "image/webp"},
-		MaxFileSize:       50 * 1024 * 1024, // 50MB
+		MaxFileSize:       10 * 1024 * 1024, // 10MB (reduced for security)
+		MaxDimensions:      struct{ Width, Height int }{Width: 4096, Height: 4096},
+		MaxPixelCount:      50 * 1024 * 1024, // 50 megapixels
+		ForbiddenPatterns: []string{"script", "javascript", "eval", "function", "<script", "http://", "https://"},
 	}
+	return fv
 }
 
 // ValidationResult contains the results of file validation
 type ValidationResult struct {
-	IsValid      bool
-	Extension    string
-	MIMEType     string
-	Size         int64
-	ErrorMessage string
+	IsValid       bool
+	Extension     string
+	MIMEType      string
+	Size          int64
+	Width         int
+	Height        int
+	HasMetadata   bool
+	IsAIReady     bool  // Indicates if file is suitable for AI detection
+	ErrorMessage  string
+	SecurityLevel  string // "low", "medium", "high"
 }
 
 // ValidateFile performs comprehensive file validation
@@ -39,25 +55,29 @@ func (fv *FileValidator) ValidateFile(filename string, file io.Reader) (*Validat
 	result := &ValidationResult{
 		Extension: strings.ToLower(filepath.Ext(filename)),
 		Size:      0,
+		SecurityLevel: "low",
 	}
 	
-	// Step 1: Validate extension
+	// Step 1: Basic filename validation
+	if !fv.isValidFilename(filename) {
+		result.ErrorMessage = "Invalid filename"
+		return result, nil
+	}
+	
+	// Step 2: Validate extension
 	if !fv.isValidExtension(result.Extension) {
 		result.ErrorMessage = fmt.Sprintf("Invalid file extension: %s", result.Extension)
 		return result, nil
 	}
 	
-	// Step 2: Read first 512 bytes for MIME type detection and magic byte validation
+	// Step 3: Read first 512 bytes for MIME type detection and magic byte validation
 	buffer := make([]byte, 512)
 	n, err := file.Read(buffer)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	
-	// Create a new reader that combines the buffer with the rest of the file
-	multiReader := io.MultiReader(bytes.NewReader(buffer[:n]), file)
-	
-	// Step 3: Detect MIME type
+	// Step 4: Detect MIME type
 	mimeType := http.DetectContentType(buffer[:n])
 	result.MIMEType = mimeType
 	
@@ -66,23 +86,39 @@ func (fv *FileValidator) ValidateFile(filename string, file io.Reader) (*Validat
 		return result, nil
 	}
 	
-	// Step 4: Validate magic bytes
+	// Step 5: Validate magic bytes
 	if !fv.isValidMagicBytes(buffer[:n], result.Extension, mimeType) {
 		result.ErrorMessage = "File signature does not match declared type"
 		return result, nil
 	}
 	
-	// Step 5: Validate extension matches MIME type
+	// Step 6: Validate extension matches MIME type
 	if !fv.extensionMatchesMIME(result.Extension, mimeType) {
 		result.ErrorMessage = fmt.Sprintf("Extension %s does not match MIME type %s", result.Extension, mimeType)
 		return result, nil
 	}
 	
-	// Step 6: Check file size by reading the rest
+	// Step 7: Check for embedded threats in file header
+	if fv.containsEmbeddedThreats(buffer[:n]) {
+		result.ErrorMessage = "File contains potentially harmful content"
+		return result, nil
+	}
+	
+	// Step 8: Create a reader for the full file for further validation
+	fullReader := io.MultiReader(bytes.NewReader(buffer[:n]), file)
+	
+	// Step 9: Validate image dimensions and decode
+	if err := fv.validateImageDimensions(fullReader, result); err != nil {
+		result.ErrorMessage = fmt.Sprintf("Image validation failed: %v", err)
+		return result, nil
+	}
+	
+	// Step 10: Check file size by reading the rest
 	if n == 512 {
-		// Read the rest to get total size
-		restBuffer := make([]byte, fv.MaxFileSize)
-		restSize, err := multiReader.Read(restBuffer)
+		// Create a new reader to get total size
+		sizeReader := io.MultiReader(bytes.NewReader(buffer[:n]), file)
+		sizeBuffer := make([]byte, fv.MaxFileSize)
+		restSize, err := sizeReader.Read(sizeBuffer)
 		if err != nil && err != io.EOF {
 			return nil, fmt.Errorf("failed to read complete file: %w", err)
 		}
@@ -95,6 +131,9 @@ func (fv *FileValidator) ValidateFile(filename string, file io.Reader) (*Validat
 		result.ErrorMessage = fmt.Sprintf("File size %d exceeds maximum allowed size %d", result.Size, fv.MaxFileSize)
 		return result, nil
 	}
+	
+	// Step 11: Assess security level and AI readiness
+	fv.assessSecurityLevel(result)
 	
 	result.IsValid = true
 	return result, nil
@@ -167,6 +206,126 @@ func (fv *FileValidator) extensionMatchesMIME(ext, mimeType string) bool {
 		return mimeType == "image/webp"
 	}
 	return false
+}
+
+// isValidFilename performs basic filename validation
+func (fv *FileValidator) isValidFilename(filename string) bool {
+	if filename == "" {
+		return false
+	}
+	
+	// Check for suspicious patterns
+	lowerFilename := strings.ToLower(filename)
+	for _, pattern := range fv.ForbiddenPatterns {
+		if strings.Contains(lowerFilename, pattern) {
+			return false
+		}
+	}
+	
+	// Basic path traversal prevention
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		return false
+	}
+	
+	return true
+}
+
+// containsEmbeddedThreats checks for embedded threats in file headers
+func (fv *FileValidator) containsEmbeddedThreats(data []byte) bool {
+	dataStr := string(data)
+	lowerData := strings.ToLower(dataStr)
+	
+	// Check for common threat patterns
+	threatPatterns := []string{
+		"<script", "javascript:", "eval(", "function()",
+		"document.", "window.", "alert(", "prompt(",
+		"http-equiv", "onload=", "onerror=", "onclick=",
+	}
+	
+	for _, pattern := range threatPatterns {
+		if strings.Contains(lowerData, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// validateImageDimensions validates image dimensions and checks for decompression bombs
+func (fv *FileValidator) validateImageDimensions(reader io.Reader, result *ValidationResult) error {
+	// Decode image config to get dimensions without full decompression
+	config, format, err := image.DecodeConfig(reader)
+	if err != nil {
+		return fmt.Errorf("failed to decode image config: %w", err)
+	}
+	
+	result.Width = config.Width
+	result.Height = config.Height
+	
+	// Check maximum dimensions
+	if config.Width > fv.MaxDimensions.Width || config.Height > fv.MaxDimensions.Height {
+		return fmt.Errorf("image dimensions %dx%d exceed maximum allowed %dx%d", 
+			config.Width, config.Height, fv.MaxDimensions.Width, fv.MaxDimensions.Height)
+	}
+	
+	// Check for decompression bombs (too many pixels)
+	pixelCount := int64(config.Width) * int64(config.Height)
+	if pixelCount > fv.MaxPixelCount {
+		return fmt.Errorf("image pixel count %d exceeds maximum allowed %d", pixelCount, fv.MaxPixelCount)
+	}
+	
+	// Check for suspicious aspect ratios
+	if config.Width > 0 && config.Height > 0 {
+		aspectRatio := float64(config.Width) / float64(config.Height)
+		if aspectRatio > 20 || aspectRatio < 0.05 {
+			return fmt.Errorf("suspicious aspect ratio: %.2f", aspectRatio)
+		}
+	}
+	
+	// Determine if format is suitable for AI detection
+	result.IsAIReady = format == "jpeg" || format == "png" || format == "webp"
+	result.HasMetadata = format == "jpeg" // JPEG most likely to have EXIF/AI metadata
+	
+	return nil
+}
+
+// assessSecurityLevel assesses the security level of the validated file
+func (fv *FileValidator) assessSecurityLevel(result *ValidationResult) {
+	securityScore := 0
+	
+	// Base score for valid file
+	if result.IsValid {
+		securityScore += 30
+	}
+	
+	// Points for safe dimensions
+	if result.Width > 0 && result.Height > 0 && result.Width <= fv.MaxDimensions.Width/2 && result.Height <= fv.MaxDimensions.Height/2 {
+		securityScore += 20
+	}
+	
+	// Points for reasonable file size
+	if result.Size <= fv.MaxFileSize/2 {
+		securityScore += 20
+	}
+	
+	// Points for AI-ready format
+	if result.IsAIReady {
+		securityScore += 15
+	}
+	
+	// Points for metadata presence (good for AI detection)
+	if result.HasMetadata {
+		securityScore += 15
+	}
+	
+	// Determine security level
+	if securityScore >= 80 {
+		result.SecurityLevel = "high"
+	} else if securityScore >= 60 {
+		result.SecurityLevel = "medium"
+	} else {
+		result.SecurityLevel = "low"
+	}
 }
 
 // SafeFileName creates a safe filename from the original

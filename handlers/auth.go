@@ -44,6 +44,12 @@ func (h *AuthHandler) WithInvites(r models.InviteRepositoryInterface) *AuthHandl
 	return h
 }
 
+// GetPasswordRequirements returns password requirements for UI display
+func (h *AuthHandler) GetPasswordRequirements(c *fiber.Ctx) error {
+	requirements := services.GetPasswordRequirements()
+	return c.JSON(requirements)
+}
+
 // ValidateInvite checks whether an invite code exists and is currently usable (not expired/exhausted).
 func (h *AuthHandler) ValidateInvite(c *fiber.Ctx) error {
 	code := strings.TrimSpace(c.Query("code", ""))
