@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/draw"
 	"image/jpeg"
+	"io"
 	_ "image/png"
 	"os"
 	"path/filepath"
@@ -354,12 +355,36 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No avatar file provided"})
 	}
-	contentType := file.Header.Get("Content-Type")
-	if !isValidAvatarType(contentType) {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image format. Supported: JPEG, PNG, WebP"})
+	// Use comprehensive file validation for avatars
+	fileValidator := services.NewFileValidator()
+	
+	// Set smaller size limit for avatars (5MB)
+	fileValidator.MaxFileSize = 5 * 1024 * 1024
+	
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
-	if file.Size > 5*1024*1024 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "File too large. Max 5MB"})
+	defer src.Close()
+	
+	// Read a small sample for validation
+	sample := make([]byte, 512)
+	n, err := src.Read(sample)
+	if err != nil && err != io.EOF {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
+	}
+	
+	// Seek back to beginning for further processing
+	src.Seek(0, 0)
+	
+	// Validate file sample
+	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
+	}
+	
+	if !result.IsValid {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
 	}
 	// Ensure directory
 	avatarDir := filepath.Join("uploads", "avatars")
@@ -373,11 +398,6 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 		oldAvatar = *u.AvatarURL
 	}
 	// Attempt to decode and center-crop 95%
-	src, err := file.Open()
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open avatar"})
-	}
-	defer src.Close()
 	img, _, decErr := image.Decode(src)
 	fname := uuid.New().String() + ".jpg"
 	path := filepath.Join(avatarDir, fname)

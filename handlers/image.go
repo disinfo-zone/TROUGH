@@ -102,23 +102,39 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	isNSFW := strings.ToLower(strings.TrimSpace(c.FormValue("is_nsfw"))) == "true"
 	caption := strings.TrimSpace(c.FormValue("caption"))
 
-	if !h.isValidImageType(file.Header.Get("Content-Type")) {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image format. Supported: JPEG, PNG, WebP"})
-	}
-	if file.Size > 10*1024*1024 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "File too large. Maximum size: 10MB"})
-	}
-
 	src, err := file.Open()
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
 	defer src.Close()
 
+	// Use comprehensive file validation
+	fileValidator := services.NewFileValidator()
+	
+	// Read a small sample for validation
+	sample := make([]byte, 512)
+	n, err := src.Read(sample)
+	if err != nil && err != io.EOF {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
+	}
+	
+	// Seek back to beginning for further processing
+	src.Seek(0, 0)
+	
+	// Validate file sample
+	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
+	}
+	
+	if !result.IsValid {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
+	}
+
 	// DEBUG: Check the file header immediately after opening
 	headerBytes := make([]byte, 8)
-	n, _ := src.Read(headerBytes)
-	if n > 0 {
+	_, _ = src.Read(headerBytes)
+	if len(headerBytes) > 0 {
 		// Seek back to beginning for further processing
 		src.Seek(0, 0)
 	}

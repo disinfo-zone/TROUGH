@@ -10,4 +10,11 @@ aesthetic:
   max_width: 2048
   formats: [".jpg", ".jpeg", ".png", ".webp"]
 
+rate_limiting:
+  max_entries: 1000
+  cleanup_interval: 1m
+  entry_ttl: 30m
+  trusted_proxies: ["127.0.0.1", "::1"]
+  enable_debug: false
+
 

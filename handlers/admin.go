@@ -38,6 +38,7 @@ type AdminHandler struct {
 	storage       services.Storage
 	inviteRepo    models.InviteRepositoryInterface
 	pageRepo      models.PageRepositoryInterface
+	rateLimiter   *services.RateLimiter
 }
 
 func NewAdminHandler(settingsRepo models.SiteSettingsRepositoryInterface, userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *AdminHandler {
@@ -65,6 +66,12 @@ func (h *AdminHandler) WithInvites(r models.InviteRepositoryInterface) *AdminHan
 // WithPages injects the pages repository
 func (h *AdminHandler) WithPages(r models.PageRepositoryInterface) *AdminHandler {
 	h.pageRepo = r
+	return h
+}
+
+// WithRateLimiter injects the rate limiter
+func (h *AdminHandler) WithRateLimiter(rl *services.RateLimiter) *AdminHandler {
+	h.rateLimiter = rl
 	return h
 }
 
@@ -353,9 +360,42 @@ func (h *AdminHandler) UploadFavicon(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No favicon provided"})
 	}
-	if file.Size > 5*1024*1024 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "File too large"})
+	// Use comprehensive file validation for favicon
+	fileValidator := services.NewFileValidator()
+	
+	// Set size limit for favicon (5MB)
+	fileValidator.MaxFileSize = 5 * 1024 * 1024
+	
+	// Allow additional formats for favicon
+	fileValidator.AllowedExtensions = []string{".ico", ".jpg", ".jpeg", ".png", ".webp"}
+	fileValidator.AllowedMIMETypes = []string{"image/x-icon", "image/jpeg", "image/png", "image/webp"}
+	
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
+	defer src.Close()
+	
+	// Read a small sample for validation
+	sample := make([]byte, 512)
+	n, err := src.Read(sample)
+	if err != nil && err != io.EOF {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
+	}
+	
+	// Seek back to beginning for further processing
+	src.Seek(0, 0)
+	
+	// Validate file sample
+	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
+	}
+	
+	if !result.IsValid {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
+	}
+	
 	if err := os.MkdirAll(filepath.Join("uploads", "site"), 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to prepare upload directory"})
 	}
@@ -730,6 +770,20 @@ func (h *AdminHandler) AdminDiag(c *fiber.Ctx) error {
 	_ = db.Get(&img, `SELECT id, created_at FROM images ORDER BY created_at DESC LIMIT 1`)
 	out["latest_image"] = img
 	return c.JSON(out)
+}
+
+// AdminRateLimiterStats returns rate limiter statistics and metrics
+func (h *AdminHandler) AdminRateLimiterStats(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	
+	if h.rateLimiter == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Rate limiter not configured"})
+	}
+	
+	stats := h.rateLimiter.GetStats()
+	return c.JSON(stats)
 }
 
 // ---- CMS Pages (Admin) ----

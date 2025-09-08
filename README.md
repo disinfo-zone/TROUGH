@@ -117,7 +117,7 @@ Notes:
 
 ## Configuration
 
-- `config.yaml` controls AI signature detection and aesthetic defaults. Start from the example:
+- `config.yaml` controls AI signature detection, aesthetic defaults, and rate limiting. Start from the example:
 
 ```bash
 cp config.example.yaml config.yaml
@@ -125,6 +125,21 @@ cp config.example.yaml config.yaml
 
 - Docker compose mounts `./config.yaml` into the container read-only.
 - If `config.yaml` is absent, sane defaults are used.
+
+### Rate Limiting Configuration
+
+The `rate_limiting` section in `config.yaml` allows fine-tuning of the rate limiting behavior:
+
+```yaml
+rate_limiting:
+  max_entries: 1000        # Maximum IP entries to store in memory (~88KB max)
+  cleanup_interval: 1m     # How often to clean up expired entries
+  entry_ttl: 30m          # How long to keep IP entries before cleanup
+  trusted_proxies: ["127.0.0.1", "::1"]  # Trusted proxy IPs for header extraction
+  enable_debug: false     # Enable debug logging for rate limiting
+```
+
+These settings help balance memory usage, security, and performance for your specific deployment needs.
 
 ## Environment
 
@@ -184,9 +199,11 @@ make lint            # gofmt + go vet
 - Images: `GET /api/feed`, `GET /api/images/:id`, `POST /api/upload`, `PATCH /api/images/:id`, `DELETE /api/images/:id`, `POST /api/images/:id/collect`
 - Invites (admin): `POST /api/admin/invites`, `GET /api/admin/invites`, `DELETE /api/admin/invites/:id`, `POST /api/admin/invites/prune`
 - Site settings (admin): `GET /api/admin/site`, `PUT /api/admin/site`, asset uploads and diagnostics
+- **Rate limiting stats (admin)**: `GET /api/admin/rate-limiter-stats` - Monitor rate limiting performance and statistics
 
 Notes:
 - Admin endpoints require an authenticated admin user.
+- All auth endpoints are rate limited to prevent brute force attacks.
 
 ## Storage
 
@@ -204,6 +221,14 @@ Notes:
 - `JWT_SECRET` is mandatory; startup fails if it is missing or weak.
 - Security headers include CSP, HSTS, X-Frame-Options, and others.
 - Cookies are `HttpOnly` and honor TLS. Use `FORCE_SECURE_COOKIES=true` in production.
+- **Enhanced Rate Limiting**: All sensitive endpoints are protected with configurable rate limiting to prevent brute force attacks:
+  - Register: 5 requests per minute per IP
+  - Login: 10 requests per minute per IP
+  - Forgot Password: 3 requests per 5 minutes per IP
+  - Reset Password: 5 requests per minute per IP
+  - Verify Email: 10 requests per minute per IP
+- Rate limiting includes LRU eviction, automatic cleanup, and IP validation to prevent spoofing.
+- Admin users can monitor rate limiting statistics via `/api/admin/rate-limiter-stats`.
 
 ## Screenshots
 

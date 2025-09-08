@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/stretchr/testify/suite"
@@ -48,9 +49,13 @@ func (suite *IntegrationTestSuite) SetupSuite() {
 
 	suite.app = fiber.New()
 
+	// Create rate limiter for testing
+	rateLimiter := services.NewRateLimiter(config.RateLimiting)
+	defer rateLimiter.Stop()
+
 	api := suite.app.Group("/api")
-	api.Post("/register", authHandler.Register)
-	api.Post("/login", authHandler.Login)
+	api.Post("/register", rateLimiter.Middleware(10, time.Minute), authHandler.Register)
+	api.Post("/login", rateLimiter.Middleware(15, time.Minute), authHandler.Login)
 	api.Get("/feed", imageHandler.GetFeed)
 	api.Get("/images/:id", imageHandler.GetImage)
 	api.Post("/upload", middleware.Protected(), imageHandler.Upload)
