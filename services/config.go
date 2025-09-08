@@ -9,9 +9,10 @@ import (
 )
 
 type Config struct {
-	AISignatures  []AISignature  `yaml:"ai_signatures"`
-	Aesthetic     Aesthetic      `yaml:"aesthetic"`
-	RateLimiting  RateLimitConfig `yaml:"rate_limiting"`
+	AISignatures        []AISignature          `yaml:"ai_signatures"`
+	Aesthetic           Aesthetic              `yaml:"aesthetic"`
+	RateLimiting        RateLimitConfig        `yaml:"rate_limiting"`
+	ProgressiveRateLimiting ProgressiveRateLimitConfig `yaml:"progressive_rate_limiting"`
 }
 
 type AISignature struct {
@@ -52,6 +53,16 @@ func LoadConfig(path string) (*Config, error) {
 				EntryTTL:        30 * time.Minute,
 				TrustedProxies:  []string{"127.0.0.1", "::1"},
 				EnableDebug:     false,
+			},
+			ProgressiveRateLimiting: ProgressiveRateLimitConfig{
+				BaseWindow:      1 * time.Minute,
+				MaxWindow:       1 * time.Hour,
+				BaseCapacity:    60,
+				MinCapacity:     5,
+				BackoffFactor:   2.0,
+				LockoutThreshold: 10,
+				LockoutDuration: 15 * time.Minute,
+				EnableLogging:   true,
 			},
 		}, nil
 	}

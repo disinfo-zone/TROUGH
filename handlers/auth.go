@@ -16,11 +16,12 @@ import (
 )
 
 type AuthHandler struct {
-	userRepo      models.UserRepositoryInterface
-	settingsRepo  models.SiteSettingsRepositoryInterface
-	validator     *validator.Validate
-	newMailSender func(*models.SiteSettings) services.MailSender
-	inviteRepo    models.InviteRepositoryInterface
+	userRepo            models.UserRepositoryInterface
+	settingsRepo        models.SiteSettingsRepositoryInterface
+	validator           *validator.Validate
+	newMailSender       func(*models.SiteSettings) services.MailSender
+	inviteRepo          models.InviteRepositoryInterface
+	progressiveRateLimiter *services.ProgressiveRateLimiter
 }
 
 // Backwards-compatible constructor used by existing tests
@@ -41,6 +42,12 @@ func NewAuthHandlerWithRepos(userRepo models.UserRepositoryInterface, settingsRe
 // WithInvites provides the invite repository dependency.
 func (h *AuthHandler) WithInvites(r models.InviteRepositoryInterface) *AuthHandler {
 	h.inviteRepo = r
+	return h
+}
+
+// WithProgressiveRateLimiter provides the progressive rate limiter dependency.
+func (h *AuthHandler) WithProgressiveRateLimiter(prl *services.ProgressiveRateLimiter) *AuthHandler {
+	h.progressiveRateLimiter = prl
 	return h
 }
 
@@ -125,10 +132,18 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "That username is reserved"})
 	}
 	if err := h.validator.Struct(req); err != nil {
+		// Record authentication failure for progressive rate limiting
+		if h.progressiveRateLimiter != nil {
+			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 	}
 	// Server-side password policy
 	if err := services.ValidatePassword(req.Password); err != nil {
+		// Record authentication failure for progressive rate limiting
+		if h.progressiveRateLimiter != nil {
+			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	existingUser, _ := h.userRepo.GetByEmail(req.Email)
@@ -192,6 +207,11 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		SameSite: "Lax",
 		MaxAge:   24 * 60 * 60,
 	})
+	// Record registration success for progressive rate limiting
+	if h.progressiveRateLimiter != nil {
+		h.progressiveRateLimiter.RecordSuccess(c.IP(), c)
+	}
+	
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }
 
@@ -218,6 +238,10 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}
 	if !user.CheckPassword(req.Password) {
+		// Record authentication failure for progressive rate limiting
+		if h.progressiveRateLimiter != nil {
+			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
+		}
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 	}
 	// Allow login even if email is not verified. We only gate privileged actions (uploads).
@@ -242,6 +266,11 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		SameSite: "Lax",
 		MaxAge:   24 * 60 * 60,
 	})
+	// Record authentication success for progressive rate limiting
+	if h.progressiveRateLimiter != nil {
+		h.progressiveRateLimiter.RecordSuccess(c.IP(), c)
+	}
+	
 	// Return user as-is; frontend can detect email_verified flag and display banner/actions
 	return c.JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }

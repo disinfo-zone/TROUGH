@@ -6,7 +6,6 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	_ "image/webp"
 	"io"
 	"net/http"
 	"path/filepath"

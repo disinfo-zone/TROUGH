@@ -121,22 +121,12 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 	
 	// Use the remaining stream for AI detection (avoids re-reading)
-	src = remainingStream
+	var streamReader io.Reader = remainingStream
 	
 	// Add security information to response context
 	if result.SecurityLevel == "low" {
 		// Log low security files for monitoring
 		// TODO: Add security event logging here
-	}
-	
-	// Skip redundant dimension validation since file validator already checked it
-	// The file validator already handles decompression bomb protection
-			if cfg.Width > maxDim || cfg.Height > maxDim || (cfg.Width > 0 && cfg.Height > 0 && cfg.Width*cfg.Height > maxPixels) {
-				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Image dimensions too large"})
-			}
-		}
-		// Reset file position after decode check
-		src.Seek(0, 0)
 	}
 
 	// OPTIMIZED: Early format-based rejection for better performance
@@ -156,20 +146,20 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	var originalBytes []byte
 	if file.Size > 2*1024*1024 { // 2MB threshold
 		// For large files, use streaming AI detection first
-		if ok, res := detectAIStreaming(src, file.Size); ok {
+		if ok, res := detectAIStreaming(streamReader.(multipart.File), file.Size); ok {
 			aiSignature = res.Details
 			goto ai_validated
 		}
 		// If streaming detection fails, buffer the file for full detection
-		src.Seek(0, 0)
-		if buf, err := io.ReadAll(src); err == nil {
+		streamReader.(multipart.File).Seek(0, 0)
+		if buf, err := io.ReadAll(streamReader); err == nil {
 			originalBytes = buf
 		} else {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to buffer upload"})
 		}
 	} else {
 		// For small files, buffer immediately
-		if buf, err := io.ReadAll(src); err == nil {
+		if buf, err := io.ReadAll(streamReader); err == nil {
 			originalBytes = buf
 		} else {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to buffer upload"})

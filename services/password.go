@@ -3,7 +3,6 @@ package services
 import (
 	"errors"
 	"math"
-	"regexp"
 	"strings"
 	"unicode"
 )
@@ -277,7 +276,7 @@ func CheckPasswordStrength(password string) int {
 		}
 	}
 	
-	if complexity/float64(len(password)) > 1.5 {
+	if float64(complexity)/float64(len(password)) > 1.5 {
 		score += 10
 	}
 	

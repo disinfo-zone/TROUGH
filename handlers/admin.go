@@ -31,14 +31,15 @@ var (
 var checkAdmin = func(c *fiber.Ctx, repo models.UserRepositoryInterface) bool { return isAdmin(c, repo) }
 
 type AdminHandler struct {
-	settingsRepo  models.SiteSettingsRepositoryInterface
-	userRepo      models.UserRepositoryInterface
-	imageRepo     models.ImageRepositoryInterface
-	newMailSender func(*models.SiteSettings) services.MailSender
-	storage       services.Storage
-	inviteRepo    models.InviteRepositoryInterface
-	pageRepo      models.PageRepositoryInterface
-	rateLimiter   *services.RateLimiter
+	settingsRepo        models.SiteSettingsRepositoryInterface
+	userRepo            models.UserRepositoryInterface
+	imageRepo           models.ImageRepositoryInterface
+	newMailSender       func(*models.SiteSettings) services.MailSender
+	storage             services.Storage
+	inviteRepo          models.InviteRepositoryInterface
+	pageRepo            models.PageRepositoryInterface
+	rateLimiter         *services.RateLimiter
+	progressiveRateLimiter *services.ProgressiveRateLimiter
 }
 
 func NewAdminHandler(settingsRepo models.SiteSettingsRepositoryInterface, userRepo models.UserRepositoryInterface, imageRepo models.ImageRepositoryInterface) *AdminHandler {
@@ -72,6 +73,12 @@ func (h *AdminHandler) WithPages(r models.PageRepositoryInterface) *AdminHandler
 // WithRateLimiter injects the rate limiter
 func (h *AdminHandler) WithRateLimiter(rl *services.RateLimiter) *AdminHandler {
 	h.rateLimiter = rl
+	return h
+}
+
+// WithProgressiveRateLimiter injects the progressive rate limiter
+func (h *AdminHandler) WithProgressiveRateLimiter(prl *services.ProgressiveRateLimiter) *AdminHandler {
+	h.progressiveRateLimiter = prl
 	return h
 }
 
@@ -784,6 +791,34 @@ func (h *AdminHandler) AdminRateLimiterStats(c *fiber.Ctx) error {
 	
 	stats := h.rateLimiter.GetStats()
 	return c.JSON(stats)
+}
+
+// AdminProgressiveRateLimiterStats returns progressive rate limiter statistics and security events
+func (h *AdminHandler) AdminProgressiveRateLimiterStats(c *fiber.Ctx) error {
+	if !checkAdmin(c, h.userRepo) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+	
+	if h.progressiveRateLimiter == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Progressive rate limiter not configured"})
+	}
+	
+	stats := h.progressiveRateLimiter.GetProgressiveStats()
+	
+	// Get query parameters for security events
+	eventLimit := 50
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 && limit <= 200 {
+			eventLimit = limit
+		}
+	}
+	
+	securityEvents := h.progressiveRateLimiter.GetSecurityEvents(eventLimit)
+	
+	return c.JSON(fiber.Map{
+		"stats":            stats,
+		"security_events":  securityEvents,
+	})
 }
 
 // ---- CMS Pages (Admin) ----

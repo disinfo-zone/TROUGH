@@ -141,9 +141,9 @@ func (cp *CSRFProtection) SetCSRFToken(c *fiber.Ctx) error {
 	
 	// Set token in cookie with security flags
 	secure := cp.isProduction
-	sameSite := fiber.CookieSameSiteLax
+	sameSite := "Lax"
 	if cp.isProduction {
-		sameSite = fiber.CookieSameSiteStrict
+		sameSite = "Strict"
 	}
 	
 	cookie := &fiber.Cookie{

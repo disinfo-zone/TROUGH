@@ -369,14 +369,15 @@ func main() {
 	// Seed default CMS pages once per boot if missing (respect tombstones)
 	seedDefaultPages(pageRepo, siteRepo)
 	
-	// Create rate limiter for enhanced security
+	// Create rate limiters for enhanced security
 	rateLimiter := services.NewRateLimiter(config.RateLimiting)
+	progressiveRateLimiter := services.NewProgressiveRateLimiter(config.ProgressiveRateLimiting, config.RateLimiting)
 	
 	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo).WithCollect(collectRepo).WithPages(pageRepo)
 	inviteRepo := models.NewInviteRepository(db.DB)
-	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo).WithPages(pageRepo).WithRateLimiter(rateLimiter)
+	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo).WithPages(pageRepo).WithRateLimiter(rateLimiter).WithProgressiveRateLimiter(progressiveRateLimiter)
 	pageHandler := handlers.NewPageHandler(pageRepo)
-	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo)
+	authHandler := handlers.NewAuthHandlerWithRepos(userRepo, siteRepo).WithInvites(inviteRepo).WithProgressiveRateLimiter(progressiveRateLimiter)
 	// Initialize async mail queue if SMTP is configured
 	if set, err := siteRepo.Get(); err == nil && set != nil {
 		if set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != "" {
@@ -424,8 +425,9 @@ func main() {
 		}
 	}()
 
-	// Cleanup rate limiter on shutdown
+	// Cleanup rate limiters on shutdown
 	defer rateLimiter.Stop()
+	defer progressiveRateLimiter.Stop()
 
 	// Application logger; skip noise for static and health endpoints
 	app.Use(logger.New(logger.Config{
@@ -547,14 +549,14 @@ func main() {
 	// Apply CSRF protection to API routes that change state
 	api.Use(csrfProtection.Middleware())
 
-	api.Post("/register", rateLimiter.Middleware(5, time.Minute), authHandler.Register)
+	api.Post("/register", progressiveRateLimiter.Middleware(), authHandler.Register)
 	// NOTE: Consider adding rate limiting middleware in deployment env; omitted here to avoid new deps.
-	api.Post("/login", rateLimiter.Middleware(10, time.Minute), authHandler.Login)
+	api.Post("/login", progressiveRateLimiter.Middleware(), authHandler.Login)
 	// Allow logout without auth guard so clients can always clear cookies
 	api.Post("/logout", authHandler.Logout)
-	api.Post("/forgot-password", rateLimiter.Middleware(3, 5*time.Minute), authHandler.ForgotPassword)
-	api.Post("/reset-password", rateLimiter.Middleware(5, time.Minute), authHandler.ResetPassword)
-	api.Post("/verify-email", rateLimiter.Middleware(10, time.Minute), authHandler.VerifyEmail)
+	api.Post("/forgot-password", progressiveRateLimiter.Middleware(), authHandler.ForgotPassword)
+	api.Post("/reset-password", progressiveRateLimiter.Middleware(), authHandler.ResetPassword)
+	api.Post("/verify-email", progressiveRateLimiter.Middleware(), authHandler.VerifyEmail)
 	api.Get("/validate-invite", authHandler.ValidateInvite)
 	api.Get("/password-requirements", authHandler.GetPasswordRequirements)
 	
@@ -635,6 +637,7 @@ func main() {
 	api.Get("/admin/backups/:name", authMW, adminHandler.AdminDownloadSavedBackup)
 	api.Get("/admin/diag", authMW, adminHandler.AdminDiag)
 	api.Get("/admin/rate-limiter-stats", authMW, adminHandler.AdminRateLimiterStats)
+	api.Get("/admin/progressive-rate-limiter-stats", authMW, adminHandler.AdminProgressiveRateLimiterStats)
 	api.Get("/admin/pages", authMW, adminHandler.AdminListPages)
 	api.Post("/admin/pages", authMW, adminHandler.AdminCreatePage)
 	api.Put("/admin/pages/:id", authMW, adminHandler.AdminUpdatePage)
