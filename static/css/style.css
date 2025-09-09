@@ -527,8 +527,8 @@ input, button {
     border-radius: var(--radius-xl);
     overflow: hidden;
     background: var(--surface-elevated);
-    border: 0px solid var(--border);
-    transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal) var(--ease-out), border-color var(--duration-normal) var(--ease-out);
+    border: none;
+    transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal) var(--ease-out);
     cursor: pointer;
     position: relative;
     animation: fadeInUp 0.6s var(--ease-out) both;
@@ -543,7 +543,7 @@ input, button {
     100% { background-position: 0% 50%; }
 }
 
-.image-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--border-strong); }
+.image-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
 
 .image-card img {
     width: 100%;
@@ -678,9 +678,9 @@ input, button {
     transform: scale(1.05);
 }
 
-.lightbox-content { background: var(--surface-elevated); border-radius: var(--radius-2xl); overflow: hidden; box-shadow: var(--shadow-2xl); border: 1px solid var(--border); display: grid; grid-template-rows: 1fr auto; }
+.lightbox-content { background: var(--surface-elevated); border-radius: var(--radius-2xl); overflow: hidden; box-shadow: var(--shadow-2xl); border: none; display: grid; grid-template-rows: 1fr auto; }
 .lightbox-image { width: 100%; max-height: 70vh; object-fit: contain; display: block; }
-.lightbox-info { padding: var(--space-xl); display: flex; justify-content: space-between; align-items: flex-start; background: var(--surface-elevated); border-top: 1px solid var(--border); max-height: 20vh; overflow-y: auto; gap: var(--space-lg); }
+.lightbox-info { padding: var(--space-xl); display: flex; justify-content: space-between; align-items: flex-start; background: var(--surface-elevated); border-top: none; max-height: 20vh; overflow-y: auto; gap: var(--space-lg); }
 .lightbox-metadata { flex: 1; min-width: 0; }
 .lightbox-info .image-title { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); margin-bottom: var(--space-xs); }
 .lightbox-info .image-author { font-size: 0.875rem; color: var(--text-secondary); }
@@ -1506,3 +1506,15 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 
 /* Invite prune link spacing */
 .invite-prune { margin-top:8px; display:flex; justify-content:flex-end; }
+
+@media (min-width: 601px) {
+  #profile-logout {
+    background: var(--color-danger);
+    color: #fff;
+    border-color: var(--color-danger);
+  }
+
+  #profile-logout:hover {
+    filter: brightness(1.05);
+  }
+}
