@@ -2,17 +2,32 @@ version: '3.8'
 
 services:
   app:
-    build: .
+    image: ghcr.io/disinfo-zone/TROUGH:${TAG:-latest}
     ports:
       - "8080:8080"
-    env_file:
-      - .env
     environment:
+      # Required environment variables for the application
+      # Set these in your environment or in a .env file 
       - DATABASE_URL=postgres://trough:trough@db:5432/trough?sslmode=disable
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET} # IMPORTANT: Set a strong secret (>=32 random bytes)
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Optional cookie flags
+      - FORCE_SECURE_COOKIES=${FORCE_SECURE_COOKIES:-false}
+      - ALLOW_INSECURE_COOKIES=${ALLOW_INSECURE_COOKIES:-false}
+      # Storage configuration (local by default)
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-local}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
+      - R2_ENDPOINT=${R2_ENDPOINT:-}
+      - R2_BUCKET=${R2_BUCKET:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - STORAGE_PUBLIC_BASE_URL=${STORAGE_PUBLIC_BASE_URL:-}
+      - UPLOADS_DIR=${UPLOADS_DIR:-uploads}
     volumes:
       - ./uploads:/app/uploads
       - ./config.yaml:/app/config.yaml:ro

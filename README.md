@@ -10,44 +10,58 @@ Operate a precise, provenance-first image surface for synthetic media. Accept on
 
 ## Quick start (Docker)
 
-```bash
-cp config.example.yaml config.yaml
-cp .env.example .env
-# Set a strong JWT secret (>=32 random bytes)
-# bash:   openssl rand -base64 48 >> .env && sed -i '' 's/^JWT_SECRET=.*/JWT_SECRET=<your-secret>/' .env
-# pwsh:   $s=[Convert]::ToBase64String((New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes(48))
-#         Add-Content .env "JWT_SECRET=$s"
+This section describes how to quickly get the Trough application running using Docker Compose with pre-built images.
 
-# Optional: seed an admin on first boot
-echo ADMIN_EMAIL=admin@example.com >> .env
-echo ADMIN_USERNAME=admin >> .env
-echo ADMIN_PASSWORD=change-me >> .env
+1.  **Configuration Files:**
+    ```bash
+    cp config.example.yaml config.yaml
+    cp .env.example .env
+    ```
+    *   **`.env` file:** This file is used to set environment variables for your Docker containers. **Do not commit this file to version control.**
+        *   **`JWT_SECRET`**: Set a strong, random secret (e.g., 32+ random bytes).
+        *   **`DATABASE_URL`**: (Optional, defaults to `postgres://trough:trough@db:5432/trough?sslmode=disable` if not set).
+        *   **Admin Seed (Optional):**
+            ```bash
+            echo ADMIN_EMAIL=admin@example.com >> .env
+            echo ADMIN_USERNAME=admin >> .env
+            echo ADMIN_PASSWORD=change-me >> .env
+            ```
+        *   Refer to the "Environment" section below for a full list of available variables.
 
-make docker-build
-docker-compose logs -f app
-```
+2.  **Run the Application:**
+    ```bash
+    docker-compose up -d
+    ```
+    This command will pull the latest pre-built `trough` image from GitHub Container Registry and start it along with a PostgreSQL database.
+
+3.  **Monitor Logs (Optional):**
+    ```bash
+    docker-compose logs -f app
+    ```
 
 App listens on http://localhost:8080.
 
 ## Local development
 
-```bash
-# Start PostgreSQL via compose (or provide your own DATABASE_URL)
-make docker-up
+For local development, you'll use `docker-compose.dev.yml` to build the application from your local source code.
 
-go mod download
-cp config.example.yaml config.yaml
+1.  **Configuration Files:**
+    *   Ensure `config.yaml` and `.env` are set up as described in the "Quick start (Docker)" section.
 
-# Export required env
-# Windows PowerShell: $env:JWT_SECRET="<secret>"; $env:DATABASE_URL="postgres://trough:trough@localhost:5432/trough?sslmode=disable"
-# bash/zsh: export JWT_SECRET=<secret>; export DATABASE_URL=postgres://trough:trough@localhost:5432/trough?sslmode=disable
+2.  **Start Development Environment:**
+    ```bash
+    docker-compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+    ```
+    This command will start the PostgreSQL database (from `docker-compose.yml`) and build your application from the local source code (overriding the `image` instruction from `docker-compose.yml` with the `build` instruction from `docker-compose.dev.yml`).
 
-# Run DB migrations (when using compose Postgres)
-make migrate
+3.  **Run DB migrations (if needed):**
+    ```bash
+    make migrate
+    ```
+    (This assumes `make migrate` is configured to run against the `db` service in your compose setup.)
 
-# Start the server
-make run
-```
+4.  **Access the App:**
+    App listens on http://localhost:8080.
 
 ## How to use
 

@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app # Mount current directory to /app in container for live changes
+    # You might want to add a debugger port here if your Go app supports it
+    # ports:
+    #   - "2345:2345" # Example for Delve debugger
