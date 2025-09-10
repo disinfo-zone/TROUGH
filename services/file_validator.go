@@ -169,29 +169,40 @@ func (fv *FileValidator) isValidMIMEType(mimeType string) bool {
 	return false
 }
 
-// isValidMagicBytes validates file magic bytes
+// isValidMagicBytes validates file magic bytes. It checks based on the extension first,
+// and if that fails, it falls back to checking the MIME type. This provides a more
+// robust validation against files with incorrect or missing extensions.
 func (fv *FileValidator) isValidMagicBytes(data []byte, ext, mimeType string) bool {
 	if len(data) < 12 {
 		return false
 	}
-	
-	switch ext {
-	case ".jpg", ".jpeg":
-		return len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8
-	case ".png":
-		return len(data) >= 8 && 
-			data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
-			data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A
-	case ".webp":
-		return len(data) >= 12 && 
-			data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 && // "RIFF"
-			data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50  // "WEBP"
-	case ".gif":
-		return len(data) >= 6 &&
-			data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x38 && // "GIF8"
-			(data[4] == 0x37 || data[4] == 0x39) && data[5] == 0x61 // "7a" or "9a"
-	case ".ico":
-		return len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x00
+
+	// Check based on file extension
+	validByExtension := func() bool {
+		switch ext {
+		case ".jpg", ".jpeg":
+			return len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8
+		case ".png":
+			return len(data) >= 8 &&
+				data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
+				data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A
+		case ".webp":
+			return len(data) >= 12 &&
+				data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 && // "RIFF"
+				data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50 // "WEBP"
+		case ".gif":
+			return len(data) >= 6 &&
+				data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x38 && // "GIF8"
+				(data[4] == 0x37 || data[4] == 0x39) && data[5] == 0x61 // "7a" or "9a"
+		case ".ico":
+			return len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x00
+		default:
+			return false
+		}
+	}
+
+	if validByExtension() {
+		return true
 	}
 
 	// Fallback to MIME type validation
@@ -199,11 +210,11 @@ func (fv *FileValidator) isValidMagicBytes(data []byte, ext, mimeType string) bo
 	case "image/jpeg":
 		return len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8
 	case "image/png":
-		return len(data) >= 8 && 
+		return len(data) >= 8 &&
 			data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
 			data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A
 	case "image/webp":
-		return len(data) >= 12 && 
+		return len(data) >= 12 &&
 			data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
 			data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50
 	case "image/gif":
