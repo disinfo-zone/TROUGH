@@ -3928,11 +3928,13 @@ class TroughApp {
           <div style="display:grid;gap:12px">
             <div class="single-header">
               <h1 class="single-title" title="${this.escapeHTML(String(title))}">${this.escapeHTML(String(title))}</h1>
-              <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
+                <button id="single-collect" class="like-btn collect-btn" title="Collect">✧</button>
+              </div>
             </div>
             <div style="position:relative;display:flex;justify-content:center">
               <img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;"/>
-              <button id="single-collect" class="like-btn collect-btn" title="Collect" style="position:absolute;right:10px;bottom:10px;width:44px;height:44px;font-size:18px;backdrop-filter:blur(6px)">✧</button>
             </div>
             ${captionHtml}
           </div>`;

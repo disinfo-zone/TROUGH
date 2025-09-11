@@ -705,34 +705,19 @@ input, button {
 .collect-btn.collected { background: var(--text-primary); color: var(--surface); border-color: var(--text-primary); }
 
 /* Subtle transparency for overlayed collect on single image */
-/* Single image collect breathing visibility */
-@keyframes breathe {
-  0% { opacity: 0.35; }
-  50% { opacity: 0.55; }
-  100% { opacity: 0.35; }
-}
 #single-collect {
-  opacity: 0.35;
-  transition: opacity 220ms var(--ease-out), background-color 220ms var(--ease-out), color 220ms var(--ease-out), border-color 220ms var(--ease-out);
-  animation: breathe 2.6s ease-in-out infinite;
-  color: var(--text-secondary);
-  background: rgba(0,0,0,0.35);
-  border: 1px solid var(--border);
+  border: none;
+  background: var(--surface-elevated);
 }
+
 #single-collect:hover {
-  opacity: 1;
-  animation: none;
+  background: var(--surface);
 }
-/* Ensure collected state is clearly white, but keep breathing unless hovered */
+
 #single-collect.collected {
-  /* White disc with black symbol when collected */
-  color: var(--black);
-  background: #ffffff !important; /* ensure white disc overrides base */
-  border: 0 !important; /* remove border when collected */
-  animation: none;
-}
-@media (hover: none) {
-  #single-collect { opacity: 0.5; animation-duration: 3.2s; }
+  background: var(--text-primary);
+  color: var(--surface);
+  border: none;
 }
 
 /* Collect button variant */
