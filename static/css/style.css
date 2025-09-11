@@ -705,34 +705,19 @@ input, button {
 .collect-btn.collected { background: var(--text-primary); color: var(--surface); border-color: var(--text-primary); }
 
 /* Subtle transparency for overlayed collect on single image */
-/* Single image collect breathing visibility */
-@keyframes breathe {
-  0% { opacity: 0.35; }
-  50% { opacity: 0.55; }
-  100% { opacity: 0.35; }
-}
 #single-collect {
-  opacity: 0.35;
-  transition: opacity 220ms var(--ease-out), background-color 220ms var(--ease-out), color 220ms var(--ease-out), border-color 220ms var(--ease-out);
-  animation: breathe 2.6s ease-in-out infinite;
-  color: var(--text-secondary);
-  background: rgba(0,0,0,0.35);
-  border: 1px solid var(--border);
+  border: none;
+  background: var(--surface-elevated);
 }
+
 #single-collect:hover {
-  opacity: 1;
-  animation: none;
+  background: var(--surface);
 }
-/* Ensure collected state is clearly white, but keep breathing unless hovered */
+
 #single-collect.collected {
-  /* White disc with black symbol when collected */
-  color: var(--black);
-  background: #ffffff !important; /* ensure white disc overrides base */
-  border: 0 !important; /* remove border when collected */
-  animation: none;
-}
-@media (hover: none) {
-  #single-collect { opacity: 0.5; animation-duration: 3.2s; }
+  background: var(--text-primary);
+  color: var(--surface);
+  border: none;
 }
 
 /* Collect button variant */
@@ -1273,6 +1258,22 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 
 /* Always blurred nav; no border */
 .nav { background: rgba(10,10,10,0.7); backdrop-filter: blur(12px) saturate(160%); -webkit-backdrop-filter: blur(12px) saturate(160%); border-bottom: none; }
+
+@media (prefers-color-scheme: light) {
+  .nav {
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(12px) saturate(120%) contrast(90%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%) contrast(90%);
+  }
+
+  .logo {
+    mix-blend-mode: normal;
+    color: var(--text-primary);
+    background: none;
+    -webkit-text-fill-color: initial;
+    animation: none;
+  }
+}
 
 /* Lightbox caption */
 .lightbox-caption { margin-top: var(--space-2); color: var(--text-secondary); font-size: 0.95rem; line-height: 1.5; max-width: 70ch; }

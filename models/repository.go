@@ -34,6 +34,16 @@ func (r *UserRepository) Create(user *User) error {
 		Scan(&user.ID, &user.CreatedAt)
 }
 
+func (r *UserRepository) CreateWithTx(tx *sqlx.Tx, user *User) error {
+	query := `
+		INSERT INTO users (username, email, password_hash, bio, avatar_url)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, created_at`
+
+	return tx.QueryRow(query, user.Username, user.Email, user.PasswordHash, user.Bio, user.AvatarURL).
+		Scan(&user.ID, &user.CreatedAt)
+}
+
 func (r *UserRepository) GetByEmail(email string) (*User, error) {
 	var user User
 	query := `SELECT * FROM users WHERE email = $1`
@@ -730,4 +740,8 @@ func (r *UserRepository) LastVerificationSentAt(userID uuid.UUID) (time.Time, er
 	var t time.Time
 	err := r.db.Get(&t, `SELECT COALESCE(MAX(created_at), to_timestamp(0)) FROM email_verifications WHERE user_id=$1`, userID)
 	return t, err
+}
+
+func (r *UserRepository) BeginTx() (*sqlx.Tx, error) {
+	return r.db.Beginx()
 }

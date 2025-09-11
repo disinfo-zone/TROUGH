@@ -139,6 +139,24 @@ func (r *InviteRepository) Consume(code string) (*Invite, error) {
 	return &inv, nil
 }
 
+func (r *InviteRepository) ConsumeWithTx(tx *sqlx.Tx, code string) (*Invite, error) {
+	// Atomic update: ensure not expired and not over max uses.
+	// If max_uses is NULL => unlimited.
+	q := `
+        UPDATE invites
+        SET uses = uses + 1, last_used_at = NOW()
+        WHERE code = $1
+          AND (expires_at IS NULL OR NOW() < expires_at)
+          AND (max_uses IS NULL OR uses < max_uses)
+        RETURNING id, code, max_uses, uses, expires_at, created_by, created_at, last_used_at`
+	var inv Invite
+	err := tx.QueryRowx(q, code).Scan(&inv.ID, &inv.Code, &inv.MaxUses, &inv.Uses, &inv.ExpiresAt, &inv.CreatedBy, &inv.CreatedAt, &inv.LastUsedAt)
+	if err != nil {
+		return nil, errors.New("invalid or expired invite")
+	}
+	return &inv, nil
+}
+
 func (r *InviteRepository) Delete(id uuid.UUID) error {
 	_, err := r.db.Exec(`DELETE FROM invites WHERE id=$1`, id)
 	return err
@@ -163,6 +181,15 @@ func (r *InviteRepository) DeleteUsedAndExpired() (int, error) {
 // This is best-effort and may not perfectly restore last_used_at for historical accuracy, but keeps uses correct.
 func (r *InviteRepository) RevertConsume(id uuid.UUID) error {
 	_, err := r.db.Exec(`
+        UPDATE invites
+        SET uses = CASE WHEN uses > 0 THEN uses - 1 ELSE 0 END,
+            last_used_at = CASE WHEN uses <= 1 THEN NULL ELSE last_used_at END
+        WHERE id = $1`, id)
+	return err
+}
+
+func (r *InviteRepository) RevertConsumeWithTx(tx *sqlx.Tx, id uuid.UUID) error {
+	_, err := tx.Exec(`
         UPDATE invites
         SET uses = CASE WHEN uses > 0 THEN uses - 1 ELSE 0 END,
             last_used_at = CASE WHEN uses <= 1 THEN NULL ELSE last_used_at END

@@ -217,10 +217,11 @@ class TroughApp {
         await this.checkAuth();
 		// Seed my collection state early for correct UI on first paint
 		await this.seedMyCollectedSet();
-        await this.applyPublicSiteSettings();
         this.setupHistoryHandler();
         this.setupEventListeners();
         this.setupImageLazyLoader();
+
+        await this.applyPublicSiteSettings(); // Moved this line up
 
         if (location.pathname === '/reset') { await this.renderResetPage(); return; }
         if (location.pathname === '/verify') { await this.renderVerifyPage(); return; }
@@ -251,40 +252,50 @@ class TroughApp {
             // Open auth modal directly on register tab and capture invite
             const url = new URL(location.href);
             const invite = url.searchParams.get('invite');
+            
             this.showAuthModal();
             const tabs = document.querySelectorAll('.auth-tab');
             const registerTab = Array.from(tabs).find(t => t.dataset.tab === 'register');
             const loginTab = Array.from(tabs).find(t => t.dataset.tab === 'login');
-            const proceed = async () => {
-                const allowRegister = window.__PUBLIC_REG_ENABLED__ !== false;
-                if (allowRegister && registerTab) {
+
+            const proceedToRegister = async () => {
+                if (registerTab) {
                     tabs.forEach(t => t.classList.remove('active')); registerTab.classList.add('active');
                     const loginForm = document.getElementById('login-form'); const registerForm = document.getElementById('register-form'); const submitBtn = document.getElementById('auth-submit');
                     if (loginForm && registerForm && submitBtn) { loginForm.style.display='none'; registerForm.style.display='block'; submitBtn.textContent='Create Account'; }
-                } else if (loginTab) {
-                    tabs.forEach(t => t.classList.remove('active')); loginTab.classList.add('active');
                 }
             };
+
+            const proceedToLogin = async (message = 'Registration is currently disabled') => {
+                this.showNotification(message, 'error');
+                if (loginTab) {
+                    tabs.forEach(t => t.classList.remove('active')); loginTab.classList.add('active');
+                    const loginForm = document.getElementById('login-form'); const registerForm = document.getElementById('register-form'); const submitBtn = document.getElementById('auth-submit');
+                    if (loginForm && registerForm && submitBtn) { loginForm.style.display='block'; registerForm.style.display='none'; submitBtn.textContent='Sign In'; }
+                }
+            };
+
             if (invite) {
                 try {
-                    const r = await fetch(`/api/validate-invite?code=${encodeURIComponent(invite)}`);
+                    const r = await fetch(`/api/invites/validate?code=${encodeURIComponent(invite)}`);
                     if (r.status === 204) {
                         this._pendingInvite = invite;
-                        if (registerTab) {
-                            tabs.forEach(t => t.classList.remove('active')); registerTab.classList.add('active');
-                            const loginForm = document.getElementById('login-form'); const registerForm = document.getElementById('register-form'); const submitBtn = document.getElementById('auth-submit');
-                            if (loginForm && registerForm && submitBtn) { loginForm.style.display='none'; registerForm.style.display='block'; submitBtn.textContent='Create Account'; }
-                        }
+                        await proceedToRegister();
                     } else {
-                        this.showNotification('Invalid invitation link', 'error');
-                        await proceed();
+                        const data = await r.json().catch(() => ({}));
+                        await proceedToLogin(data.error || 'Invalid invitation link');
                     }
-                } catch {
-                    this.showNotification('Unable to validate invite', 'error');
-                    await proceed();
+                } catch (e) {
+                    console.error('Invite validation error:', e);
+                    await proceedToLogin('Unable to validate invite. Connection error.');
                 }
             } else {
-                await proceed();
+                // If no invite, proceed based on public registration settings
+                if (window.__PUBLIC_REG_ENABLED__ !== false) {
+                    await proceedToRegister();
+                } else {
+                    await proceedToLogin();
+                }
             }
             return;
         }
@@ -1089,18 +1100,47 @@ class TroughApp {
         const strengthEl = document.getElementById('password-strength');
         const scorePassword = (pwd) => {
             if (!pwd) return 0;
+            let score = 0;
+            let hasUpper, hasLower, hasNumber, hasSpecial = false;
+
+            for (const char of pwd) {
+                if (char >= 'A' && char <= 'Z') hasUpper = true;
+                else if (char >= 'a' && char <= 'z') hasLower = true;
+                else if (char >= '0' && char <= '9') hasNumber = true;
+                else hasSpecial = true;
+            }
+
             let categories = 0;
-            if (/[a-z]/.test(pwd)) categories++;
-            if (/[A-Z]/.test(pwd)) categories++;
-            if (/[0-9]/.test(pwd)) categories++;
-            if (/[^A-Za-z0-9]/.test(pwd)) categories++;
-            const long = pwd.length >= 8;
-            // 4 levels mapped to 0-4: 0 empty/very weak, 1 weak, 2 fair, 3 good, 4 strong
-            if (!long) return Math.min(categories, 1); // cap to weak if short
-            if (categories <= 1) return 1;
-            if (categories === 2) return 2;
-            if (categories === 3) return 3;
-            return 4;
+            if (hasUpper) categories++;
+            if (hasLower) categories++;
+            if (hasNumber) categories++;
+            if (hasSpecial) categories++;
+
+            // Base score on length
+            if (pwd.length >= 8) {
+                score = 1; // At least 8 chars
+            }
+            if (pwd.length >= 12) {
+                score = 2; // At least 12 chars
+            }
+            if (pwd.length >= 16) {
+                score = 3; // At least 16 chars
+            }
+
+            // Add bonus for character categories
+            if (categories >= 3) {
+                score++;
+            }
+            if (categories >= 4) {
+                score++;
+            }
+
+            // Cap score at 4
+            if (score > 4) {
+                score = 4;
+            }
+
+            return score;
         };
         const renderStrength = (pwd) => {
             const score = scorePassword(pwd); // 0..4
@@ -1125,7 +1165,13 @@ class TroughApp {
                 tabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
                 if (tabType === 'login') { loginForm.style.display = 'block'; registerForm.style.display = 'none'; setSubmit('Sign In', false); }
-                else { loginForm.style.display = 'none'; registerForm.style.display = 'block'; setSubmit('Create Account', false); }
+                else {
+                    loginForm.style.display = 'none';
+                    registerForm.style.display = 'block';
+                    setSubmit('Create Account', false);
+                    // Fetch and display password requirements
+                    this.fetchPasswordRequirements();
+                }
                 this.hideAuthError();
                 // Re-ensure eye toggles remain in place after DOM flips
                 ['login-password','register-password','register-password-confirm'].forEach(id => ensureEyeToggle(id));
@@ -1337,6 +1383,27 @@ class TroughApp {
     hideAuthError() {
         const errorDiv = document.getElementById('auth-error');
         errorDiv.style.display = 'none';
+    }
+
+    async fetchPasswordRequirements() {
+        try {
+            const r = await fetch('/api/password-requirements');
+            if (!r.ok) return;
+            const reqs = await r.json();
+            const pwReqsDiv = document.getElementById('password-requirements');
+            if (!pwReqsDiv) return;
+
+            let html = '<ul class="password-requirements-list">';
+            html += `<li>At least ${reqs.min_length} characters</li>`;
+            if (reqs.require_upper) html += '<li>At least one uppercase letter</li>';
+            if (reqs.require_lower) html += '<li>At least one lowercase letter</li>';
+            if (reqs.require_number) html += '<li>At least one number</li>';
+            if (reqs.require_special) html += `<li>At least one special character (${reqs.allowed_special})</li>`;
+            html += '</ul>';
+            pwReqsDiv.innerHTML = html;
+        } catch (e) {
+            console.error('Failed to fetch password requirements:', e);
+        }
     }
 
     // Markdown sanitizer + minimal renderer (bold/italic/links)
@@ -3928,11 +3995,13 @@ class TroughApp {
           <div style="display:grid;gap:12px">
             <div class="single-header">
               <h1 class="single-title" title="${this.escapeHTML(String(title))}">${this.escapeHTML(String(title))}</h1>
-              <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
+                <button id="single-collect" class="like-btn collect-btn" title="Collect">✧</button>
+              </div>
             </div>
             <div style="position:relative;display:flex;justify-content:center">
               <img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;"/>
-              <button id="single-collect" class="like-btn collect-btn" title="Collect" style="position:absolute;right:10px;bottom:10px;width:44px;height:44px;font-size:18px;backdrop-filter:blur(6px)">✧</button>
             </div>
             ${captionHtml}
           </div>`;
