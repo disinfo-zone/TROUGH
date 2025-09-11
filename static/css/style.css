@@ -1274,6 +1274,22 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
 /* Always blurred nav; no border */
 .nav { background: rgba(10,10,10,0.7); backdrop-filter: blur(12px) saturate(160%); -webkit-backdrop-filter: blur(12px) saturate(160%); border-bottom: none; }
 
+@media (prefers-color-scheme: light) {
+  .nav {
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(12px) saturate(120%) contrast(90%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%) contrast(90%);
+  }
+
+  .logo {
+    mix-blend-mode: normal;
+    color: var(--text-primary);
+    background: none;
+    -webkit-text-fill-color: initial;
+    animation: none;
+  }
+}
+
 /* Lightbox caption */
 .lightbox-caption { margin-top: var(--space-2); color: var(--text-secondary); font-size: 0.95rem; line-height: 1.5; max-width: 70ch; }
 .lightbox-caption a { color: inherit; text-decoration: underline; }

@@ -4,9 +4,39 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://trough:trough@db:5432/trough?sslmode=disable
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - FORCE_SECURE_COOKIES=false
+      - ALLOW_INSECURE_COOKIES=true
+      - STORAGE_PROVIDER=local
+      - UPLOADS_DIR=uploads
     volumes:
-      - .:/app # Mount current directory to /app in container for live changes
-    # You might want to add a debugger port here if your Go app supports it
-    # ports:
-    #   - "2345:2345" # Example for Delve debugger
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=trough
+      - POSTGRES_PASSWORD=trough
+      - POSTGRES_DB=trough
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trough"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

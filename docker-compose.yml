@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   app:
-    image: ghcr.io/disinfo-zone/TROUGH:${TAG:-latest}
+    image: ghcr.io/disinfo-zone/trough:${TAG:-main}
     ports:
       - "8080:8080"
     environment:
