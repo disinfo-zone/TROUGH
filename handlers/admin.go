@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io"
 	"io/fs"
@@ -237,6 +238,37 @@ func (h *AdminHandler) PruneInvites(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clear invites"})
 	}
 	return c.JSON(fiber.Map{"deleted": n})
+}
+
+// ValidateInviteCode checks if an invite code is valid and exists without consuming it.
+func (h *AdminHandler) ValidateInviteCode(c *fiber.Ctx) error {
+	code := strings.TrimSpace(c.Query("code", ""))
+	if code == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invite code required"})
+	}
+	if h.inviteRepo == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Invite repository not configured"})
+	}
+
+	inv, err := h.inviteRepo.GetByCode(code)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid invite code"})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate invite code"})
+	}
+
+	// Check if expired
+	if inv.ExpiresAt != nil && time.Now().After(*inv.ExpiresAt) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invite code expired"})
+	}
+
+	// Check if exhausted
+	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invite code exhausted"})
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // Admin-only full settings

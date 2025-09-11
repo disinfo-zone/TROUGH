@@ -57,24 +57,7 @@ func (h *AuthHandler) GetPasswordRequirements(c *fiber.Ctx) error {
 	return c.JSON(requirements)
 }
 
-// ValidateInvite checks whether an invite code exists and is currently usable (not expired/exhausted).
-func (h *AuthHandler) ValidateInvite(c *fiber.Ctx) error {
-	code := strings.TrimSpace(c.Query("code", ""))
-	if code == "" || h.inviteRepo == nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid invite"})
-	}
-	inv, err := h.inviteRepo.GetByCode(code)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid invite"})
-	}
-	if inv.ExpiresAt != nil && time.Now().After(*inv.ExpiresAt) {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invite expired"})
-	}
-	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invite exhausted"})
-	}
-	return c.SendStatus(fiber.StatusNoContent)
-}
+
 
 // For tests
 func (h *AuthHandler) WithMailFactory(f func(*models.SiteSettings) services.MailSender) *AuthHandler {
@@ -154,11 +137,30 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if existingUser != nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
 	}
-	// If an invite is required, consume only after validation and conflict checks
+
+	tx, err := h.userRepo.BeginTx()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start transaction"})
+	}
+	defer tx.Rollback()
+
+	// If an invite is required, validate and consume it within the transaction
 	var consumedInviteID *uuid.UUID
 	if mustHaveInvite {
-		inv, err := h.inviteRepo.Consume(inviteCode)
+		// First, check if the invite code exists at all
+		_, err := h.inviteRepo.GetByCode(inviteCode)
+		if err == sql.ErrNoRows {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid invite code"})
+		}
 		if err != nil {
+			// Other database errors during GetByCode
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate invite code"})
+		}
+
+		// Now, attempt to consume the invite code atomically
+		inv, err := h.inviteRepo.ConsumeWithTx(tx, inviteCode)
+		if err != nil {
+			// This error covers expired, exhausted, or other consumption failures
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid or expired invite"})
 		}
 		consumedInviteID = &inv.ID
@@ -167,12 +169,17 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if err := user.HashPassword(req.Password); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to process password"})
 	}
-	if err := h.userRepo.Create(user); err != nil {
+	if err := h.userRepo.CreateWithTx(tx, user); err != nil {
 		if consumedInviteID != nil && h.inviteRepo != nil {
-			_ = h.inviteRepo.RevertConsume(*consumedInviteID)
+			_ = h.inviteRepo.RevertConsumeWithTx(tx, *consumedInviteID)
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 	}
+
+	if err := tx.Commit(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit transaction"})
+	}
+
 	set, _ := h.settingsRepo.Get()
 	if set.RequireEmailVerification && set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != "" {
 		u, _ := h.userRepo.GetByEmail(req.Email)

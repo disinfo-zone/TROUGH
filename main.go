@@ -557,8 +557,9 @@ func main() {
 	api.Post("/forgot-password", progressiveRateLimiter.Middleware(), authHandler.ForgotPassword)
 	api.Post("/reset-password", progressiveRateLimiter.Middleware(), authHandler.ResetPassword)
 	api.Post("/verify-email", progressiveRateLimiter.Middleware(), authHandler.VerifyEmail)
-	api.Get("/validate-invite", authHandler.ValidateInvite)
+	
 	api.Get("/password-requirements", authHandler.GetPasswordRequirements)
+	api.Get("/invites/validate", adminHandler.ValidateInviteCode)
 	
 	// Public CSRF token endpoint for initial page load
 	api.Get("/csrf", func(c *fiber.Ctx) error {

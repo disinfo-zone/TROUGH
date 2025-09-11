@@ -4,10 +4,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 type UserRepositoryInterface interface {
 	Create(user *User) error
+	CreateWithTx(tx *sqlx.Tx, user *User) error
 	GetByEmail(email string) (*User, error)
 	GetByUsername(username string) (*User, error)
 	GetByID(id uuid.UUID) (*User, error)
@@ -20,6 +22,7 @@ type UserRepositoryInterface interface {
 	SetModerator(id uuid.UUID, isModerator bool) error
 	ListUsers(page, limit int) ([]User, int, error)
 	SearchUsers(q string, page, limit int) ([]User, int, error)
+	BeginTx() (*sqlx.Tx, error)
 }
 
 type ImageRepositoryInterface interface {
@@ -58,7 +61,9 @@ type InviteRepositoryInterface interface {
 	List(page, limit int) ([]Invite, int, error)
 	GetByCode(code string) (*Invite, error)
 	Consume(code string) (*Invite, error)
+	ConsumeWithTx(tx *sqlx.Tx, code string) (*Invite, error)
 	RevertConsume(id uuid.UUID) error
+	RevertConsumeWithTx(tx *sqlx.Tx, id uuid.UUID) error
 	Delete(id uuid.UUID) error
 	DeleteUsedAndExpired() (int, error)
 }
