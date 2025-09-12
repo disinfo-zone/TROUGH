@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"os"
@@ -129,13 +130,58 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	existingUser, _ := h.userRepo.GetByEmail(req.Email)
-	if existingUser != nil {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already registered"})
+	// Add timeout context for database operations
+	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+	defer cancel()
+	
+	// Check if email already exists with timeout
+	emailCheckChan := make(chan *models.User, 1)
+	emailErrChan := make(chan error, 1)
+	go func() {
+		user, err := h.userRepo.GetByEmail(req.Email)
+		if err != nil && err != sql.ErrNoRows {
+			emailErrChan <- err
+			return
+		}
+		emailCheckChan <- user
+	}()
+	
+	select {
+	case existingUser := <-emailCheckChan:
+		if existingUser != nil {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already registered"})
+		}
+	case err := <-emailErrChan:
+		log.Printf("register error: GetByEmail failed: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Registration service unavailable"})
+	case <-ctx.Done():
+		log.Printf("register error: Email check timed out for email: %s", req.Email)
+		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Registration service unavailable"})
 	}
-	existingUser, _ = h.userRepo.GetByUsername(req.Username)
-	if existingUser != nil {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
+	
+	// Check if username already exists with timeout
+	usernameCheckChan := make(chan *models.User, 1)
+	usernameErrChan := make(chan error, 1)
+	go func() {
+		user, err := h.userRepo.GetByUsername(req.Username)
+		if err != nil && err != sql.ErrNoRows {
+			usernameErrChan <- err
+			return
+		}
+		usernameCheckChan <- user
+	}()
+	
+	select {
+	case existingUser := <-usernameCheckChan:
+		if existingUser != nil {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
+		}
+	case err := <-usernameErrChan:
+		log.Printf("register error: GetByUsername failed: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Registration service unavailable"})
+	case <-ctx.Done():
+		log.Printf("register error: Username check timed out for username: %s", req.Username)
+		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Registration service unavailable"})
 	}
 
 	tx, err := h.userRepo.BeginTx()
@@ -232,15 +278,40 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 	}
-	user, err := h.userRepo.GetByEmail(req.Email)
-	if err != nil {
+	
+	// Add timeout context for database operations
+	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+	defer cancel()
+	
+	// Use a goroutine to enforce timeout on database operations
+	userChan := make(chan *models.User, 1)
+	errChan := make(chan error, 1)
+	
+	go func() {
+		user, err := h.userRepo.GetByEmail(req.Email)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		userChan <- user
+	}()
+	
+	var user *models.User
+	select {
+	case user = <-userChan:
+		// Continue with user processing
+	case err := <-errChan:
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 		}
 		// Log server-side; avoid leaking DB state to clients
 		log.Printf("login error: GetByEmail failed: %v", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+	case <-ctx.Done():
+		log.Printf("login error: Database operation timed out for email: %s", req.Email)
+		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Authentication service unavailable"})
 	}
+	
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}

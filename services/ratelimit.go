@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -137,7 +139,24 @@ func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 // Middleware returns a Fiber middleware for rate limiting
 func (rl *RateLimiter) Middleware(capacity int, refill time.Duration) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		ip := rl.getClientIP(c)
+		// Add timeout to prevent rate limiter from hanging
+		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+		defer cancel()
+		
+		ipChan := make(chan string, 1)
+		go func() {
+			ipChan <- rl.getClientIP(c)
+		}()
+		
+		var ip string
+		select {
+		case ip = <-ipChan:
+		case <-ctx.Done():
+			// If IP extraction times out, allow request but log it
+			log.Printf("Rate limiter IP extraction timeout, allowing request")
+			return c.Next()
+		}
+		
 		if ip == "" {
 			// If we can't get a valid IP, allow the request but log it
 			if rl.config.EnableDebug {
@@ -146,7 +165,19 @@ func (rl *RateLimiter) Middleware(capacity int, refill time.Duration) fiber.Hand
 			return c.Next()
 		}
 
-		allowed := rl.allowRequest(ip, capacity, refill)
+		allowedChan := make(chan bool, 1)
+		go func() {
+			allowedChan <- rl.allowRequest(ip, capacity, refill)
+		}()
+		
+		var allowed bool
+		select {
+		case allowed = <-allowedChan:
+		case <-ctx.Done():
+			log.Printf("Rate limiter decision timeout for IP: %s, allowing request", ip)
+			return c.Next()
+		}
+		
 		if !allowed {
 			rl.stats.DeniedCount++
 			if rl.config.EnableDebug {
@@ -411,14 +442,50 @@ func NewProgressiveRateLimiter(config ProgressiveRateLimitConfig, baseConfig Rat
 // Middleware returns a Fiber middleware for progressive rate limiting
 func (prl *ProgressiveRateLimiter) Middleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		ip := prl.getClientIP(c)
+		// Add timeout to prevent rate limiter from hanging
+		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+		defer cancel()
+		
+		ipChan := make(chan string, 1)
+		go func() {
+			ipChan <- prl.getClientIP(c)
+		}()
+		
+		var ip string
+		select {
+		case ip = <-ipChan:
+		case <-ctx.Done():
+			// If IP extraction times out, allow request but log it
+			log.Printf("Rate limiter IP extraction timeout, allowing request")
+			return c.Next()
+		}
+		
 		if ip == "" {
 			// If we can't get a valid IP, allow the request but log it
 			prl.logSecurityEvent("UNKNOWN_IP", ip, c.Path(), c.Method(), "low", "Unable to determine client IP")
 			return c.Next()
 		}
 
-		allowed, retryAfter := prl.allowRequest(ip, c)
+		allowedChan := make(chan bool, 1)
+		retryAfterChan := make(chan time.Duration, 1)
+		
+		go func() {
+			allowed, retryAfter := prl.allowRequest(ip, c)
+			allowedChan <- allowed
+			retryAfterChan <- retryAfter
+		}()
+		
+		var allowed bool
+		var retryAfter time.Duration
+		
+		select {
+		case allowed = <-allowedChan:
+			retryAfter = <-retryAfterChan
+		case <-ctx.Done():
+			log.Printf("Rate limiter decision timeout for IP: %s, allowing request", ip)
+			return c.Next()
+		}
+		
 		if !allowed {
 			prl.stats.DeniedCount++
 			
