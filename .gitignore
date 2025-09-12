@@ -46,6 +46,8 @@ logs/
 /dist/
 /bin/
 trough
+trough-app
+trough-*
 
 # Temp/cache
 /tmp

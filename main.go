@@ -545,6 +545,9 @@ func main() {
 	api := app.Group("/api")
 	// Build auth middleware once to reuse its small cache
 	authMW := middleware.Protected()
+
+	// Add database health check middleware to all API routes
+	api.Use(middleware.DBPing())
 	
 	// Apply CSRF protection to API routes that change state
 	api.Use(csrfProtection.Middleware())

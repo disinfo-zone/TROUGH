@@ -119,6 +119,15 @@ func (r *InviteRepository) GetByCode(code string) (*Invite, error) {
 	return &inv, nil
 }
 
+func (r *InviteRepository) GetByCodeWithTx(tx *sqlx.Tx, code string) (*Invite, error) {
+	var inv Invite
+	err := tx.Get(&inv, `SELECT * FROM invites WHERE code=$1`, code)
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
 // Consume validates and consumes one use of the invite atomically.
 // Returns updated invite or error if invalid/expired/exhausted.
 func (r *InviteRepository) Consume(code string) (*Invite, error) {

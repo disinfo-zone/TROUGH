@@ -28,6 +28,20 @@ func (m *MockUserRepository) Create(user *models.User) error {
 	return args.Error(0)
 }
 
+func (m *MockUserRepository) CreateWithTx(tx *sqlx.Tx, user *models.User) error {
+	args := m.Called(tx, user)
+	user.ID = uuid.New()
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) BeginTx() (*sqlx.Tx, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sqlx.Tx), args.Error(1)
+}
+
 func (m *MockUserRepository) GetByEmail(email string) (*models.User, error) {
 	args := m.Called(email)
 	if args.Get(0) == nil {
@@ -202,7 +216,39 @@ func TestLoginSuccess(t *testing.T) {
 	mockRepo.On("GetByEmail", "test@example.com").Return(user, nil)
 
 	reqBody := map[string]string{
-		"email":    "test@example.com",
+		"identifier": "test@example.com",
+		"password": "Password123!",
+	}
+
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest("POST", "/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestLoginSuccessWithUsername(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	handler := handlers.NewAuthHandler(mockRepo)
+
+	app := fiber.New()
+	app.Post("/login", handler.Login)
+
+	user := &models.User{
+		ID:       uuid.New(),
+		Username: "testuser",
+		Email:    "test@example.com",
+	}
+	user.HashPassword("Password123!")
+
+	mockRepo.On("GetByUsername", "testuser").Return(user, nil)
+
+	reqBody := map[string]string{
+		"identifier": "testuser",
 		"password": "Password123!",
 	}
 
