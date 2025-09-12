@@ -71,7 +71,12 @@ func Protected() fiber.Handler {
 		go func() {
 			var dbChangedAt time.Time
 			_ = models.DB().QueryRowx(`SELECT COALESCE(password_changed_at, to_timestamp(0)) FROM users WHERE id = $1`, userID).Scan(&dbChangedAt)
-			changedAtChan <- dbChangedAt
+			// Check if channel is still open before sending
+			select {
+			case changedAtChan <- dbChangedAt:
+			default:
+				// Channel was closed by timeout, don't block
+			}
 		}()
 		
 		select {

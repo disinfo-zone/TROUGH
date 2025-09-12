@@ -139,12 +139,28 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	emailCheckChan := make(chan *models.User, 1)
 	emailErrChan := make(chan error, 1)
 	go func() {
-		user, err := h.userRepo.GetByEmail(req.Email)
-		if err != nil && err != sql.ErrNoRows {
-			emailErrChan <- err
-			return
+		// Check if context was cancelled before starting DB operation
+		select {
+		case <-ctx.Done():
+			return // Context cancelled, don't start DB operation
+		default:
+			// Continue with database operation
 		}
-		emailCheckChan <- user
+		
+		user, err := h.userRepo.GetByEmail(req.Email)
+		
+		// Check context again before sending to channel
+		select {
+		case <-ctx.Done():
+			return // Context cancelled, don't send result
+		default:
+			// Send result
+			if err != nil && err != sql.ErrNoRows {
+				emailErrChan <- err
+				return
+			}
+			emailCheckChan <- user
+		}
 	}()
 	
 	select {
@@ -164,12 +180,28 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	usernameCheckChan := make(chan *models.User, 1)
 	usernameErrChan := make(chan error, 1)
 	go func() {
-		user, err := h.userRepo.GetByUsername(req.Username)
-		if err != nil && err != sql.ErrNoRows {
-			usernameErrChan <- err
-			return
+		// Check if context was cancelled before starting DB operation
+		select {
+		case <-ctx.Done():
+			return // Context cancelled, don't start DB operation
+		default:
+			// Continue with database operation
 		}
-		usernameCheckChan <- user
+		
+		user, err := h.userRepo.GetByUsername(req.Username)
+		
+		// Check context again before sending to channel
+		select {
+		case <-ctx.Done():
+			return // Context cancelled, don't send result
+		default:
+			// Send result
+			if err != nil && err != sql.ErrNoRows {
+				usernameErrChan <- err
+				return
+			}
+			usernameCheckChan <- user
+		}
 	}()
 	
 	select {
@@ -292,6 +324,14 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		var result *models.User
 		var lookupErr error
 		
+		// Check if context was cancelled before starting DB operation
+		select {
+		case <-ctx.Done():
+			return // Context cancelled, don't start DB operation
+		default:
+			// Continue with database operation
+		}
+		
 		// Smart login: check if identifier is an email, otherwise treat as username
 		if _, e := mail.ParseAddress(identifier); e == nil {
 			result, lookupErr = h.userRepo.GetByEmail(identifier)
@@ -299,11 +339,18 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 			result, lookupErr = h.userRepo.GetByUsername(identifier)
 		}
 		
-		if lookupErr != nil {
-			errChan <- lookupErr
-			return
+		// Check context again before sending to channel
+		select {
+		case <-ctx.Done():
+			return // Context cancelled, don't send result
+		default:
+			// Send result
+			if lookupErr != nil {
+				errChan <- lookupErr
+				return
+			}
+			userChan <- result
 		}
-		userChan <- result
 	}()
 	
 	select {
