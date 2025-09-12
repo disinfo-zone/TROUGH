@@ -278,10 +278,14 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication failed"})
 	}
 
+	log.Printf("user found: %+v", user)
+
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}
-	if !user.CheckPassword(req.Password) {
+	passwordCheckResult := user.CheckPassword(req.Password)
+	log.Printf("password check result: %v", passwordCheckResult)
+	if !passwordCheckResult {
 		// Record authentication failure for progressive rate limiting
 		if h.progressiveRateLimiter != nil {
 			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
