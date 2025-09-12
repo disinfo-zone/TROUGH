@@ -697,7 +697,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 	}
 	_ = h.userRepo.SetModerator(u.ID, req.IsModerator)
-	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	ctx, cancel = context.WithTimeout(c.Context(), 5*time.Second)
 	defer cancel()
 	u2, _ := h.userRepo.GetByID(ctx, u.ID)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": u2.ToResponse()})
