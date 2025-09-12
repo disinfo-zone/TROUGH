@@ -47,7 +47,9 @@ func maybeSeedAdmin(userRepo models.UserRepositoryInterface) {
 	}
 	// Normalize admin username to match username policy (lowercase, trimmed)
 	adminUser = strings.ToLower(strings.TrimSpace(adminUser))
-	if _, err := userRepo.GetByEmail(adminEmail); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := userRepo.GetByEmail(ctx, adminEmail); err == nil {
 		log.Printf("Admin seed: user %s already exists", adminEmail)
 		return
 	}
@@ -135,7 +137,9 @@ func indexWithMetaHandler(
 		if strings.HasPrefix(c.Path(), "/i/") {
 			if idStr := c.Params("id"); idStr != "" {
 				if imgID, err := uuid.Parse(idStr); err == nil {
-					if img, err := imageRepo.GetByID(imgID); err == nil && img != nil {
+					ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+					defer cancel()
+					if img, err := imageRepo.GetByID(ctx, imgID); err == nil && img != nil {
 						ogType = "article"
 						// Compute site title for format "IMAGE TITLE - SITE TITLE"
 						siteTitle := strings.TrimSpace(set.SiteName)
@@ -149,7 +153,9 @@ func indexWithMetaHandler(
 								username = strings.TrimSpace(username)
 							}
 							if username != "" && userRepo != nil {
-								if u, err := userRepo.GetByUsername(username); err == nil && u != nil {
+								ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+								defer cancel()
+								if u, err := userRepo.GetByUsername(ctx, username); err == nil && u != nil {
 									siteTitle := strings.TrimSpace(set.SiteName)
 									if siteTitle == "" {
 										siteTitle = "TROUGH"
