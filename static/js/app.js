@@ -1208,13 +1208,10 @@ class TroughApp {
     async handleLogin() {
         const email = document.getElementById('login-email').value.trim();
         const password = document.getElementById('login-password').value;
-        console.log('Attempting login with:', { email: email, passwordType: typeof password, passwordLength: password.length });
-        const requestBody = JSON.stringify({ email, password });
-        console.log('Request body being sent:', requestBody);
         if (!email || !password) { this.showAuthError('Please fill in all fields'); return; }
         this.showLoader(); this.hideAuthError();
         try {
-            const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: requestBody });
+            const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ email, password }) });
             const data = await response.json().catch(() => ({}));
             if (response.ok) {
                 // Prefer cookie-based session; still cache user locally for UI
