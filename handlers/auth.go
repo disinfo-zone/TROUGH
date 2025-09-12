@@ -242,7 +242,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
-	identifier := strings.ToLower(strings.TrimSpace(req.Identifier))
+	identifier := strings.ToLower(strings.TrimSpace(req.LoginIdentifier))
 	if err := h.validator.Struct(req); err != nil {
 		// Record authentication failure for progressive rate limiting
 		if h.progressiveRateLimiter != nil {
@@ -281,7 +281,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}
-	if !user.CheckPassword(req.Password) {
+	if !user.CheckPassword(req.LoginPassword) {
 		// Record authentication failure for progressive rate limiting
 		if h.progressiveRateLimiter != nil {
 			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
