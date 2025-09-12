@@ -139,7 +139,10 @@ func TestRegisterSuccess(t *testing.T) {
 
 	mockRepo.On("GetByEmail", "test@example.com").Return(nil, sql.ErrNoRows)
 	mockRepo.On("GetByUsername", "testuser").Return(nil, sql.ErrNoRows)
-	mockRepo.On("Create", mock.AnythingOfType("*models.User")).Return(nil)
+	// Can't easily mock the transaction object itself, so we return nil and trust the handler logic.
+	// The key is that BeginTx is expected. We also can't mock Commit/Rollback on the nil tx.
+	mockRepo.On("BeginTx").Return((*sqlx.Tx)(nil), nil)
+	mockRepo.On("CreateWithTx", mock.Anything, mock.AnythingOfType("*models.User")).Return(nil)
 
 	reqBody := map[string]string{
 		"username": "testuser",
