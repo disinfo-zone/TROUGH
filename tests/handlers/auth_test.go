@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/yourusername/trough/handlers"
@@ -25,6 +26,20 @@ func (m *MockUserRepository) Create(user *models.User) error {
 	args := m.Called(user)
 	user.ID = uuid.New()
 	return args.Error(0)
+}
+
+func (m *MockUserRepository) CreateWithTx(tx *sqlx.Tx, user *models.User) error {
+	args := m.Called(tx, user)
+	user.ID = uuid.New()
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) BeginTx() (*sqlx.Tx, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sqlx.Tx), args.Error(1)
 }
 
 func (m *MockUserRepository) GetByEmail(email string) (*models.User, error) {

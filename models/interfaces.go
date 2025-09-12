@@ -60,6 +60,7 @@ type InviteRepositoryInterface interface {
 	Create(maxUses *int, expiresAt *time.Time, createdBy *uuid.UUID) (*Invite, error)
 	List(page, limit int) ([]Invite, int, error)
 	GetByCode(code string) (*Invite, error)
+	GetByCodeWithTx(tx *sqlx.Tx, code string) (*Invite, error)
 	Consume(code string) (*Invite, error)
 	ConsumeWithTx(tx *sqlx.Tx, code string) (*Invite, error)
 	RevertConsume(id uuid.UUID) error
