@@ -31,7 +31,7 @@ type ImageRepositoryInterface interface {
 	GetFeed(page, limit int, showNSFW bool) ([]ImageWithUser, int, error)
 	GetFeedSeek(limit int, showNSFW bool, cursorEncoded string) ([]ImageWithUser, string, error)
 	CountFeed(showNSFW bool) (int, error)
-	GetByID(id uuid.UUID) (*ImageWithUser, error)
+	    GetByID(ctx context.Context, id uuid.UUID) (*ImageWithUser, error)
 	GetUserImages(userID uuid.UUID, page, limit int) ([]ImageWithUser, int, error)
 	GetUserImagesSeek(userID uuid.UUID, limit int, cursorEncoded string) ([]ImageWithUser, string, error)
 	CountUserImages(userID uuid.UUID) (int, error)

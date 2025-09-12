@@ -327,7 +327,7 @@ func (r *ImageRepository) CountFeed(showNSFW bool) (int, error) {
 	return total, err
 }
 
-func (r *ImageRepository) GetByID(id uuid.UUID) (*ImageWithUser, error) {
+func (r *ImageRepository) GetByID(ctx context.Context, id uuid.UUID) (*ImageWithUser, error) {
 	var image ImageWithUser
 	query := `
         SELECT 
@@ -339,7 +339,7 @@ func (r *ImageRepository) GetByID(id uuid.UUID) (*ImageWithUser, error) {
         LEFT JOIN users u ON i.user_id = u.id
         WHERE i.id = $1`
 
-	err := r.db.Get(&image, query, id)
+	err := r.db.GetContext(ctx, &image, query, id)
 	if err != nil {
 		return nil, err
 	}

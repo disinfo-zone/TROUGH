@@ -78,7 +78,9 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 	// Gate uploads for unverified users when email verification is enabled
 	if h.userRepo != nil {
-		if u, err := h.userRepo.GetByID(userID); err == nil && u != nil {
+		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+		defer cancel()
+		if u, err := h.userRepo.GetByID(ctx, userID); err == nil && u != nil {
 			// Read settings via cache for performance; treat missing repo as disabled
 			var requireVerify bool
 			if h.settingsRepo != nil {
@@ -358,7 +360,9 @@ func (h *ImageHandler) GetFeed(c *fiber.Ctx) error {
 	showNSFW := false
 	uid := middleware.OptionalUserID(c)
 	if uid != uuid.Nil {
-		if user, err := h.userRepo.GetByID(uid); err == nil {
+		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+		defer cancel()
+		if user, err := h.userRepo.GetByID(ctx, uid); err == nil {
 			showNSFW = user.ShowNSFW || strings.ToLower(strings.TrimSpace(user.NsfwPref)) != "hide"
 		}
 	}
@@ -404,7 +408,10 @@ func (h *ImageHandler) GetImage(c *fiber.Ctx) error {
 		})
 	}
 
-	image, err := h.imageRepo.GetByID(imageID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+
+	image, err := h.imageRepo.GetByID(ctx, imageID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "Image not found",
@@ -429,7 +436,9 @@ func (h *ImageHandler) CollectImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image ID"})
 	}
-	img, err := h.imageRepo.GetByID(imageID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	img, err := h.imageRepo.GetByID(ctx, imageID)
 	if err != nil || img == nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Image not found"})
 	}
@@ -462,7 +471,9 @@ func (h *ImageHandler) UpdateImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image id"})
 	}
-	img, err := h.imageRepo.GetByID(imgID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	img, err := h.imageRepo.GetByID(ctx, imgID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Image not found"})
 	}
@@ -470,7 +481,9 @@ func (h *ImageHandler) UpdateImage(c *fiber.Ctx) error {
 	isOwner := img.UserID == userID
 	isPrivileged := false
 	if !isOwner {
-		u, err := h.userRepo.GetByID(userID)
+		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+		defer cancel()
+		u, err := h.userRepo.GetByID(ctx, userID)
 		if err == nil {
 			isPrivileged = (u.IsAdmin || u.IsModerator) && !u.IsDisabled
 		}
@@ -505,7 +518,7 @@ func (h *ImageHandler) UpdateImage(c *fiber.Ctx) error {
 	if err := h.imageRepo.UpdateMeta(imgID, b.Title, b.Caption, b.IsNSFW); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update image"})
 	}
-	updated, _ := h.imageRepo.GetByID(imgID)
+	updated, _ := h.imageRepo.GetByID(ctx, imgID)
 	return c.JSON(updated)
 }
 
@@ -518,13 +531,17 @@ func (h *ImageHandler) DeleteImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid image id"})
 	}
-	img, err := h.imageRepo.GetByID(imgID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	img, err := h.imageRepo.GetByID(ctx, imgID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Image not found"})
 	}
 	isOwner := img.UserID == userID
 	isPrivileged := false
-	u, err := h.userRepo.GetByID(userID)
+	ctx, cancel = context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, err := h.userRepo.GetByID(ctx, userID)
 	if err == nil {
 		isPrivileged = (u.IsAdmin || u.IsModerator) && !u.IsDisabled
 	}

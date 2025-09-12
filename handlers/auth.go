@@ -187,7 +187,9 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 	set, _ := h.settingsRepo.Get()
 	if set.RequireEmailVerification && set.SMTPHost != "" && set.SMTPPort > 0 && set.SMTPUsername != "" && set.SMTPPassword != "" {
-		u, _ := h.userRepo.GetByEmail(req.Email)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		u, _ := h.userRepo.GetByEmail(ctx, req.Email)
 		if u != nil {
 			_ = models.SetEmailVerified(u.ID, false)
 			token := uuid.New().String()
@@ -383,22 +385,27 @@ token := uuid.New().String()
 	}
 	link := strings.TrimRight(set.SiteURL, "/") + "/reset?token=" + token
 	// Plain-text, ASCII-styled message with clear instructions and expiry notice
-	body := "" +
-		"============================\n" +
-		"  PASSWORD RESET REQUEST\n" +
-		"============================\n\n" +
-		"We received a request to reset your password.\n\n" +
-		"If you made this request, use the link below to set a new password.\n" +
-		"If you did NOT request this, you can safely ignore this email.\n\n" +
-		">>> RESET LINK (valid for 1 hour, single-use) <<<
-" +
-		link + "\n\n" +
-		"Tips for a strong password:\n" +
-		"- 8+ characters\n" +
-		"- mix of UPPER/lower case, numbers, symbols\n\n" +
-		"This link expires in 1 hour or after it is used once.\n" +
-		"For security, never share this link.\n\n" +
-		"— TROUGH\n"
+	body := `============================
+  PASSWORD RESET REQUEST
+============================
+
+We received a request to reset your password.
+
+If you made this request, use the link below to set a new password.
+If you did NOT request this, you can safely ignore this email.
+
+>>> RESET LINK (valid for 1 hour, single-use) <<<
+` + link + `
+
+Tips for a strong password:
+- 8+ characters
+- mix of UPPER/lower case, numbers, symbols
+
+This link expires in 1 hour or after it is used once.
+For security, never share this link.
+
+— TROUGH
+`
 	// Queue async send only to avoid duplicate emails
 	services.EnqueueMail(u.Email, "Reset your password", body)
 	return c.SendStatus(fiber.StatusNoContent)
@@ -420,7 +427,9 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 	if err != nil || time.Now().After(exp) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid or expired token"})
 	}
-	u, err := h.userRepo.GetByID(uid)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, err := h.userRepo.GetByID(ctx, uid)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "User"})
 	}

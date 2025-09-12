@@ -79,7 +79,10 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := h.userRepo.GetByUsername(username)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+
+	user, err := h.userRepo.GetByUsername(ctx, username)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "User not found",
@@ -97,7 +100,10 @@ func (h *UserHandler) GetUserImages(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := h.userRepo.GetByUsername(username)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+
+	user, err := h.userRepo.GetByUsername(ctx, username)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "User not found",
@@ -136,7 +142,9 @@ func (h *UserHandler) GetUserCollections(c *fiber.Ctx) error {
 	if username == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Username required"})
 	}
-	user, err := h.userRepo.GetByUsername(username)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	user, err := h.userRepo.GetByUsername(ctx, username)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -174,7 +182,9 @@ func (h *UserHandler) GetMyProfile(c *fiber.Ctx) error {
 	if userID == uuid.Nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
-	user, err := h.userRepo.GetByID(userID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	user, err := h.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -205,7 +215,9 @@ func (h *UserHandler) UpdateMyProfile(c *fiber.Ctx) error {
 		if err := h.validator.Struct(models.UpdateUserRequest{Username: &uname}); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 		}
-		if existing, err := h.userRepo.GetByUsername(uname); err == nil && existing != nil {
+		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+		defer cancel()
+		if existing, err := h.userRepo.GetByUsername(ctx, uname); err == nil && existing != nil {
 			if existing.ID != userID {
 				return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
 			}
@@ -253,7 +265,9 @@ func (h *UserHandler) UpdateEmail(c *fiber.Ctx) error {
 		}
 	}
 	// Conflict check
-	if existing, err := h.userRepo.GetByEmail(body.Email); err == nil && existing != nil {
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	if existing, err := h.userRepo.GetByEmail(ctx, body.Email); err == nil && existing != nil {
 		if existing.ID != userID {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already in use"})
 		}
@@ -293,7 +307,9 @@ func (h *UserHandler) UpdatePassword(c *fiber.Ctx) error {
 	if err := services.ValidatePassword(body.NewPassword); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	user, err := h.userRepo.GetByID(userID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	user, err := h.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
@@ -339,7 +355,9 @@ func (h *UserHandler) GetMyAccount(c *fiber.Ctx) error {
 	if userID == uuid.Nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
-	user, err := h.userRepo.GetByID(userID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	user, err := h.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -395,7 +413,9 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	}
 	
 	// Fetch current user to know old avatar URL
-	u, _ := h.userRepo.GetByID(userID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, _ := h.userRepo.GetByID(ctx, userID)
 	oldAvatar := ""
 	if u != nil && u.AvatarURL != nil {
 		oldAvatar = *u.AvatarURL
@@ -575,7 +595,9 @@ func (h *UserHandler) AdminSetUserFlags(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user id"})
 	}
-	target, err := h.userRepo.GetByID(uid)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	target, err := h.userRepo.GetByID(ctx, uid)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -621,7 +643,7 @@ func (h *UserHandler) AdminSetUserFlags(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to set moderator"})
 		}
 	}
-	u, _ := h.userRepo.GetByID(uid)
+	u, _ := h.userRepo.GetByID(ctx, uid)
 	return c.JSON(fiber.Map{"user": u.ToResponse()})
 }
 
@@ -656,11 +678,13 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 	if err := services.ValidatePassword(req.Password); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	if _, err := h.userRepo.GetByEmail(req.Email); err == nil {
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := h.userRepo.GetByEmail(ctx, req.Email); err == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already in use"})
 	}
 	// Username conflict check (graceful instead of relying on DB constraint)
-	if _, err := h.userRepo.GetByUsername(req.Username); err == nil {
+	if _, err := h.userRepo.GetByUsername(ctx, req.Username); err == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
 	}
 
@@ -672,7 +696,9 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 	}
 	_ = h.userRepo.SetModerator(u.ID, req.IsModerator)
-	u2, _ := h.userRepo.GetByID(u.ID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u2, _ := h.userRepo.GetByID(ctx, u.ID)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": u2.ToResponse()})
 }
 
@@ -685,7 +711,9 @@ func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user id"})
 	}
-	target, err := h.userRepo.GetByID(uid)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	target, err := h.userRepo.GetByID(ctx, uid)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -716,7 +744,9 @@ func (h *UserHandler) AdminSetUserPassword(c *fiber.Ctx) error {
 	if err := services.ValidatePassword(body.Password); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	u, err := h.userRepo.GetByID(uid)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, err := h.userRepo.GetByID(ctx, uid)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -772,7 +802,9 @@ func (h *UserHandler) AdminSendVerification(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid id"})
 	}
-	u, err := h.userRepo.GetByID(id)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, err := h.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
@@ -802,7 +834,9 @@ func isAdmin(c *fiber.Ctx, repo models.UserRepositoryInterface) bool {
 	if uid == uuid.Nil {
 		return false
 	}
-	u, err := repo.GetByID(uid)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, err := repo.GetByID(ctx, uid)
 	if err != nil {
 		return false
 	}
@@ -814,7 +848,9 @@ func isModerator(c *fiber.Ctx, repo models.UserRepositoryInterface) bool {
 	if uid == uuid.Nil {
 		return false
 	}
-	u, err := repo.GetByID(uid)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	u, err := repo.GetByID(ctx, uid)
 	if err != nil {
 		return false
 	}
