@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -266,11 +267,11 @@ func Close() error {
 }
 
 // Ping checks the database connection and returns an error if it's not available.
-func Ping() error {
+func Ping(ctx context.Context) error {
 	if DB == nil {
 		return fmt.Errorf("database not connected")
 	}
-	return DB.Ping()
+	return DB.PingContext(ctx)
 }
 
 // Reconnect closes the existing database connection and establishes a new one.
@@ -280,7 +281,9 @@ func Reconnect() error {
 	defer reconnectLock.Unlock()
 
 	// After acquiring the lock, check if another goroutine has already reconnected.
-	if err := Ping(); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := Ping(ctx); err == nil {
 		return nil // Connection is already good.
 	}
 
