@@ -280,12 +280,8 @@ func Reconnect() error {
 	reconnectLock.Lock()
 	defer reconnectLock.Unlock()
 
-	// After acquiring the lock, check if another goroutine has already reconnected.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := Ping(ctx); err == nil {
-		return nil // Connection is already good.
-	}
+	// The lock ensures this block is only executed by one goroutine at a time.
+	// We proceed directly to closing the old connection and creating a new one.
 
 	if err := Close(); err != nil {
 		// Log the error but don't fail if closing fails, as we're trying to reconnect anyway
