@@ -238,7 +238,6 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 }
 
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
-	log.Printf("request body: %s", c.Body())
 	var req models.LoginRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
@@ -279,14 +278,10 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication failed"})
 	}
 
-	log.Printf("user found: %+v", user)
-
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}
-	passwordCheckResult := user.CheckPassword(req.Password)
-	log.Printf("password check result: %v", passwordCheckResult)
-	if !passwordCheckResult {
+	if !user.CheckPassword(req.Password) {
 		// Record authentication failure for progressive rate limiting
 		if h.progressiveRateLimiter != nil {
 			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
