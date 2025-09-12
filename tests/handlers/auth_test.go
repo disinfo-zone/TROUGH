@@ -202,7 +202,39 @@ func TestLoginSuccess(t *testing.T) {
 	mockRepo.On("GetByEmail", "test@example.com").Return(user, nil)
 
 	reqBody := map[string]string{
-		"email":    "test@example.com",
+		"identifier": "test@example.com",
+		"password": "Password123!",
+	}
+
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest("POST", "/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestLoginSuccessWithUsername(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	handler := handlers.NewAuthHandler(mockRepo)
+
+	app := fiber.New()
+	app.Post("/login", handler.Login)
+
+	user := &models.User{
+		ID:       uuid.New(),
+		Username: "testuser",
+		Email:    "test@example.com",
+	}
+	user.HashPassword("Password123!")
+
+	mockRepo.On("GetByUsername", "testuser").Return(user, nil)
+
+	reqBody := map[string]string{
+		"identifier": "testuser",
 		"password": "Password123!",
 	}
 
