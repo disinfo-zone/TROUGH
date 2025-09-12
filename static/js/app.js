@@ -1211,7 +1211,7 @@ class TroughApp {
         if (!email || !password) { this.showAuthError('Please fill in all fields'); return; }
         this.showLoader(); this.hideAuthError();
         try {
-            const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ email, password }) });
+            const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ login_identifier: email, login_password: password }) });
             const data = await response.json().catch(() => ({}));
             if (response.ok) {
                 // Prefer cookie-based session; still cache user locally for UI

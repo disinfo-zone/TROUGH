@@ -31,8 +31,8 @@ type CreateUserRequest struct {
 }
 
 type LoginRequest struct {
-	Identifier string `json:"identifier" validate:"required"`
-	Password   string `json:"password" validate:"required"`
+	LoginIdentifier string `json:"login_identifier" validate:"required"`
+	LoginPassword   string `json:"login_password" validate:"required"`
 }
 
 type UpdateUserRequest struct {
