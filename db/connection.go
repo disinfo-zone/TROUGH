@@ -3,13 +3,17 @@ package db
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 )
 
-var DB *sqlx.DB
+var (
+	DB            *sqlx.DB
+	reconnectLock sync.Mutex
+)
 
 func Connect() error {
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -259,4 +263,31 @@ func Close() error {
 		return DB.Close()
 	}
 	return nil
+}
+
+// Ping checks the database connection and returns an error if it's not available.
+func Ping() error {
+	if DB == nil {
+		return fmt.Errorf("database not connected")
+	}
+	return DB.Ping()
+}
+
+// Reconnect closes the existing database connection and establishes a new one.
+// It uses a mutex to prevent race conditions from multiple concurrent requests.
+func Reconnect() error {
+	reconnectLock.Lock()
+	defer reconnectLock.Unlock()
+
+	// After acquiring the lock, check if another goroutine has already reconnected.
+	if err := Ping(); err == nil {
+		return nil // Connection is already good.
+	}
+
+	if err := Close(); err != nil {
+		// Log the error but don't fail if closing fails, as we're trying to reconnect anyway
+		fmt.Printf("Error closing database connection during reconnect: %v\n", err)
+	}
+	fmt.Println("Attempting to reconnect to the database...")
+	return Connect()
 }
