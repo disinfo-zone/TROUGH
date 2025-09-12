@@ -44,34 +44,34 @@ func (r *UserRepository) CreateWithTx(tx *sqlx.Tx, user *User) error {
 		Scan(&user.ID, &user.CreatedAt)
 }
 
-func (r *UserRepository) GetByEmail(email string) (*User, error) {
-	var user User
-	query := `SELECT * FROM users WHERE email = $1`
-	err := r.db.Get(&user, query, email)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
+func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*User, error) {
+    var user User
+    query := `SELECT * FROM users WHERE email = $1`
+    err := r.db.GetContext(ctx, &user, query, email)
+    if err != nil {
+        return nil, err
+    }
+    return &user, nil
 }
 
-func (r *UserRepository) GetByUsername(username string) (*User, error) {
-	var user User
-	query := `SELECT * FROM users WHERE username = $1`
-	err := r.db.Get(&user, query, username)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
+func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*User, error) {
+    var user User
+    query := `SELECT * FROM users WHERE username = $1`
+    err := r.db.GetContext(ctx, &user, query, username)
+    if err != nil {
+        return nil, err
+    }
+    return &user, nil
 }
 
-func (r *UserRepository) GetByID(id uuid.UUID) (*User, error) {
-	var user User
-	query := `SELECT * FROM users WHERE id = $1`
-	err := r.db.Get(&user, query, id)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
+func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
+    var user User
+    query := `SELECT * FROM users WHERE id = $1`
+    err := r.db.GetContext(ctx, &user, query, id)
+    if err != nil {
+        return nil, err
+    }
+    return &user, nil
 }
 
 func (r *UserRepository) UpdateProfile(id uuid.UUID, updates UpdateUserRequest) (*User, error) {

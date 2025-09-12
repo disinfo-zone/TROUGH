@@ -462,7 +462,9 @@ func (prl *ProgressiveRateLimiter) Middleware() fiber.Handler {
 		
 		if ip == "" {
 			// If we can't get a valid IP, allow the request but log it
+			prl.mu.Lock()
 			prl.logSecurityEvent("UNKNOWN_IP", ip, c.Path(), c.Method(), "low", "Unable to determine client IP")
+			prl.mu.Unlock()
 			return c.Next()
 		}
 
@@ -865,7 +867,8 @@ func (prl *ProgressiveRateLimiter) SetEventCallback(callback func(SecurityEvent)
 	prl.eventCallback = callback
 }
 
-// logSecurityEvent logs a security event
+// logSecurityEvent logs a security event.
+// IMPORTANT: This method does NOT acquire a lock, and should only be called by methods that have already acquired the lock.
 func (prl *ProgressiveRateLimiter) logSecurityEvent(eventType, ip, path, method, severity, description string) {
 	if !prl.config.EnableLogging {
 		return
@@ -881,7 +884,6 @@ func (prl *ProgressiveRateLimiter) logSecurityEvent(eventType, ip, path, method,
 		Description: description,
 	}
 
-	prl.mu.Lock()
 	prl.securityEvents = append(prl.securityEvents, event)
 	
 	// Keep only last 1000 events
@@ -893,7 +895,6 @@ func (prl *ProgressiveRateLimiter) logSecurityEvent(eventType, ip, path, method,
 	if prl.eventCallback != nil {
 		go prl.eventCallback(event)
 	}
-	prl.mu.Unlock()
 }
 
 // Stop gracefully shuts down the progressive rate limiter

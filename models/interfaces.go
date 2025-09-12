@@ -10,9 +10,9 @@ import (
 type UserRepositoryInterface interface {
 	Create(user *User) error
 	CreateWithTx(tx *sqlx.Tx, user *User) error
-	GetByEmail(email string) (*User, error)
-	GetByUsername(username string) (*User, error)
-	GetByID(id uuid.UUID) (*User, error)
+	    GetByEmail(ctx context.Context, email string) (*User, error)
+    GetByUsername(ctx context.Context, username string) (*User, error)
+	    GetByID(ctx context.Context, id uuid.UUID) (*User, error)
 	UpdateProfile(id uuid.UUID, updates UpdateUserRequest) (*User, error)
 	UpdateEmail(id uuid.UUID, email string) error
 	UpdatePassword(id uuid.UUID, passwordHash string) error

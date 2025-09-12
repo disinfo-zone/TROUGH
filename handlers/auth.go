@@ -133,86 +133,20 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 	defer cancel()
 
-	// Check if email already exists with timeout
-	emailCheckChan := make(chan *models.User, 1)
-	emailErrChan := make(chan error, 1)
-	go func() {
-		// Check if context was cancelled before starting DB operation
-		select {
-		case <-ctx.Done():
-			return // Context cancelled, don't start DB operation
-		default:
-			// Continue with database operation
-		}
-
-		user, err := h.userRepo.GetByEmail(req.Email)
-
-		// Check context again before sending to channel
-		select {
-		case <-ctx.Done():
-			return // Context cancelled, don't send result
-		default:
-			// Send result
-			if err != nil && err != sql.ErrNoRows {
-				emailErrChan <- err
-				return
-			}
-			emailCheckChan <- user
-		}
-	}()
-
-	select {
-	case existingUser := <-emailCheckChan:
-		if existingUser != nil {
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already registered"})
-		}
-	case err := <-emailErrChan:
+	// Check if email already exists
+	if existingUser, err := h.userRepo.GetByEmail(ctx, req.Email); err != nil && err != sql.ErrNoRows {
 		log.Printf("register error: GetByEmail failed: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Registration service unavailable"})
-	case <-ctx.Done():
-		log.Printf("register error: Email check timed out for email: %s", req.Email)
-		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Registration service unavailable"})
+	} else if existingUser != nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already registered"})
 	}
 
-	// Check if username already exists with timeout
-	usernameCheckChan := make(chan *models.User, 1)
-	usernameErrChan := make(chan error, 1)
-	go func() {
-		// Check if context was cancelled before starting DB operation
-		select {
-		case <-ctx.Done():
-			return // Context cancelled, don't start DB operation
-		default:
-			// Continue with database operation
-		}
-
-		user, err := h.userRepo.GetByUsername(req.Username)
-
-		// Check context again before sending to channel
-		select {
-		case <-ctx.Done():
-			return // Context cancelled, don't send result
-		default:
-			// Send result
-			if err != nil && err != sql.ErrNoRows {
-				usernameErrChan <- err
-				return
-			}
-			usernameCheckChan <- user
-		}
-	}()
-
-	select {
-	case existingUser := <-usernameCheckChan:
-		if existingUser != nil {
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
-		}
-	case err := <-usernameErrChan:
+	// Check if username already exists
+	if existingUser, err := h.userRepo.GetByUsername(ctx, req.Username); err != nil && err != sql.ErrNoRows {
 		log.Printf("register error: GetByUsername failed: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Registration service unavailable"})
-	case <-ctx.Done():
-		log.Printf("register error: Username check timed out for username: %s", req.Username)
-		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Registration service unavailable"})
+	} else if existingUser != nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Username already taken"})
 	}
 
 	tx, err := h.userRepo.BeginTx()
@@ -323,46 +257,13 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	var user *models.User
 	var err error
 
-	userChan := make(chan *models.User, 1)
-	errChan := make(chan error, 1)
+	if _, e := mail.ParseAddress(identifier); e == nil {
+		user, err = h.userRepo.GetByEmail(ctx, identifier)
+	} else {
+		user, err = h.userRepo.GetByUsername(ctx, identifier)
+	}
 
-	go func() {
-		var result *models.User
-		var lookupErr error
-
-		// Check if context was cancelled before starting DB operation
-		select {
-		case <-ctx.Done():
-			return // Context cancelled, don't start DB operation
-		default:
-			// Continue with database operation
-		}
-
-		// Smart login: check if identifier is an email, otherwise treat as username
-		if _, e := mail.ParseAddress(identifier); e == nil {
-			result, lookupErr = h.userRepo.GetByEmail(identifier)
-		} else {
-			result, lookupErr = h.userRepo.GetByUsername(identifier)
-		}
-
-		// Check context again before sending to channel
-		select {
-		case <-ctx.Done():
-			return // Context cancelled, don't send result
-		default:
-			// Send result
-			if lookupErr != nil {
-				errChan <- lookupErr
-				return
-			}
-			userChan <- result
-		}
-	}()
-
-	select {
-	case user = <-userChan:
-		// Continue with user processing
-	case err := <-errChan:
+	if err != nil {
 		if err == sql.ErrNoRows {
 			// Record authentication failure for progressive rate limiting
 			if h.progressiveRateLimiter != nil {
@@ -373,9 +274,6 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		// Log server-side; avoid leaking DB state to clients
 		log.Printf("login error: GetByEmail/GetByUsername failed: %v", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication failed"})
-	case <-ctx.Done():
-		log.Printf("login error: Database operation timed out for identifier: %s", identifier)
-		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Authentication service unavailable"})
 	}
 
 	if user.IsDisabled {
@@ -425,7 +323,10 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	user, err := h.userRepo.GetByID(userID)
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+
+	user, err := h.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -456,7 +357,11 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	if err := c.BodyParser(&r); err != nil || r.Email == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email required"})
 	}
-	u, err := h.userRepo.GetByEmail(r.Email)
+
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+
+	u, err := h.userRepo.GetByEmail(ctx, r.Email)
 	if err != nil {
 		return c.SendStatus(fiber.StatusNoContent)
 	}
@@ -468,7 +373,8 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	if time.Since(last) < 5*time.Minute {
 		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{"error": "Please wait before requesting again"})
 	}
-	token := uuid.New().String()
+
+token := uuid.New().String()
 	// Hash token before storing for at-rest protection
 	hashed := services.HashToken(token)
 	expires := time.Now().Add(1 * time.Hour)
@@ -484,7 +390,8 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 		"We received a request to reset your password.\n\n" +
 		"If you made this request, use the link below to set a new password.\n" +
 		"If you did NOT request this, you can safely ignore this email.\n\n" +
-		">>> RESET LINK (valid for 1 hour, single-use) <<<\n" +
+		">>> RESET LINK (valid for 1 hour, single-use) <<<
+" +
 		link + "\n\n" +
 		"Tips for a strong password:\n" +
 		"- 8+ characters\n" +
@@ -568,7 +475,11 @@ func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
 	if uid == uuid.Nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
-	u, err := h.userRepo.GetByID(uid)
+
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+
+	u, err := h.userRepo.GetByID(ctx, uid)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
