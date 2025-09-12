@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -105,7 +106,7 @@ func (r *UserRepository) UpdateProfile(id uuid.UUID, updates UpdateUserRequest) 
 		argPos++
 	}
 	if len(setClauses) == 0 {
-		return r.GetByID(id)
+		return r.GetByID(context.Background(), id)
 	}
 	args = append(args, id)
 	query := fmt.Sprintf("UPDATE users SET %s WHERE id = $%d",
@@ -114,7 +115,7 @@ func (r *UserRepository) UpdateProfile(id uuid.UUID, updates UpdateUserRequest) 
 	if err != nil {
 		return nil, err
 	}
-	return r.GetByID(id)
+	return r.GetByID(context.Background(), id)
 }
 
 func (r *UserRepository) UpdateEmail(id uuid.UUID, email string) error {
