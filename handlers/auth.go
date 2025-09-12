@@ -148,7 +148,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	var consumedInviteID *uuid.UUID
 	if mustHaveInvite {
 		// First, check if the invite code exists at all
-		_, err := h.inviteRepo.GetByCode(inviteCode)
+		_, err := h.inviteRepo.GetByCodeWithTx(tx, inviteCode)
 		if err == sql.ErrNoRows {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid invite code"})
 		}
