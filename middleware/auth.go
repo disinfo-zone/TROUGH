@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"errors"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -63,8 +64,25 @@ func Protected() fiber.Handler {
 			return e.t
 		}
 		pwMu.RUnlock()
+		
+		// Add timeout for database query
 		var changedAt time.Time
-		_ = models.DB().QueryRowx(`SELECT COALESCE(password_changed_at, to_timestamp(0)) FROM users WHERE id = $1`, userID).Scan(&changedAt)
+		changedAtChan := make(chan time.Time, 1)
+		go func() {
+			var dbChangedAt time.Time
+			_ = models.DB().QueryRowx(`SELECT COALESCE(password_changed_at, to_timestamp(0)) FROM users WHERE id = $1`, userID).Scan(&dbChangedAt)
+			changedAtChan <- dbChangedAt
+		}()
+		
+		select {
+		case dbChangedAt := <-changedAtChan:
+			changedAt = dbChangedAt
+		case <-time.After(5 * time.Second):
+			// If DB query times out, use default value to prevent hanging
+			log.Printf("Auth middleware: password_changed_at query timeout for user: %s", userID)
+			changedAt = time.Time{}
+		}
+		
 		pwMu.Lock()
 		if len(pwCache) >= pwCap {
 			// Simple bound: reset map when capacity reached

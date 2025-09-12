@@ -24,28 +24,37 @@ func Connect() error {
 
 	var err error
 
-	// Retry connection logic for Docker container startup
-	for i := 0; i < 30; i++ {
+	// Set connection timeout for faster failure detection
+	DB, err = sqlx.Connect("postgres", databaseURL)
+	if err == nil {
+		// Connection successful, configure connection pool
+		DB.SetMaxOpenConns(25)
+		DB.SetMaxIdleConns(25)
+		DB.SetConnMaxLifetime(30 * time.Minute)
+		DB.SetConnMaxIdleTime(5 * time.Minute)
+		return nil
+	}
+
+	// If immediate connection fails, retry with shorter timeout for faster feedback
+	fmt.Printf("Database connection failed: %v\n", err)
+	fmt.Printf("Retrying with shorter timeout (10 retries, 2 seconds each)...\n")
+	
+	for i := 0; i < 10; i++ {
 		DB, err = sqlx.Connect("postgres", databaseURL)
 		if err == nil {
-			break
+			// Connection successful, configure connection pool
+			DB.SetMaxOpenConns(25)
+			DB.SetMaxIdleConns(25)
+			DB.SetConnMaxLifetime(30 * time.Minute)
+			DB.SetConnMaxIdleTime(5 * time.Minute)
+			return nil
 		}
 
 		fmt.Printf("Database connection attempt %d failed: %v\n", i+1, err)
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 
-	if err != nil {
-		return fmt.Errorf("failed to connect to database after retries: %w", err)
-	}
-
-	DB.SetMaxOpenConns(25)
-	DB.SetMaxIdleConns(25)
-	// Recycle connections to prevent memory bloat and stale server-side state
-	DB.SetConnMaxLifetime(30 * time.Minute)
-	DB.SetConnMaxIdleTime(5 * time.Minute)
-
-	return nil
+	return fmt.Errorf("failed to connect to database after retries: %w", err)
 }
 
 func Migrate() error {

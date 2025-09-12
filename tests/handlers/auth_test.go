@@ -130,6 +130,19 @@ func (m *MockUserRepository) SearchUsers(q string, page, limit int) ([]models.Us
 	return users, total, args.Error(2)
 }
 
+func (m *MockUserRepository) CreateWithTx(tx *sqlx.Tx, user *models.User) error {
+	args := m.Called(tx, user)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) BeginTx() (*sqlx.Tx, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sqlx.Tx), args.Error(1)
+}
+
 func TestRegisterSuccess(t *testing.T) {
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
@@ -139,7 +152,8 @@ func TestRegisterSuccess(t *testing.T) {
 
 	mockRepo.On("GetByEmail", "test@example.com").Return(nil, sql.ErrNoRows)
 	mockRepo.On("GetByUsername", "testuser").Return(nil, sql.ErrNoRows)
-	mockRepo.On("Create", mock.AnythingOfType("*models.User")).Return(nil)
+	mockRepo.On("BeginTx").Return(nil, nil)
+	mockRepo.On("CreateWithTx", mock.Anything, mock.AnythingOfType("*models.User")).Return(nil)
 
 	reqBody := map[string]string{
 		"username": "testuser",
