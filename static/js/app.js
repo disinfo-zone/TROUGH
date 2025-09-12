@@ -1208,7 +1208,6 @@ class TroughApp {
     async handleLogin() {
         const email = document.getElementById('login-email').value.trim();
         const password = document.getElementById('login-password').value;
-        console.log('Attempting login with:', { email, password });
         if (!email || !password) { this.showAuthError('Please fill in all fields'); return; }
         this.showLoader(); this.hideAuthError();
         try {
