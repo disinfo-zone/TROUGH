@@ -18,11 +18,11 @@ import (
 )
 
 type AuthHandler struct {
-	userRepo            models.UserRepositoryInterface
-	settingsRepo        models.SiteSettingsRepositoryInterface
-	validator           *validator.Validate
-	newMailSender       func(*models.SiteSettings) services.MailSender
-	inviteRepo          models.InviteRepositoryInterface
+	userRepo               models.UserRepositoryInterface
+	settingsRepo           models.SiteSettingsRepositoryInterface
+	validator              *validator.Validate
+	newMailSender          func(*models.SiteSettings) services.MailSender
+	inviteRepo             models.InviteRepositoryInterface
 	progressiveRateLimiter *services.ProgressiveRateLimiter
 }
 
@@ -58,8 +58,6 @@ func (h *AuthHandler) GetPasswordRequirements(c *fiber.Ctx) error {
 	requirements := services.GetPasswordRequirements()
 	return c.JSON(requirements)
 }
-
-
 
 // For tests
 func (h *AuthHandler) WithMailFactory(f func(*models.SiteSettings) services.MailSender) *AuthHandler {
@@ -134,7 +132,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	// Add timeout context for database operations
 	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 	defer cancel()
-	
+
 	// Check if email already exists with timeout
 	emailCheckChan := make(chan *models.User, 1)
 	emailErrChan := make(chan error, 1)
@@ -146,9 +144,9 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		default:
 			// Continue with database operation
 		}
-		
+
 		user, err := h.userRepo.GetByEmail(req.Email)
-		
+
 		// Check context again before sending to channel
 		select {
 		case <-ctx.Done():
@@ -162,7 +160,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			emailCheckChan <- user
 		}
 	}()
-	
+
 	select {
 	case existingUser := <-emailCheckChan:
 		if existingUser != nil {
@@ -175,7 +173,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		log.Printf("register error: Email check timed out for email: %s", req.Email)
 		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Registration service unavailable"})
 	}
-	
+
 	// Check if username already exists with timeout
 	usernameCheckChan := make(chan *models.User, 1)
 	usernameErrChan := make(chan error, 1)
@@ -187,9 +185,9 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		default:
 			// Continue with database operation
 		}
-		
+
 		user, err := h.userRepo.GetByUsername(req.Username)
-		
+
 		// Check context again before sending to channel
 		select {
 		case <-ctx.Done():
@@ -203,7 +201,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			usernameCheckChan <- user
 		}
 	}()
-	
+
 	select {
 	case existingUser := <-usernameCheckChan:
 		if existingUser != nil {
@@ -264,7 +262,15 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			link := strings.TrimRight(set.SiteURL, "/") + "/verify?token=" + token
 			subj, bodyTxt := services.BuildVerificationEmail(set.SiteName, set.SiteURL, link)
 			// Send asynchronously via queue only (avoid duplicate immediate send)
-			services.EnqueueMail(u.Email, subj, bodyTxt)
+			// Use goroutine to prevent any email sending delays from blocking response
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("Email verification send panic recovered: %v", r)
+					}
+				}()
+				services.EnqueueMail(u.Email, subj, bodyTxt)
+			}()
 		}
 	}
 	token, err := middleware.GenerateToken(user.ID, user.Username)
@@ -291,7 +297,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if h.progressiveRateLimiter != nil {
 		h.progressiveRateLimiter.RecordSuccess(c.IP(), c)
 	}
-	
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }
 
@@ -308,22 +314,22 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 	}
-	
+
 	// Add timeout context for database operations
 	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 	defer cancel()
-	
+
 	// Smart login with timeout protection: check if identifier is an email, otherwise treat as username
 	var user *models.User
 	var err error
-	
+
 	userChan := make(chan *models.User, 1)
 	errChan := make(chan error, 1)
-	
+
 	go func() {
 		var result *models.User
 		var lookupErr error
-		
+
 		// Check if context was cancelled before starting DB operation
 		select {
 		case <-ctx.Done():
@@ -331,14 +337,14 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		default:
 			// Continue with database operation
 		}
-		
+
 		// Smart login: check if identifier is an email, otherwise treat as username
 		if _, e := mail.ParseAddress(identifier); e == nil {
 			result, lookupErr = h.userRepo.GetByEmail(identifier)
 		} else {
 			result, lookupErr = h.userRepo.GetByUsername(identifier)
 		}
-		
+
 		// Check context again before sending to channel
 		select {
 		case <-ctx.Done():
@@ -352,7 +358,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 			userChan <- result
 		}
 	}()
-	
+
 	select {
 	case user = <-userChan:
 		// Continue with user processing
@@ -371,7 +377,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		log.Printf("login error: Database operation timed out for identifier: %s", identifier)
 		return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{"error": "Authentication service unavailable"})
 	}
-	
+
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
 	}
@@ -408,7 +414,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if h.progressiveRateLimiter != nil {
 		h.progressiveRateLimiter.RecordSuccess(c.IP(), c)
 	}
-	
+
 	// Return user as-is; frontend can detect email_verified flag and display banner/actions
 	return c.JSON(fiber.Map{"user": user.ToResponse(), "token": token})
 }
