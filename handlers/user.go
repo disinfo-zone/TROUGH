@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"image"
