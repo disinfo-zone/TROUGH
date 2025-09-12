@@ -368,11 +368,11 @@ func main() {
 	pageRepo := models.NewPageRepository(db.DB)
 	// Seed default CMS pages once per boot if missing (respect tombstones)
 	seedDefaultPages(pageRepo, siteRepo)
-	
+
 	// Create rate limiters for enhanced security
 	rateLimiter := services.NewRateLimiter(config.RateLimiting)
 	progressiveRateLimiter := services.NewProgressiveRateLimiter(config.ProgressiveRateLimiting, config.RateLimiting)
-	
+
 	userHandler := handlers.NewUserHandler(userRepo, imageRepo, storage).WithSettings(siteRepo).WithCollect(collectRepo).WithPages(pageRepo)
 	inviteRepo := models.NewInviteRepository(db.DB)
 	adminHandler := handlers.NewAdminHandler(siteRepo, userRepo, imageRepo).WithStorage(storage).WithInvites(inviteRepo).WithPages(pageRepo).WithRateLimiter(rateLimiter).WithProgressiveRateLimiter(progressiveRateLimiter)
@@ -399,7 +399,7 @@ func main() {
 	// Initialize security components
 	csrfProtection := middleware.NewCSRFProtection(os.Getenv("CSRF_SECRET"))
 	securityHeaders := services.NewSecurityHeaders(nil)
-	
+
 	// Apply security headers globally
 	app.Use(securityHeaders.Middleware())
 
@@ -548,7 +548,7 @@ func main() {
 
 	// Add database health check middleware to all API routes
 	api.Use(middleware.DBPing())
-	
+
 	// Apply CSRF protection to API routes that change state
 	api.Use(csrfProtection.Middleware())
 
@@ -560,10 +560,10 @@ func main() {
 	api.Post("/forgot-password", progressiveRateLimiter.Middleware(), authHandler.ForgotPassword)
 	api.Post("/reset-password", progressiveRateLimiter.Middleware(), authHandler.ResetPassword)
 	api.Post("/verify-email", progressiveRateLimiter.Middleware(), authHandler.VerifyEmail)
-	
+
 	api.Get("/password-requirements", authHandler.GetPasswordRequirements)
 	api.Get("/invites/validate", adminHandler.ValidateInviteCode)
-	
+
 	// Public CSRF token endpoint for initial page load
 	api.Get("/csrf", func(c *fiber.Ctx) error {
 		// Only set a new CSRF token if one doesn't already exist
