@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"log"
+	"net/mail"
 	"os"
 	"strings"
 	"time"
@@ -147,21 +148,15 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	// If an invite is required, validate and consume it within the transaction
 	var consumedInviteID *uuid.UUID
 	if mustHaveInvite {
-		// First, check if the invite code exists at all
-		_, err := h.inviteRepo.GetByCodeWithTx(tx, inviteCode)
-		if err == sql.ErrNoRows {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid invite code"})
-		}
-		if err != nil {
-			// Other database errors during GetByCode
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate invite code"})
-		}
-
-		// Now, attempt to consume the invite code atomically
+		// Attempt to consume the invite code atomically.
+		// This single operation should implicitly validate existence, expiry, and usage limits.
 		inv, err := h.inviteRepo.ConsumeWithTx(tx, inviteCode)
 		if err != nil {
-			// This error covers expired, exhausted, or other consumption failures
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid or expired invite"})
+			// This error covers not found, expired, exhausted, or other consumption failures
+			if err == sql.ErrNoRows {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid invite code"})
+			}
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid or expired invite code"})
 		}
 		consumedInviteID = &inv.ID
 	}
@@ -227,19 +222,33 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
-	// Normalize email for lookup to match registration normalization
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	identifier := strings.ToLower(strings.TrimSpace(req.Identifier))
 	if err := h.validator.Struct(req); err != nil {
+		// Record authentication failure for progressive rate limiting
+		if h.progressiveRateLimiter != nil {
+			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Validation failed", "details": err.Error()})
 	}
-	user, err := h.userRepo.GetByEmail(req.Email)
+	var user *models.User
+	var err error
+	// Smart login: check if identifier is an email, otherwise treat as username
+	if _, e := mail.ParseAddress(identifier); e == nil {
+		user, err = h.userRepo.GetByEmail(identifier)
+	} else {
+		user, err = h.userRepo.GetByUsername(identifier)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+			// Record authentication failure for progressive rate limiting
+			if h.progressiveRateLimiter != nil {
+				h.progressiveRateLimiter.RecordFailure(c.IP(), c)
+			}
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid username or password"})
 		}
 		// Log server-side; avoid leaking DB state to clients
-		log.Printf("login error: GetByEmail failed: %v", err)
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+		log.Printf("login error: GetByEmail/GetByUsername failed: %v", err)
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication failed"})
 	}
 	if user.IsDisabled {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Account disabled"})
@@ -249,7 +258,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		if h.progressiveRateLimiter != nil {
 			h.progressiveRateLimiter.RecordFailure(c.IP(), c)
 		}
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid username or password"})
 	}
 	// Allow login even if email is not verified. We only gate privileged actions (uploads).
 	token, err := middleware.GenerateToken(user.ID, user.Username)
