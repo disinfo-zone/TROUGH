@@ -1185,7 +1185,7 @@ input, button {
 .user-bio a:hover { opacity: 0.85; }
 
 /* Align profile header/upload/bio with gallery */
-#profile-top { max-width: 1800px; margin: 0 auto; padding: calc(0px + var(--space-2xl)) var(--space-xl) 0; }
+#profile-top { max-width: 1800px; margin: 0 auto; padding: calc(10px + var(--space-2xl)) var(--space-xl) 0; }
 @media (max-width: 1400px) { #profile-top { padding-left: var(--space-lg); padding-right: var(--space-lg); } }
 /* Mobile-only: tighter top padding */
 @media (max-width: 600px)  { #profile-top { padding: calc(20px + var(--space-2xl)) var(--space-xl) 0; } }
