@@ -566,7 +566,7 @@ class TroughApp {
             }
 
             // After any route change, normalize gallery mode classes:
-            if (location.pathname.startsWith('/i/') || location.pathname === '/settings' || location.pathname === '/admin') {
+            if (location.pathname === '/settings' || location.pathname === '/admin') {
                 this.gallery.classList.add('settings-mode');
             } else {
                 this.gallery.classList.remove('settings-mode');
@@ -583,8 +583,14 @@ class TroughApp {
     // Begin a new render epoch and cleanup any pending async UI work
     beginRender(mode) {
         try {
+            if (this._imagePageResizeHandler) {
+                window.removeEventListener('resize', this._imagePageResizeHandler);
+                this._imagePageResizeHandler = null;
+            }
             this.renderEpoch++;
             this.routeMode = mode || this.routeMode || 'home';
+            try { document.getElementById('nav').classList.remove('nav-condensed'); } catch {}
+            if (this.profileTop) { this.profileTop.style.padding = ''; }
             // Cancel any staggered timers from previous view
             if (this.pendingTimers && this.pendingTimers.size) {
                 for (const id of this.pendingTimers) { try { clearTimeout(id); } catch {} }
@@ -3958,9 +3964,9 @@ class TroughApp {
 
     async renderImagePage(id) {
         if (this.magneticScroll && this.magneticScroll.updateEnabledState) this.magneticScroll.updateEnabledState();
-        if (this.profileTop) this.profileTop.innerHTML = '';
+        if (this.profileTop) { this.profileTop.innerHTML = ''; this.profileTop.style.padding = '34px 2rem 0'; }
         this.gallery.innerHTML = '';
-        this.gallery.classList.add('settings-mode');
+        try { document.getElementById('nav').classList.add('nav-condensed'); } catch {}
         // Ensure my collected set is hydrated for button state
         await this.seedMyCollectedSet();
         let data = null;
@@ -3978,11 +3984,11 @@ class TroughApp {
         }
         const wrap = document.createElement('section');
         wrap.className = 'mono-col';
-        wrap.style.cssText = 'margin:0 auto 16px;max-width:980px;padding:16px;color:var(--text-primary)';
+        wrap.style.cssText = 'margin:0 auto 16px;padding:16px;color:var(--text-primary)';
         const title = ((data.title && String(data.title).trim()) || data.original_name || 'Untitled');
         const username = data.username || 'unknown';
         const asciiFallback = '~ artificial reverie ~';
-        const captionText = (data.caption && String(data.caption).trim()) || '';
+        const captionText = data.caption ? String(data.caption).replace(/\n/g, ' ').replace(/[\*_`#~]/g, '') : '';
         const description = (username && captionText)
             ? `by @${username} — ${captionText}`
             : (username && !captionText)
@@ -3992,18 +3998,18 @@ class TroughApp {
                     : asciiFallback;
         const captionHtml = data.caption ? `<div class="image-caption" id="single-caption" style="margin-top:8px;color:var(--text-secondary);position:relative">${this.sanitizeAndRenderMarkdown(String(data.caption))}</div>` : '';
         wrap.innerHTML = `
-          <div style="display:grid;gap:12px">
-            <div class="single-header">
-              <h1 class="single-title" title="${this.escapeHTML(String(title))}">${this.escapeHTML(String(title))}</h1>
-              <div style="display:flex; align-items:center; gap:8px;">
-                <a href="/@${encodeURIComponent(username)}" class="single-username link-btn" style="text-decoration:none">@${this.escapeHTML(String(username))}</a>
-                <button id="single-collect" class="like-btn collect-btn" title="Collect">✧</button>
-              </div>
+          <div class="single-image-view-wrapper">
+            <div class="single-image-view">
+                <div class="single-header">
+                  <h1 class="single-title" title="${this.escapeHTML(String(title))}">${this.escapeHTML(String(title))}</h1>
+                  <div class="single-meta-line">
+                    <a href="/@${encodeURIComponent(username)}" class="single-username link-btn">@${this.escapeHTML(String(username))}</a>
+                    <button id="single-collect" class="like-btn collect-btn" title="Collect">✧</button>
+                  </div>
+                </div>
+                <img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:80vh;border-radius:10px; display: block; margin: 0 auto;"/>
+                ${captionHtml}
             </div>
-            <div style="position:relative;display:flex;justify-content:center">
-              <img src="${this.getImageURL(data.filename)}" alt="${title}" style="max-width:100%;max-height:76vh;border-radius:10px;"/>
-            </div>
-            ${captionHtml}
           </div>`;
         this.gallery.appendChild(wrap);
 
@@ -4052,22 +4058,6 @@ class TroughApp {
                 ensureName('twitter:image:alt').setAttribute('content', String(title));
             }
         } catch {}
-
-        // Allow expanding long titles on click (toggle multi-line clamp)
-        const titleEl = wrap.querySelector('.single-title');
-        if (titleEl) {
-            titleEl.setAttribute('role', 'button');
-            titleEl.setAttribute('tabindex', '0');
-            titleEl.setAttribute('aria-expanded', 'false');
-            const toggle = () => {
-                const expanded = titleEl.classList.toggle('expanded');
-                titleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            };
-            titleEl.addEventListener('click', toggle);
-            titleEl.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
-            });
-        }
 
         // Collapsible caption: clamp long captions and toggle on click
         const cap = wrap.querySelector('#single-caption');
@@ -4154,6 +4144,60 @@ class TroughApp {
                     if (collectBtn.classList.contains('collected')) this._myCollectedSet.add(String(data.id)); else this._myCollectedSet.delete(String(data.id));
                 };
             }
+        }
+
+        const imgEl = wrap.querySelector('.single-image-view img');
+        const viewEl = wrap.querySelector('.single-image-view');
+        const headerEl = wrap.querySelector('.single-header');
+        const titleEl = wrap.querySelector('.single-title');
+
+        if (imgEl && viewEl && headerEl && titleEl) {
+            headerEl.style.visibility = 'hidden';
+
+            const toggleTitleExpansion = () => {
+                if (titleEl.classList.contains('expandable')) {
+                    const expanded = titleEl.classList.toggle('expanded');
+                    headerEl.classList.toggle('expanded', expanded);
+                    titleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                }
+            };
+            titleEl.addEventListener('click', toggleTitleExpansion);
+            titleEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTitleExpansion(); }
+            });
+
+            const updateLayout = () => {
+                const imgWidth = imgEl.clientWidth;
+                if (imgWidth > 0) {
+                    viewEl.style.width = `${imgWidth}px`;
+                    headerEl.style.visibility = 'visible';
+
+                    const isOverflowing = titleEl.scrollWidth > titleEl.clientWidth;
+                    if (isOverflowing) {
+                        titleEl.classList.add('expandable');
+                        titleEl.setAttribute('role', 'button');
+                        titleEl.setAttribute('tabindex', '0');
+                    } else {
+                        titleEl.classList.remove('expandable', 'expanded');
+                        headerEl.classList.remove('expanded');
+                        titleEl.removeAttribute('role');
+                        titleEl.removeAttribute('tabindex');
+                        titleEl.removeAttribute('aria-expanded');
+                    }
+                }
+            };
+
+            if (imgEl.complete && imgEl.naturalWidth > 0) {
+                updateLayout();
+            } else {
+                imgEl.onload = updateLayout;
+            }
+
+            if (this._imagePageResizeHandler) {
+                window.removeEventListener('resize', this._imagePageResizeHandler);
+            }
+            this._imagePageResizeHandler = updateLayout;
+            window.addEventListener('resize', this._imagePageResizeHandler);
         }
     }
 
@@ -4955,46 +4999,6 @@ class MagneticScroll {
     highlightCard(card) {
         document.querySelectorAll('.image-card.in-focus, .image-card.focused').forEach(el => { el.classList.remove('in-focus'); el.classList.remove('focused'); });
         if (card) { card.classList.add('in-focus'); card.classList.add('focused'); }
-    }
-
-    animateScrollTo(targetY) {
-        this.cancelAnimation();
-        const startY = window.scrollY;
-        const distance = Math.abs(targetY - startY);
-        if (distance < 3) { window.scrollTo(0, targetY); return; }
-        const duration = Math.min(this.config.animationDuration.max, Math.max(this.config.animationDuration.min, this.config.animationDuration.min + (distance * this.config.animationDuration.perPixel)));
-        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { window.scrollTo(0, targetY); return; }
-        const startTime = performance.now();
-        this.state.isAnimating = true;
-        const easeOutQuint = (t) => 1 - Math.pow(1 - t, 5);
-        const animate = () => {
-            if (!this.state.isAnimating) return;
-            const now = performance.now();
-            const elapsed = now - startTime;
-            const progress = Math.min(1, elapsed / duration);
-            const eased = easeOutQuint(progress);
-            const currentY = startY + (targetY - startY) * eased;
-            window.scrollTo(0, Math.round(currentY));
-            if (progress < 1) this.state.animationId = requestAnimationFrame(animate);
-            else { this.state.isAnimating = false; this.state.animationId = null; }
-        };
-        this.state.animationId = requestAnimationFrame(animate);
-    }
-
-    cancelAnimation() {
-        if (this.state.animationId) { cancelAnimationFrame(this.state.animationId); this.state.animationId = null; }
-        this.state.isAnimating = false;
-    }
-
-    highlightCard(card) {
-        document.querySelectorAll('.image-card.magnetic-focused, .image-card.focused').forEach(el => {
-            el.classList.remove('magnetic-focused');
-            el.classList.remove('focused');
-        });
-        if (card) {
-            card.classList.add('magnetic-focused');
-            card.classList.add('focused');
-        }
     }
 }
 

@@ -342,6 +342,11 @@ input, button {
     align-items: center;
 }
 
+.nav.nav-condensed .nav-content {
+  padding-top: var(--space-sm);
+  padding-bottom: var(--space-sm);
+}
+
 /* Prevent auth button text from pushing the logo or causing overflow */
 #auth-btn {
   max-width: 50vw;
@@ -588,7 +593,7 @@ input, button {
 #single-caption { display: block; }
 
 /* Single image page header: keep image centered; title should not push layout */
-.single-header { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; min-width:0; flex-wrap: wrap; }
+.single-header { display:flex; align-items:center; gap: 12px; min-width:0; padding-bottom: 16px; }
 .single-username { flex: 0 0 auto; }
 .single-title {
   flex: 1 1 auto;
@@ -610,12 +615,19 @@ input, button {
   flex-basis: 100%;
 }
 /* Click affordance */
-.single-title:not(.expanded)::after { content: " \25BE"; opacity: 0.6; font-size: 0.9em; }
-.single-title.expanded::after { content: " \25B4"; opacity: 0.6; font-size: 0.9em; }
+.single-title.expandable:not(.expanded)::after { content: " \25BE"; opacity: 0.6; font-size: 0.9em; }
+.single-title.expandable.expanded::after { content: " \25B4"; opacity: 0.6; font-size: 0.9em; }
 .single-title:not(.expanded):hover { text-decoration: underline dotted; text-underline-offset: 3px; }
 @media (max-width: 600px) {
-  .single-header { align-items: flex-start; gap: 8px; }
-  .single-username { order: 2; }
+  .single-header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px !important; }
+  .single-meta-line { justify-content: space-between; width: 100%; align-items: center; }
+  .single-username {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+    max-width: 70vw;
+  }
 
 /* Prevent horizontal overflow due to long usernames on profile header */
 .profile-username {
@@ -631,7 +643,6 @@ input, button {
     overflow-x: hidden;
   }
 }
-  .single-title { order: 1; }
 }
 
 /* LIGHTBOX */
@@ -1156,10 +1167,10 @@ input, button {
   width: 0%;
   transition: width var(--duration-normal) var(--ease-out);
 }
-#password-strength .pw-seg:nth-child(1) .fill, #pw-strength .pw-seg:nth-child(1) .fill { background: #ff0f0f; }
-#password-strength .pw-seg:nth-child(2) .fill, #pw-strength .pw-seg:nth-child(2) .fill { background: #f5740b; }
-#password-strength .pw-seg:nth-child(3) .fill, #pw-strength .pw-seg:nth-child(3) .fill { background: #f3db05; }
-#password-strength .pw-seg:nth-child(4) .fill, #pw-strength .pw-seg:nth-child(4) .fill { background: #10b948; }
+#password-strength .pw-seg:nth-child(1) .fill, #password-strength .pw-seg:nth-child(1) .fill { background: #ff0f0f; }
+#password-strength .pw-seg:nth-child(2) .fill, #password-strength .pw-seg:nth-child(2) .fill { background: #f5740b; }
+#password-strength .pw-seg:nth-child(3) .fill, #password-strength .pw-seg:nth-child(3) .fill { background: #f3db05; }
+#password-strength .pw-seg:nth-child(4) .fill, #password-strength .pw-seg:nth-child(4) .fill { background: #10b948; }
 
 /* Shimmer reward on final segment when fully strong */
 #password-strength .pw-seg:nth-child(4) .fill.shimmer,
@@ -1518,4 +1529,21 @@ input[type="file"]::file-selector-button:hover { background: var(--surface); }
   #profile-logout:hover {
     filter: brightness(1.05);
   }
+}
+
+.single-image-view-wrapper {
+  text-align: center;
+}
+.single-image-view {
+  display: inline-block;
+  text-align: left;
+  max-width: 100%;
+}
+
+.single-meta-line {
+  flex-shrink: 0;
+}
+.single-header.expanded {
+  flex-wrap: wrap;
+  align-items: flex-start;
 }
