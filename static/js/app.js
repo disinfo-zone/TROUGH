@@ -981,8 +981,6 @@ class TroughApp {
             if (href.startsWith('/i/')) {
                 const id = href.split('/')[2];
             await this.renderImagePage(id);
-            // Ensure single-image is in single-column mode only
-            this.gallery.classList.add('settings-mode');
             } else if (href.startsWith('/@')) {
                 const u = decodeURIComponent(href.slice(2));
                 // Explicit navigation to profile should be fresh (no restore)
@@ -4188,7 +4186,7 @@ class TroughApp {
             };
 
             if (imgEl.complete && imgEl.naturalWidth > 0) {
-                updateLayout();
+                setTimeout(updateLayout, 0);
             } else {
                 imgEl.onload = updateLayout;
             }
