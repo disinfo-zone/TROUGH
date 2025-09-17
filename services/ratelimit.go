@@ -78,7 +78,7 @@ type ProgressiveRateLimiter struct {
 	baseConfig      RateLimitConfig
 	stats           RateLimitStats
 	startTime       time.Time
-	cleanupTimer    *time.Timer
+	cleanupTicker    *time.Ticker
 	stopCleanup     chan struct{}
 	securityEvents  []SecurityEvent
 	eventCallback   func(SecurityEvent)
@@ -99,7 +99,7 @@ type RateLimiter struct {
 	config       RateLimitConfig
 	stats        RateLimitStats
 	startTime    time.Time
-	cleanupTimer  *time.Timer
+	cleanupTicker  *time.Ticker
 	stopCleanup  chan struct{}
 	trustedProxyMap map[string]bool
 }
@@ -321,14 +321,13 @@ func (rl *RateLimiter) evictLRU() {
 
 // startCleanup starts the background cleanup goroutine
 func (rl *RateLimiter) startCleanup() {
-	rl.cleanupTimer = time.NewTimer(rl.config.CleanupInterval)
+	rl.cleanupTicker = time.NewTicker(rl.config.CleanupInterval)
 	
 	go func() {
 		for {
 			select {
-			case <-rl.cleanupTimer.C:
+			case <-rl.cleanupTicker.C:
 				rl.cleanup()
-				rl.cleanupTimer.Reset(rl.config.CleanupInterval)
 			case <-rl.stopCleanup:
 				return
 			}
@@ -380,8 +379,8 @@ func (rl *RateLimiter) GetStats() RateLimitStats {
 // Stop gracefully shuts down the rate limiter
 func (rl *RateLimiter) Stop() {
 	close(rl.stopCleanup)
-	if rl.cleanupTimer != nil {
-		rl.cleanupTimer.Stop()
+	if rl.cleanupTicker != nil {
+		rl.cleanupTicker.Stop()
 	}
 }
 
@@ -774,14 +773,13 @@ func (prl *ProgressiveRateLimiter) getResetTime(ip string) time.Time {
 
 // startCleanup starts the background cleanup goroutine
 func (prl *ProgressiveRateLimiter) startCleanup() {
-	prl.cleanupTimer = time.NewTimer(prl.baseConfig.CleanupInterval)
+	prl.cleanupTicker = time.NewTicker(prl.baseConfig.CleanupInterval)
 	
 	go func() {
 		for {
 			select {
-			case <-prl.cleanupTimer.C:
+			case <-prl.cleanupTicker.C:
 				prl.cleanup()
-				prl.cleanupTimer.Reset(prl.baseConfig.CleanupInterval)
 			case <-prl.stopCleanup:
 				return
 			}
@@ -900,7 +898,7 @@ func (prl *ProgressiveRateLimiter) logSecurityEvent(eventType, ip, path, method,
 // Stop gracefully shuts down the progressive rate limiter
 func (prl *ProgressiveRateLimiter) Stop() {
 	close(prl.stopCleanup)
-	if prl.cleanupTimer != nil {
-		prl.cleanupTimer.Stop()
+	if prl.cleanupTicker != nil {
+		prl.cleanupTicker.Stop()
 	}
 }
