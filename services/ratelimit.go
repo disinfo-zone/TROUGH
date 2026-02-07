@@ -1,9 +1,7 @@
 package services
 
 import (
-	"context"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -47,27 +45,27 @@ type SecurityEvent struct {
 
 // ProgressiveRateLimitConfig defines configuration for progressive rate limiting
 type ProgressiveRateLimitConfig struct {
-	BaseWindow     time.Duration `yaml:"base_window" default:"1m"`
-	MaxWindow      time.Duration `yaml:"max_window" default:"1h"`
-	BaseCapacity   int           `yaml:"base_capacity" default:"60"`
-	MinCapacity    int           `yaml:"min_capacity" default:"5"`
-	BackoffFactor  float64       `yaml:"backoff_factor" default:"2.0"`
-	LockoutThreshold int          `yaml:"lockout_threshold" default:"10"`
-	LockoutDuration time.Duration `yaml:"lockout_duration" default:"15m"`
-	EnableLogging  bool          `yaml:"enable_logging" default:"true"`
+	BaseWindow       time.Duration `yaml:"base_window" default:"1m"`
+	MaxWindow        time.Duration `yaml:"max_window" default:"1h"`
+	BaseCapacity     int           `yaml:"base_capacity" default:"60"`
+	MinCapacity      int           `yaml:"min_capacity" default:"5"`
+	BackoffFactor    float64       `yaml:"backoff_factor" default:"2.0"`
+	LockoutThreshold int           `yaml:"lockout_threshold" default:"10"`
+	LockoutDuration  time.Duration `yaml:"lockout_duration" default:"15m"`
+	EnableLogging    bool          `yaml:"enable_logging" default:"true"`
 }
 
 // progressiveEntry represents a progressive rate limiting entry
 type progressiveEntry struct {
-	currentWindow  time.Time
-	currentCapacity int
+	currentWindow       time.Time
+	currentCapacity     int
 	consecutiveFailures int
-	totalAttempts      int
-	firstFailure       time.Time
-	isLockedOut        bool
-	lockoutUntil       time.Time
-	lastUpdated       time.Time
-	ipAddress         string
+	totalAttempts       int
+	firstFailure        time.Time
+	isLockedOut         bool
+	lockoutUntil        time.Time
+	lastUpdated         time.Time
+	ipAddress           string
 }
 
 // ProgressiveRateLimiter provides progressive rate limiting with backoff
@@ -78,8 +76,9 @@ type ProgressiveRateLimiter struct {
 	baseConfig      RateLimitConfig
 	stats           RateLimitStats
 	startTime       time.Time
-	cleanupTicker    *time.Ticker
+	cleanupTicker   *time.Ticker
 	stopCleanup     chan struct{}
+	trustedProxyMap map[string]bool
 	securityEvents  []SecurityEvent
 	eventCallback   func(SecurityEvent)
 }
@@ -94,13 +93,13 @@ type rlEntry struct {
 
 // RateLimiter provides enhanced rate limiting with LRU eviction and cleanup
 type RateLimiter struct {
-	mu           sync.RWMutex
-	entries      map[string]*rlEntry
-	config       RateLimitConfig
-	stats        RateLimitStats
-	startTime    time.Time
-	cleanupTicker  *time.Ticker
-	stopCleanup  chan struct{}
+	mu              sync.RWMutex
+	entries         map[string]*rlEntry
+	config          RateLimitConfig
+	stats           RateLimitStats
+	startTime       time.Time
+	cleanupTicker   *time.Ticker
+	stopCleanup     chan struct{}
 	trustedProxyMap map[string]bool
 }
 
@@ -119,14 +118,22 @@ func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 	// Build trusted proxy map for O(1) lookups
 	trustedProxyMap := make(map[string]bool)
 	for _, proxy := range config.TrustedProxies {
-		trustedProxyMap[proxy] = true
+		p := strings.TrimSpace(proxy)
+		if p == "" {
+			continue
+		}
+		if parsed := net.ParseIP(p); parsed != nil {
+			trustedProxyMap[parsed.String()] = true
+			continue
+		}
+		trustedProxyMap[p] = true
 	}
 
 	rl := &RateLimiter{
-		entries:        make(map[string]*rlEntry),
-		config:         config,
-		startTime:      time.Now(),
-		stopCleanup:    make(chan struct{}),
+		entries:         make(map[string]*rlEntry),
+		config:          config,
+		startTime:       time.Now(),
+		stopCleanup:     make(chan struct{}),
 		trustedProxyMap: trustedProxyMap,
 	}
 
@@ -139,24 +146,7 @@ func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 // Middleware returns a Fiber middleware for rate limiting
 func (rl *RateLimiter) Middleware(capacity int, refill time.Duration) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Add timeout to prevent rate limiter from hanging
-		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
-		defer cancel()
-		
-		ipChan := make(chan string, 1)
-		go func() {
-			ipChan <- rl.getClientIP(c)
-		}()
-		
-		var ip string
-		select {
-		case ip = <-ipChan:
-		case <-ctx.Done():
-			// If IP extraction times out, allow request but log it
-			log.Printf("Rate limiter IP extraction timeout, allowing request")
-			return c.Next()
-		}
-		
+		ip := rl.getClientIP(c)
 		if ip == "" {
 			// If we can't get a valid IP, allow the request but log it
 			if rl.config.EnableDebug {
@@ -165,21 +155,11 @@ func (rl *RateLimiter) Middleware(capacity int, refill time.Duration) fiber.Hand
 			return c.Next()
 		}
 
-		allowedChan := make(chan bool, 1)
-		go func() {
-			allowedChan <- rl.allowRequest(ip, capacity, refill)
-		}()
-		
-		var allowed bool
-		select {
-		case allowed = <-allowedChan:
-		case <-ctx.Done():
-			log.Printf("Rate limiter decision timeout for IP: %s, allowing request", ip)
-			return c.Next()
-		}
-		
+		allowed := rl.allowRequest(ip, capacity, refill)
 		if !allowed {
+			rl.mu.Lock()
 			rl.stats.DeniedCount++
+			rl.mu.Unlock()
 			if rl.config.EnableDebug {
 				rl.logDebug("Rate limit exceeded for IP: %s", ip)
 			}
@@ -229,34 +209,62 @@ func (rl *RateLimiter) allowRequest(ip string, capacity int, refill time.Duratio
 	return true
 }
 
-// getClientIP extracts the real client IP address, handling proxies
-func (rl *RateLimiter) getClientIP(c *fiber.Ctx) string {
-	// Try to get real IP from X-Forwarded-For header
-	if forwarded := c.Get("X-Forwarded-For"); forwarded != "" {
-		ips := strings.Split(forwarded, ",")
-		if len(ips) > 0 {
-			// Get the leftmost IP (original client)
-			clientIP := strings.TrimSpace(ips[0])
-			if rl.isValidIP(clientIP) {
-				return rl.normalizeIP(clientIP)
+func (rl *RateLimiter) isTrustedProxy(ip string) bool {
+	if ip == "" {
+		return false
+	}
+	normalized := rl.normalizeIP(ip)
+	return rl.trustedProxyMap[normalized]
+}
+
+func isLoopbackAddress(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
+
+func extractForwardedClientIP(getHeader func(string) string, isValid func(string) bool, normalize func(string) string) string {
+	// Cloudflare Tunnel / Cloudflare edge headers.
+	for _, headerName := range []string{"CF-Connecting-IP", "CF-Connecting-IPv6", "True-Client-IP"} {
+		if value := strings.TrimSpace(getHeader(headerName)); value != "" && isValid(value) {
+			return normalize(value)
+		}
+	}
+
+	// Standard proxy chain; take the left-most valid address.
+	if forwarded := strings.TrimSpace(getHeader("X-Forwarded-For")); forwarded != "" {
+		for _, part := range strings.Split(forwarded, ",") {
+			candidate := strings.TrimSpace(part)
+			if candidate != "" && isValid(candidate) {
+				return normalize(candidate)
 			}
 		}
 	}
 
-	// Try X-Real-IP header
-	if realIP := c.Get("X-Real-IP"); realIP != "" {
-		if rl.isValidIP(realIP) {
-			return rl.normalizeIP(realIP)
-		}
-	}
-
-	// Fall back to remote address
-	remoteAddr := c.IP()
-	if remoteAddr != "" && rl.isValidIP(remoteAddr) {
-		return rl.normalizeIP(remoteAddr)
+	if realIP := strings.TrimSpace(getHeader("X-Real-IP")); realIP != "" && isValid(realIP) {
+		return normalize(realIP)
 	}
 
 	return ""
+}
+
+// getClientIP extracts the real client IP address, handling proxies
+func (rl *RateLimiter) getClientIP(c *fiber.Ctx) string {
+	remoteAddr := c.IP()
+	if remoteAddr == "" || !rl.isValidIP(remoteAddr) {
+		return ""
+	}
+	remoteAddr = rl.normalizeIP(remoteAddr)
+
+	// Only trust forwarding headers from known proxy hops.
+	// Loopback is always trusted to support local tunnel agents (e.g. cloudflared).
+	if rl.isTrustedProxy(remoteAddr) || isLoopbackAddress(remoteAddr) {
+		if clientIP := extractForwardedClientIP(func(key string) string { return c.Get(key) }, rl.isValidIP, rl.normalizeIP); clientIP != "" {
+			return clientIP
+		}
+	}
+
+	// Fall back to the direct peer address.
+	return remoteAddr
 }
 
 // isValidIP checks if an IP address is valid
@@ -322,7 +330,7 @@ func (rl *RateLimiter) evictLRU() {
 // startCleanup starts the background cleanup goroutine
 func (rl *RateLimiter) startCleanup() {
 	rl.cleanupTicker = time.NewTicker(rl.config.CleanupInterval)
-	
+
 	go func() {
 		for {
 			select {
@@ -367,7 +375,7 @@ func (rl *RateLimiter) GetStats() RateLimitStats {
 	stats := rl.stats
 	stats.TotalEntries = int64(len(rl.entries))
 	stats.Uptime = time.Since(rl.startTime)
-	
+
 	// Estimate memory usage (rough calculation)
 	// Each entry: ~88 bytes (map overhead + entry struct)
 	estimatedMemory := stats.TotalEntries * 88
@@ -424,12 +432,24 @@ func NewProgressiveRateLimiter(config ProgressiveRateLimitConfig, baseConfig Rat
 	}
 
 	prl := &ProgressiveRateLimiter{
-		entries:        make(map[string]*progressiveEntry),
-		config:         config,
-		baseConfig:     baseConfig,
-		startTime:      time.Now(),
-		stopCleanup:    make(chan struct{}),
-		securityEvents: make([]SecurityEvent, 0),
+		entries:         make(map[string]*progressiveEntry),
+		config:          config,
+		baseConfig:      baseConfig,
+		startTime:       time.Now(),
+		stopCleanup:     make(chan struct{}),
+		trustedProxyMap: make(map[string]bool),
+		securityEvents:  make([]SecurityEvent, 0),
+	}
+	for _, proxy := range baseConfig.TrustedProxies {
+		p := strings.TrimSpace(proxy)
+		if p == "" {
+			continue
+		}
+		if parsed := net.ParseIP(p); parsed != nil {
+			prl.trustedProxyMap[parsed.String()] = true
+			continue
+		}
+		prl.trustedProxyMap[p] = true
 	}
 
 	// Start background cleanup
@@ -441,24 +461,7 @@ func NewProgressiveRateLimiter(config ProgressiveRateLimitConfig, baseConfig Rat
 // Middleware returns a Fiber middleware for progressive rate limiting
 func (prl *ProgressiveRateLimiter) Middleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Add timeout to prevent rate limiter from hanging
-		ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
-		defer cancel()
-		
-		ipChan := make(chan string, 1)
-		go func() {
-			ipChan <- prl.getClientIP(c)
-		}()
-		
-		var ip string
-		select {
-		case ip = <-ipChan:
-		case <-ctx.Done():
-			// If IP extraction times out, allow request but log it
-			log.Printf("Rate limiter IP extraction timeout, allowing request")
-			return c.Next()
-		}
-		
+		ip := prl.getClientIP(c)
 		if ip == "" {
 			// If we can't get a valid IP, allow the request but log it
 			prl.mu.Lock()
@@ -467,29 +470,12 @@ func (prl *ProgressiveRateLimiter) Middleware() fiber.Handler {
 			return c.Next()
 		}
 
-		allowedChan := make(chan bool, 1)
-		retryAfterChan := make(chan time.Duration, 1)
-		
-		go func() {
-			allowed, retryAfter := prl.allowRequest(ip, c)
-			allowedChan <- allowed
-			retryAfterChan <- retryAfter
-		}()
-		
-		var allowed bool
-		var retryAfter time.Duration
-		
-		select {
-		case allowed = <-allowedChan:
-			retryAfter = <-retryAfterChan
-		case <-ctx.Done():
-			log.Printf("Rate limiter decision timeout for IP: %s, allowing request", ip)
-			return c.Next()
-		}
-		
+		allowed, retryAfter := prl.allowRequest(ip, c)
 		if !allowed {
+			prl.mu.Lock()
 			prl.stats.DeniedCount++
-			
+			prl.mu.Unlock()
+
 			// Log security event
 			eventType := "RATE_LIMIT_EXCEEDED"
 			severity := "medium"
@@ -497,8 +483,8 @@ func (prl *ProgressiveRateLimiter) Middleware() fiber.Handler {
 				eventType = "ACCOUNT_LOCKOUT"
 				severity = "high"
 			}
-			
-			prl.logSecurityEvent(eventType, ip, c.Path(), c.Method(), severity, 
+
+			prl.logSecurityEvent(eventType, ip, c.Path(), c.Method(), severity,
 				fmt.Sprintf("Rate limit exceeded. Retry after: %s", retryAfter))
 
 			// Set retry-after header
@@ -510,9 +496,9 @@ func (prl *ProgressiveRateLimiter) Middleware() fiber.Handler {
 			}
 
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
-				"error":      "Too many requests",
+				"error":       "Too many requests",
 				"retry_after": retryAfter,
-				"locked_out": prl.isLockedOut(ip),
+				"locked_out":  prl.isLockedOut(ip),
 			})
 		}
 
@@ -549,7 +535,7 @@ func (prl *ProgressiveRateLimiter) allowRequest(ip string, c *fiber.Ctx) (bool, 
 	// Create new entry if it doesn't exist or window has expired
 	if !exists || now.After(entry.currentWindow.Add(prl.config.BaseWindow)) {
 		capacity := prl.config.BaseCapacity
-		
+
 		// Reduce capacity based on previous failures
 		if exists && entry.consecutiveFailures > 0 {
 			reductionFactor := prl.config.BackoffFactor
@@ -563,15 +549,15 @@ func (prl *ProgressiveRateLimiter) allowRequest(ip string, c *fiber.Ctx) (bool, 
 		}
 
 		entry = &progressiveEntry{
-			currentWindow:  now,
-			currentCapacity: capacity,
+			currentWindow:       now,
+			currentCapacity:     capacity,
 			consecutiveFailures: 0,
-			totalAttempts:      0,
-			firstFailure:       time.Time{},
-			isLockedOut:        false,
-			lockoutUntil:       time.Time{},
-			lastUpdated:       now,
-			ipAddress:         ip,
+			totalAttempts:       0,
+			firstFailure:        time.Time{},
+			isLockedOut:         false,
+			lockoutUntil:        time.Time{},
+			lastUpdated:         now,
+			ipAddress:           ip,
 		}
 		prl.entries[ip] = entry
 		prl.stats.TotalEntries++
@@ -584,15 +570,15 @@ func (prl *ProgressiveRateLimiter) allowRequest(ip string, c *fiber.Ctx) (bool, 
 	// Check if request is allowed
 	if entry.currentCapacity <= 0 {
 		entry.consecutiveFailures++
-		
+
 		// Check if we should lock out this IP
 		if entry.consecutiveFailures >= prl.config.LockoutThreshold {
 			entry.isLockedOut = true
 			entry.lockoutUntil = now.Add(prl.config.LockoutDuration)
-			
-			prl.logSecurityEvent("ACCOUNT_LOCKOUT", ip, c.Path(), c.Method(), "high", 
+
+			prl.logSecurityEvent("ACCOUNT_LOCKOUT", ip, c.Path(), c.Method(), "high",
 				fmt.Sprintf("IP locked out after %d consecutive failures", entry.consecutiveFailures))
-			
+
 			return false, prl.config.LockoutDuration
 		}
 
@@ -614,7 +600,7 @@ func (prl *ProgressiveRateLimiter) allowRequest(ip string, c *fiber.Ctx) (bool, 
 		}
 
 		prl.logSecurityEvent("PROGRESSIVE_BACKOFF", ip, c.Path(), c.Method(), "medium",
-			fmt.Sprintf("Progressive backoff applied: %d consecutive failures, window: %s", 
+			fmt.Sprintf("Progressive backoff applied: %d consecutive failures, window: %s",
 				entry.consecutiveFailures, backoffWindow))
 
 		return false, backoffWindow
@@ -634,15 +620,15 @@ func (prl *ProgressiveRateLimiter) RecordFailure(ip string, c *fiber.Ctx) {
 
 	if !exists {
 		entry = &progressiveEntry{
-			currentWindow:  now,
-			currentCapacity: prl.config.BaseCapacity,
+			currentWindow:       now,
+			currentCapacity:     prl.config.BaseCapacity,
 			consecutiveFailures: 0,
-			totalAttempts:      0,
-			firstFailure:       time.Time{},
-			isLockedOut:        false,
-			lockoutUntil:       time.Time{},
-			lastUpdated:       now,
-			ipAddress:         ip,
+			totalAttempts:       0,
+			firstFailure:        time.Time{},
+			isLockedOut:         false,
+			lockoutUntil:        time.Time{},
+			lastUpdated:         now,
+			ipAddress:           ip,
 		}
 		prl.entries[ip] = entry
 		prl.stats.TotalEntries++
@@ -650,7 +636,7 @@ func (prl *ProgressiveRateLimiter) RecordFailure(ip string, c *fiber.Ctx) {
 
 	entry.consecutiveFailures++
 	entry.totalAttempts++
-	
+
 	if entry.firstFailure.IsZero() {
 		entry.firstFailure = now
 	}
@@ -659,7 +645,7 @@ func (prl *ProgressiveRateLimiter) RecordFailure(ip string, c *fiber.Ctx) {
 	if entry.consecutiveFailures >= prl.config.LockoutThreshold {
 		entry.isLockedOut = true
 		entry.lockoutUntil = now.Add(prl.config.LockoutDuration)
-		
+
 		prl.logSecurityEvent("AUTH_FAILURE_LOCKOUT", ip, c.Path(), c.Method(), "high",
 			fmt.Sprintf("Authentication failure lockout: %d consecutive failures", entry.consecutiveFailures))
 	} else {
@@ -680,7 +666,7 @@ func (prl *ProgressiveRateLimiter) RecordSuccess(ip string, c *fiber.Ctx) {
 			prl.logSecurityEvent("AUTH_SUCCESS", ip, c.Path(), c.Method(), "low",
 				fmt.Sprintf("Authentication success after %d failures", entry.consecutiveFailures))
 		}
-		
+
 		entry.consecutiveFailures = 0
 		entry.firstFailure = time.Time{}
 		entry.currentCapacity = prl.config.BaseCapacity
@@ -691,32 +677,21 @@ func (prl *ProgressiveRateLimiter) RecordSuccess(ip string, c *fiber.Ctx) {
 
 // Helper methods
 func (prl *ProgressiveRateLimiter) getClientIP(c *fiber.Ctx) string {
-	// Try to get real IP from X-Forwarded-For header
-	if forwarded := c.Get("X-Forwarded-For"); forwarded != "" {
-		ips := strings.Split(forwarded, ",")
-		if len(ips) > 0 {
-			// Get the leftmost IP (original client)
-			clientIP := strings.TrimSpace(ips[0])
-			if prl.isValidIP(clientIP) {
-				return prl.normalizeIP(clientIP)
-			}
-		}
-	}
-
-	// Try X-Real-IP header
-	if realIP := c.Get("X-Real-IP"); realIP != "" {
-		if prl.isValidIP(realIP) {
-			return prl.normalizeIP(realIP)
-		}
-	}
-
-	// Fall back to remote address
 	remoteAddr := c.IP()
-	if remoteAddr != "" && prl.isValidIP(remoteAddr) {
-		return prl.normalizeIP(remoteAddr)
+	if remoteAddr == "" || !prl.isValidIP(remoteAddr) {
+		return ""
+	}
+	remoteAddr = prl.normalizeIP(remoteAddr)
+
+	// Only trust forwarding headers from known proxy hops.
+	// Loopback is always trusted to support local tunnel agents (e.g. cloudflared).
+	if prl.trustedProxyMap[remoteAddr] || isLoopbackAddress(remoteAddr) {
+		if clientIP := extractForwardedClientIP(func(key string) string { return c.Get(key) }, prl.isValidIP, prl.normalizeIP); clientIP != "" {
+			return clientIP
+		}
 	}
 
-	return ""
+	return remoteAddr
 }
 
 func (prl *ProgressiveRateLimiter) isValidIP(ip string) bool {
@@ -738,16 +713,22 @@ func (prl *ProgressiveRateLimiter) normalizeIP(ip string) string {
 }
 
 func (prl *ProgressiveRateLimiter) isLockedOut(ip string) bool {
+	prl.mu.RLock()
+	defer prl.mu.RUnlock()
+
 	entry, exists := prl.entries[ip]
 	if !exists {
 		return false
 	}
-	
+
 	now := time.Now()
 	return entry.isLockedOut && now.Before(entry.lockoutUntil)
 }
 
 func (prl *ProgressiveRateLimiter) getCurrentCapacity(ip string) int {
+	prl.mu.RLock()
+	defer prl.mu.RUnlock()
+
 	entry, exists := prl.entries[ip]
 	if !exists {
 		return prl.config.BaseCapacity
@@ -756,6 +737,9 @@ func (prl *ProgressiveRateLimiter) getCurrentCapacity(ip string) int {
 }
 
 func (prl *ProgressiveRateLimiter) getRemainingTokens(ip string) int {
+	prl.mu.RLock()
+	defer prl.mu.RUnlock()
+
 	entry, exists := prl.entries[ip]
 	if !exists {
 		return prl.config.BaseCapacity
@@ -764,6 +748,9 @@ func (prl *ProgressiveRateLimiter) getRemainingTokens(ip string) int {
 }
 
 func (prl *ProgressiveRateLimiter) getResetTime(ip string) time.Time {
+	prl.mu.RLock()
+	defer prl.mu.RUnlock()
+
 	entry, exists := prl.entries[ip]
 	if !exists {
 		return time.Now().Add(prl.config.BaseWindow)
@@ -774,7 +761,7 @@ func (prl *ProgressiveRateLimiter) getResetTime(ip string) time.Time {
 // startCleanup starts the background cleanup goroutine
 func (prl *ProgressiveRateLimiter) startCleanup() {
 	prl.cleanupTicker = time.NewTicker(prl.baseConfig.CleanupInterval)
-	
+
 	go func() {
 		for {
 			select {
@@ -814,17 +801,17 @@ func (prl *ProgressiveRateLimiter) GetProgressiveStats() map[string]interface{} 
 	defer prl.mu.RUnlock()
 
 	stats := make(map[string]interface{})
-	
+
 	// Basic stats
 	stats["total_entries"] = len(prl.entries)
 	stats["denied_count"] = prl.stats.DeniedCount
 	stats["uptime"] = time.Since(prl.startTime).String()
-	
+
 	// Progressive stats
 	lockedOutCount := 0
 	totalFailures := 0
 	totalAttempts := 0
-	
+
 	for _, entry := range prl.entries {
 		if entry.isLockedOut {
 			lockedOutCount++
@@ -832,16 +819,16 @@ func (prl *ProgressiveRateLimiter) GetProgressiveStats() map[string]interface{} 
 		totalFailures += entry.consecutiveFailures
 		totalAttempts += entry.totalAttempts
 	}
-	
+
 	stats["locked_out_ips"] = lockedOutCount
 	stats["total_failures"] = totalFailures
 	stats["total_attempts"] = totalAttempts
 	stats["security_events"] = len(prl.securityEvents)
-	
+
 	// Estimate memory usage
 	estimatedMemory := int64(len(prl.entries)) * 120 // Rough estimate
 	stats["memory_usage_bytes"] = estimatedMemory
-	
+
 	return stats
 }
 
@@ -883,12 +870,12 @@ func (prl *ProgressiveRateLimiter) logSecurityEvent(eventType, ip, path, method,
 	}
 
 	prl.securityEvents = append(prl.securityEvents, event)
-	
+
 	// Keep only last 1000 events
 	if len(prl.securityEvents) > 1000 {
 		prl.securityEvents = prl.securityEvents[len(prl.securityEvents)-1000:]
 	}
-	
+
 	// Call callback if set
 	if prl.eventCallback != nil {
 		go prl.eventCallback(event)

@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -42,24 +44,24 @@ func (m *MockUserRepository) BeginTx() (*sqlx.Tx, error) {
 	return args.Get(0).(*sqlx.Tx), args.Error(1)
 }
 
-func (m *MockUserRepository) GetByEmail(email string) (*models.User, error) {
-	args := m.Called(email)
+func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
+	args := m.Called(ctx, email)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*models.User), args.Error(1)
 }
 
-func (m *MockUserRepository) GetByUsername(username string) (*models.User, error) {
-	args := m.Called(username)
+func (m *MockUserRepository) GetByUsername(ctx context.Context, username string) (*models.User, error) {
+	args := m.Called(ctx, username)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*models.User), args.Error(1)
 }
 
-func (m *MockUserRepository) GetByID(id uuid.UUID) (*models.User, error) {
-	args := m.Called(id)
+func (m *MockUserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
+	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -131,16 +133,17 @@ func (m *MockUserRepository) SearchUsers(q string, page, limit int) ([]models.Us
 }
 
 func TestRegisterSuccess(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
 
 	app := fiber.New()
 	app.Post("/register", handler.Register)
 
-	mockRepo.On("GetByEmail", "test@example.com").Return(nil, sql.ErrNoRows)
-	mockRepo.On("GetByUsername", "testuser").Return(nil, sql.ErrNoRows)
+	mockRepo.On("GetByEmail", mock.Anything, "test@example.com").Return(nil, sql.ErrNoRows)
+	mockRepo.On("GetByUsername", mock.Anything, "testuser").Return(nil, sql.ErrNoRows)
 	mockRepo.On("BeginTx").Return(nil, nil)
-	mockRepo.On("CreateWithTx", mock.Anything, mock.AnythingOfType("*models.User")).Return(nil)
+	mockRepo.On("Create", mock.AnythingOfType("*models.User")).Return(nil)
 
 	reqBody := map[string]string{
 		"username": "testuser",
@@ -160,6 +163,7 @@ func TestRegisterSuccess(t *testing.T) {
 }
 
 func TestRegisterEmailExists(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
 
@@ -167,7 +171,7 @@ func TestRegisterEmailExists(t *testing.T) {
 	app.Post("/register", handler.Register)
 
 	existingUser := &models.User{Email: "test@example.com"}
-	mockRepo.On("GetByEmail", "test@example.com").Return(existingUser, nil)
+	mockRepo.On("GetByEmail", mock.Anything, "test@example.com").Return(existingUser, nil)
 
 	reqBody := map[string]string{
 		"username": "testuser",
@@ -187,6 +191,7 @@ func TestRegisterEmailExists(t *testing.T) {
 }
 
 func TestLoginSuccess(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
 
@@ -200,11 +205,11 @@ func TestLoginSuccess(t *testing.T) {
 	}
 	user.HashPassword("Password123!")
 
-	mockRepo.On("GetByEmail", "test@example.com").Return(user, nil)
+	mockRepo.On("GetByEmail", mock.Anything, "test@example.com").Return(user, nil)
 
 	reqBody := map[string]string{
-		"identifier": "test@example.com",
-		"password":   "Password123!",
+		"login_identifier": "test@example.com",
+		"login_password":   "Password123!",
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -219,6 +224,7 @@ func TestLoginSuccess(t *testing.T) {
 }
 
 func TestLoginSuccessWithUsername(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
 	mockRepo := new(MockUserRepository)
 	handler := handlers.NewAuthHandler(mockRepo)
 
@@ -232,11 +238,11 @@ func TestLoginSuccessWithUsername(t *testing.T) {
 	}
 	user.HashPassword("Password123!")
 
-	mockRepo.On("GetByUsername", "testuser").Return(user, nil)
+	mockRepo.On("GetByUsername", mock.Anything, "testuser").Return(user, nil)
 
 	reqBody := map[string]string{
-		"identifier": "testuser",
-		"password":   "Password123!",
+		"login_identifier": "testuser",
+		"login_password":   "Password123!",
 	}
 
 	body, _ := json.Marshal(reqBody)

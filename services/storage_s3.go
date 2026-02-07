@@ -53,7 +53,11 @@ func buildS3StorageImpl(cfg S3Config) (Storage, error) {
 }
 
 func (s *s3Storage) Save(ctx context.Context, key string, r io.Reader, contentType string) (string, error) {
-	key = strings.TrimPrefix(key, "/")
+	normalizedKey, err := normalizeStorageKey(key, false)
+	if err != nil {
+		return "", err
+	}
+	key = normalizedKey
 	// Bound network time for save operations
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		c, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -64,7 +68,7 @@ func (s *s3Storage) Save(ctx context.Context, key string, r io.Reader, contentTy
 	if br, ok := r.(*bytes.Reader); ok {
 		size = int64(br.Len())
 	}
-	_, err := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
+	_, err = s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
 		ContentType:  contentType,
 		CacheControl: "public, max-age=31536000, immutable",
 	})
@@ -75,7 +79,11 @@ func (s *s3Storage) Save(ctx context.Context, key string, r io.Reader, contentTy
 }
 
 func (s *s3Storage) Delete(ctx context.Context, key string) error {
-	key = strings.TrimPrefix(key, "/")
+	normalizedKey, err := normalizeStorageKey(key, false)
+	if err != nil {
+		return err
+	}
+	key = normalizedKey
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		c, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
@@ -85,12 +93,19 @@ func (s *s3Storage) Delete(ctx context.Context, key string) error {
 }
 
 func (s *s3Storage) PublicURL(key string) string {
-	key = strings.TrimPrefix(key, "/")
+	normalizedKey, err := normalizeStorageKey(key, true)
+	if err != nil {
+		return ""
+	}
+	key = normalizedKey
 	if s.publicBaseURL != "" {
 		baseURL := s.publicBaseURL
 		// Ensure the base URL has a protocol
 		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 			baseURL = "https://" + baseURL
+		}
+		if key == "" {
+			return baseURL + "/"
 		}
 		return baseURL + "/" + key
 	}
@@ -98,10 +113,18 @@ func (s *s3Storage) PublicURL(key string) string {
 	u.Scheme = "https"
 	if s.forcePath {
 		u.Host = s.client.EndpointURL().Host
-		u.Path = "/" + s.bucket + "/" + key
+		if key == "" {
+			u.Path = "/" + s.bucket + "/"
+		} else {
+			u.Path = "/" + s.bucket + "/" + key
+		}
 	} else {
 		u.Host = s.bucket + "." + s.client.EndpointURL().Host
-		u.Path = "/" + key
+		if key == "" {
+			u.Path = "/"
+		} else {
+			u.Path = "/" + key
+		}
 	}
 	return u.String()
 }

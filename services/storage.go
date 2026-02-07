@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -31,6 +32,23 @@ type LocalStorage struct {
 	publicBase string // e.g. "/uploads"
 }
 
+func normalizeStorageKey(key string, allowEmpty bool) (string, error) {
+	key = strings.TrimSpace(filepath.ToSlash(key))
+	key = strings.TrimPrefix(key, "/")
+	if key == "" {
+		if allowEmpty {
+			return "", nil
+		}
+		return "", errors.New("invalid storage key")
+	}
+	cleaned := path.Clean(key)
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "\x00") {
+		return "", errors.New("invalid storage key")
+	}
+	return cleaned, nil
+}
+
 func NewLocalStorage(baseDir string) *LocalStorage {
 	if baseDir == "" {
 		baseDir = "uploads"
@@ -39,8 +57,12 @@ func NewLocalStorage(baseDir string) *LocalStorage {
 }
 
 func (s *LocalStorage) Save(ctx context.Context, key string, r io.Reader, contentType string) (string, error) {
-	// Normalize separators
-	key = filepath.ToSlash(key)
+	// Normalize separators and block traversal/absolute keys.
+	normalizedKey, err := normalizeStorageKey(key, false)
+	if err != nil {
+		return "", err
+	}
+	key = normalizedKey
 	dstPath := filepath.Join(s.baseDir, filepath.FromSlash(key))
 	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 		return "", err
@@ -58,7 +80,11 @@ func (s *LocalStorage) Save(ctx context.Context, key string, r io.Reader, conten
 }
 
 func (s *LocalStorage) Delete(ctx context.Context, key string) error {
-	key = filepath.ToSlash(key)
+	normalizedKey, err := normalizeStorageKey(key, false)
+	if err != nil {
+		return err
+	}
+	key = normalizedKey
 	path := filepath.Join(s.baseDir, filepath.FromSlash(key))
 	if err := os.Remove(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -70,7 +96,14 @@ func (s *LocalStorage) Delete(ctx context.Context, key string) error {
 }
 
 func (s *LocalStorage) PublicURL(key string) string {
-	key = strings.TrimPrefix(filepath.ToSlash(key), "/")
+	normalizedKey, err := normalizeStorageKey(key, true)
+	if err != nil {
+		return s.publicBase + "/"
+	}
+	key = normalizedKey
+	if key == "" {
+		return s.publicBase + "/"
+	}
 	return s.publicBase + "/" + key
 }
 

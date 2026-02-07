@@ -2,6 +2,7 @@ package services
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -51,26 +52,26 @@ func TestRateLimiterMiddleware(t *testing.T) {
 	defer limiter.Stop()
 
 	app := fiber.New()
-	
+
 	// Add rate limiting middleware
 	app.Use(limiter.Middleware(2, time.Minute))
-	
+
 	app.Get("/test", func(c *fiber.Ctx) error {
 		return c.SendString("test")
 	})
-	
+
 	// First request should succeed
 	req, _ := http.NewRequest("GET", "/test", nil)
 	resp, err := app.Test(req)
 	assert.NoError(t, err)
 	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
-	
+
 	// Second request should succeed
 	req, _ = http.NewRequest("GET", "/test", nil)
 	resp, err = app.Test(req)
 	assert.NoError(t, err)
 	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
-	
+
 	// Third request should be rate limited
 	req, _ = http.NewRequest("GET", "/test", nil)
 	resp, err = app.Test(req)
@@ -90,7 +91,7 @@ func TestRateLimiterTokenRefill(t *testing.T) {
 	defer limiter.Stop()
 
 	ip := "192.168.1.3"
-	
+
 	// Use up all tokens
 	for i := 0; i < 2; i++ {
 		allowed := limiter.allowRequest(ip, 2, 50*time.Millisecond)
@@ -148,7 +149,7 @@ func TestRateLimiterIPValidation(t *testing.T) {
 	assert.True(t, limiter.isValidIP("127.0.0.1"))
 	assert.True(t, limiter.isValidIP("::1"))
 	assert.True(t, limiter.isValidIP("2001:db8::1"))
-	
+
 	// Test invalid IPs
 	assert.False(t, limiter.isValidIP(""))
 	assert.False(t, limiter.isValidIP("invalid"))
@@ -177,4 +178,80 @@ func TestRateLimiterCleanup(t *testing.T) {
 	stats := limiter.GetStats()
 	assert.Equal(t, int64(0), stats.TotalEntries)
 	assert.Greater(t, stats.CleanupCount, int64(0))
+}
+
+func TestGetClientIPIgnoresForwardedHeadersFromUntrustedSource(t *testing.T) {
+	config := RateLimitConfig{
+		MaxEntries:      100,
+		CleanupInterval: 100 * time.Millisecond,
+		EntryTTL:        1 * time.Second,
+		TrustedProxies:  []string{"127.0.0.1", "::1"},
+	}
+	limiter := NewRateLimiter(config)
+	defer limiter.Stop()
+
+	app := fiber.New()
+	var got string
+	app.Get("/ip", func(c *fiber.Ctx) error {
+		got = limiter.GetClientIPForTesting(c)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/ip", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+	assert.Equal(t, "0.0.0.0", got)
+}
+
+func TestGetClientIPUsesForwardedHeadersFromTrustedProxy(t *testing.T) {
+	config := RateLimitConfig{
+		MaxEntries:      100,
+		CleanupInterval: 100 * time.Millisecond,
+		EntryTTL:        1 * time.Second,
+		TrustedProxies:  []string{"127.0.0.1", "::1", "0.0.0.0"},
+	}
+	limiter := NewRateLimiter(config)
+	defer limiter.Stop()
+
+	app := fiber.New()
+	var got string
+	app.Get("/ip", func(c *fiber.Ctx) error {
+		got = limiter.GetClientIPForTesting(c)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/ip", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+	assert.Equal(t, "198.51.100.99", got)
+}
+
+func TestGetClientIPPrefersCloudflareHeaderWhenTrusted(t *testing.T) {
+	config := RateLimitConfig{
+		MaxEntries:      100,
+		CleanupInterval: 100 * time.Millisecond,
+		EntryTTL:        1 * time.Second,
+		TrustedProxies:  []string{"127.0.0.1", "::1", "0.0.0.0"},
+	}
+	limiter := NewRateLimiter(config)
+	defer limiter.Stop()
+
+	app := fiber.New()
+	var got string
+	app.Get("/ip", func(c *fiber.Ctx) error {
+		got = limiter.GetClientIPForTesting(c)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/ip", nil)
+	req.Header.Set("CF-Connecting-IP", "203.0.113.77")
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+	assert.Equal(t, "203.0.113.77", got)
 }

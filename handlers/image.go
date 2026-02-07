@@ -7,7 +7,6 @@ import (
 	"image"
 	_ "image/png"
 	"io"
-	"mime/multipart"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -100,7 +99,6 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No image file provided"})
 	}
 
-
 	title := strings.TrimSpace(c.FormValue("title"))
 	isNSFW := strings.ToLower(strings.TrimSpace(c.FormValue("is_nsfw"))) == "true"
 	caption := strings.TrimSpace(c.FormValue("caption"))
@@ -113,23 +111,23 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 
 	// Use comprehensive file validation with streaming support
 	fileValidator := services.NewFileValidator()
-	
+
 	// Validate file and get stream back for AI detection
 	result, remainingStream, err := fileValidator.ValidateImageStream(file.Filename, src)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
 	}
-	
+
 	if !result.IsValid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
 	}
-	
+
 	// Use the remaining stream for AI detection (avoids re-reading)
 	var streamReader io.Reader = remainingStream
-	
+
 	// Keep the original file reference for operations that need multipart.File interface
 	originalFile := src
-	
+
 	// Add security information to response context
 	if result.SecurityLevel == "low" {
 		// Log low security files for monitoring
@@ -144,21 +142,16 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 
 	var aiSignature string
-	var aiOK bool
 	var aiRes services.AIDetectionResult
 	var xmpOriginal []byte
 
-	// OPTIMIZED: Stream-based AI detection to avoid full file buffering
-	// For large files (>2MB), use streaming detection first
+	// Buffer file once for full provenance validation.
 	var originalBytes []byte
 	if file.Size > 2*1024*1024 { // 2MB threshold
-		// For large files, use streaming AI detection first
-		if ok, res := detectAIStreaming(originalFile, file.Size); ok {
-			aiSignature = res.Details
-			goto ai_validated
+		// Use the original file handle for large files to ensure full-byte read.
+		if _, err := originalFile.Seek(0, io.SeekStart); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset upload stream"})
 		}
-		// If streaming detection fails, buffer the file for full detection
-		originalFile.Seek(0, 0)
 		if buf, err := io.ReadAll(originalFile); err == nil {
 			originalBytes = buf
 		} else {
@@ -173,21 +166,13 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		}
 	}
 
-	// FAST PATH: Quick AI detection first (rejects obvious non-AI immediately)
-	if aiOK, aiRes = services.DetectAIFast(originalBytes); aiOK {
-		aiSignature = aiRes.Details
-		goto ai_validated
-	}
-
-	// FALLBACK: Full concurrent AI detection for edge cases
+	// Full concurrent AI provenance detection (required for acceptance).
 	xmpOriginal = services.ExtractXMPXMLFromBytes(originalBytes)
-	aiOK, aiRes = services.DetectAIProvenanceConcurrent(originalBytes, xmpOriginal)
+	aiOK, aiRes := services.DetectAIProvenanceConcurrent(originalBytes, xmpOriginal)
 	if !aiOK {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Upload rejected. Only AI-generated images with verifiable metadata (EXIF or XMP; C2PA optional) are accepted."})
 	}
 	aiSignature = aiRes.Details
-
-ai_validated:
 
 	// Now decode image for processing (only if AI validation passed)
 	img, format, err := image.Decode(bytes.NewReader(originalBytes))
@@ -569,66 +554,6 @@ func (h *ImageHandler) DeleteImage(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete image"})
 	}
 	return c.SendStatus(fiber.StatusNoContent)
-}
-
-// detectAIStreaming performs AI detection on large files without full buffering
-// It reads strategic sections of the file to find AI markers
-func detectAIStreaming(src multipart.File, fileSize int64) (bool, services.AIDetectionResult) {
-	// Create a buffer for reading sections
-	buf := make([]byte, 32*1024) // 32KB buffer
-
-	// Strategy: Check multiple strategic sections of the file
-
-	// 1. First check the beginning for PNG signature and early metadata
-	src.Seek(0, 0)
-	n, _ := src.Read(buf)
-	if n > 0 {
-		// Check if this is a PNG file first
-		isPNG := false
-		if n >= 8 {
-			isPNG = buf[0] == 0x89 && buf[1] == 0x50 && buf[2] == 0x4E && buf[3] == 0x47 &&
-				buf[4] == 0x0D && buf[5] == 0x0A && buf[6] == 0x1A && buf[7] == 0x0A
-		}
-
-		var scanStart int
-		if isPNG {
-			// For PNG files, skip only the 8-byte signature
-			scanStart = 8
-		} else {
-			// For other files, skip headers to avoid false positives
-			scanStart = min(1000, n)
-		}
-
-		if ok, res := services.DetectAIFast(buf[scanStart:n]); ok {
-			return ok, res
-		}
-	}
-
-	// 2. Check middle section for embedded metadata
-	middlePos := fileSize / 2
-	src.Seek(middlePos, 0)
-	n, _ = src.Read(buf)
-	if n > 0 {
-		// Skip binary headers in this section too
-		scanStart := min(1000, n)
-		if ok, res := services.DetectAIFast(buf[scanStart:n]); ok {
-			return ok, res
-		}
-	}
-
-	// 3. Check end section (often contains metadata in some formats)
-	endPos := fileSize - int64(len(buf))
-	if endPos > 0 {
-		src.Seek(endPos, 0)
-		n, _ = src.Read(buf)
-		if n > 0 {
-			if ok, res := services.DetectAIFast(buf[:n]); ok {
-				return ok, res
-			}
-		}
-	}
-
-	return false, services.AIDetectionResult{}
 }
 
 func (h *ImageHandler) isValidImageType(contentType string) bool {

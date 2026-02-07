@@ -372,13 +372,15 @@ input, button {
     background-clip: text;
     -webkit-text-fill-color: transparent;
     mix-blend-mode: exclusion; /* subtle negative relative to backdrop */
-    animation: gradientShift 6s ease infinite; /* slightly slower */
+    /* Avoid continuous idle animation; animate only on interaction. */
+    animation: none;
     cursor: pointer;
     transition: opacity var(--duration-fast) var(--ease-out);
 }
 
 .logo:hover {
     opacity: 0.8;
+    animation: gradientShift 1.8s ease 1;
 }
 
 .nav-btn {

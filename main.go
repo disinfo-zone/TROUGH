@@ -103,7 +103,7 @@ func indexWithMetaHandler(
 			return c.SendFile("./static/index.html")
 		}
 
-		set, _ := siteRepo.Get()
+		set := services.GetCachedSettings(siteRepo)
 
 		// Defaults from site settings
 		title := strings.TrimSpace(set.SEOTitle)
@@ -133,7 +133,7 @@ func indexWithMetaHandler(
 		imageURL := strings.TrimSpace(set.SocialImageURL)
 		ogType := "website"
 
-		// If this is an image page, override meta using the image
+		// Image page: override meta using the specific image.
 		if strings.HasPrefix(c.Path(), "/i/") {
 			if idStr := c.Params("id"); idStr != "" {
 				if imgID, err := uuid.Parse(idStr); err == nil {
@@ -145,76 +145,6 @@ func indexWithMetaHandler(
 						siteTitle := strings.TrimSpace(set.SiteName)
 						if siteTitle == "" {
 							siteTitle = "TROUGH"
-						} else if strings.HasPrefix(c.Path(), "/@") {
-							// Profile page meta: @user - SiteTitle, description from bio, image from latest user image
-							username := strings.TrimSpace(c.Params("username"))
-							if username == "" {
-								username = strings.TrimPrefix(c.Path(), "/@")
-								username = strings.TrimSpace(username)
-							}
-							if username != "" && userRepo != nil {
-								ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
-								defer cancel()
-								if u, err := userRepo.GetByUsername(ctx, username); err == nil && u != nil {
-									siteTitle := strings.TrimSpace(set.SiteName)
-									if siteTitle == "" {
-										siteTitle = "TROUGH"
-									}
-									// Title: "@username - SiteTitle"
-									title = "@" + u.Username + " - " + siteTitle
-									// Description from bio when available; fallback to site description
-									if u.Bio != nil {
-										bio := strings.TrimSpace(*u.Bio)
-										if bio != "" {
-											if len(bio) > 280 {
-												bio = bio[:280]
-											}
-											description = bio
-										}
-									}
-									// Latest user image for social card
-									if imageRepo != nil {
-										if imgs, _, err := imageRepo.GetUserImages(u.ID, 1, 1); err == nil && len(imgs) > 0 {
-											fn := strings.TrimSpace(imgs[0].Filename)
-											if fn != "" {
-												lowerFn := strings.ToLower(fn)
-												if strings.HasPrefix(lowerFn, "http://") || strings.HasPrefix(lowerFn, "https://") {
-													imageURL = fn
-												} else {
-													imageURL = origin + "/uploads/" + fn
-												}
-											}
-										}
-									}
-									ogType = "profile"
-								}
-							}
-						} else {
-							// Single-segment CMS page: inherit index SEO but change only <title>
-							slug := strings.Trim(strings.TrimSpace(c.Path()), "/")
-							if slug != "" && !strings.Contains(slug, "/") {
-								// Reserved prefixes that are not CMS slugs
-								reserved := map[string]bool{"api": true, "uploads": true, "assets": true, "@": true, "i": true, "register": true, "reset": true, "verify": true, "settings": true, "admin": true}
-								if !reserved[slug] && pageRepo != nil {
-									if p, err := pageRepo.GetPublishedBySlug(strings.ToLower(slug)); err == nil && p != nil {
-										siteTitle := strings.TrimSpace(set.SiteName)
-										if siteTitle == "" {
-											siteTitle = "TROUGH"
-										}
-										// Prefer page meta title when provided; otherwise use "Page - SiteTitle"
-										if p.MetaTitle != nil && strings.TrimSpace(*p.MetaTitle) != "" {
-											title = strings.TrimSpace(*p.MetaTitle)
-										} else {
-											pt := strings.TrimSpace(p.Title)
-											if pt == "" {
-												pt = "Page"
-											}
-											title = pt + " - " + siteTitle
-										}
-										// Keep description/image/ogType from site defaults to inherit index SEO
-									}
-								}
-							}
 						}
 						// Title from image (original_name acts as title)
 						imgTitle := "Untitled"
@@ -252,6 +182,76 @@ func indexWithMetaHandler(
 								imageURL = origin + "/uploads/" + img.Filename
 							}
 						}
+					}
+				}
+			}
+		} else if strings.HasPrefix(c.Path(), "/@") {
+			// Profile page meta: @user - SiteTitle, description from bio, image from latest user image.
+			username := strings.TrimSpace(c.Params("username"))
+			if username == "" {
+				username = strings.TrimPrefix(c.Path(), "/@")
+				username = strings.TrimSpace(username)
+			}
+			if username != "" && userRepo != nil {
+				ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+				defer cancel()
+				if u, err := userRepo.GetByUsername(ctx, username); err == nil && u != nil {
+					siteTitle := strings.TrimSpace(set.SiteName)
+					if siteTitle == "" {
+						siteTitle = "TROUGH"
+					}
+					// Title: "@username - SiteTitle"
+					title = "@" + u.Username + " - " + siteTitle
+					// Description from bio when available; fallback to site description
+					if u.Bio != nil {
+						bio := strings.TrimSpace(*u.Bio)
+						if bio != "" {
+							if len(bio) > 280 {
+								bio = bio[:280]
+							}
+							description = bio
+						}
+					}
+					// Latest user image for social card
+					if imageRepo != nil {
+						if imgs, _, err := imageRepo.GetUserImages(u.ID, 1, 1); err == nil && len(imgs) > 0 {
+							fn := strings.TrimSpace(imgs[0].Filename)
+							if fn != "" {
+								lowerFn := strings.ToLower(fn)
+								if strings.HasPrefix(lowerFn, "http://") || strings.HasPrefix(lowerFn, "https://") {
+									imageURL = fn
+								} else {
+									imageURL = origin + "/uploads/" + fn
+								}
+							}
+						}
+					}
+					ogType = "profile"
+				}
+			}
+		} else {
+			// Single-segment CMS page: inherit index SEO but change only <title>.
+			slug := strings.Trim(strings.TrimSpace(c.Path()), "/")
+			if slug != "" && !strings.Contains(slug, "/") {
+				// Reserved prefixes that are not CMS slugs
+				reserved := map[string]bool{"api": true, "uploads": true, "assets": true, "@": true, "i": true, "register": true, "reset": true, "verify": true, "settings": true, "admin": true}
+				if !reserved[slug] && pageRepo != nil {
+					if p, err := pageRepo.GetPublishedBySlug(strings.ToLower(slug)); err == nil && p != nil {
+						siteTitle := strings.TrimSpace(set.SiteName)
+						if siteTitle == "" {
+							siteTitle = "TROUGH"
+						}
+						// Prefer page meta title when provided; otherwise use "Page - SiteTitle".
+						if p.MetaTitle != nil && strings.TrimSpace(*p.MetaTitle) != "" {
+							title = strings.TrimSpace(*p.MetaTitle)
+						} else {
+							pt := strings.TrimSpace(p.Title)
+							if pt == "" {
+								pt = "Page"
+							}
+							title = pt + " - " + siteTitle
+						}
+						// Keep description/image/ogType from site defaults to inherit index SEO.
 					}
 				}
 			}
@@ -402,6 +402,9 @@ func main() {
 		JSONDecoder:  gjson.Unmarshal,
 	})
 
+	// Lightweight health endpoint for probes; placed before heavy middleware.
+	app.Get("/healthz", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
+
 	// Initialize security components
 	csrfProtection := middleware.NewCSRFProtection(os.Getenv("CSRF_SECRET"))
 	securityHeaders := services.NewSecurityHeaders(nil)
@@ -445,13 +448,18 @@ func main() {
 			return false
 		},
 	}))
-	app.Use(etag.New(etag.Config{Weak: true}))
+	app.Use(etag.New(etag.Config{
+		Weak: true,
+		Next: func(c *fiber.Ctx) bool {
+			return c.Path() == "/healthz"
+		},
+	}))
 	app.Use(compress.New(compress.Config{
 		Level: compress.LevelBestSpeed,
 		Next: func(c *fiber.Ctx) bool {
 			p := c.Path()
 			// Skip already-compressed/static heavy assets
-			if strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/uploads/") {
+			if strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/uploads/") || p == "/healthz" {
 				return true
 			}
 			ct := c.Get("Content-Type")
@@ -463,6 +471,10 @@ func main() {
 	}))
 	// Configure CORS for API. Do not affect images/scripts loading.
 	app.Use(cors.New(cors.Config{
+		Next: func(c *fiber.Ctx) bool {
+			p := c.Path()
+			return !(p == "/api" || strings.HasPrefix(p, "/api/"))
+		},
 		AllowOriginsFunc: func(origin string) bool {
 			set := services.GetCachedSettings(siteRepo)
 			allowed := strings.TrimSpace(set.SiteURL)
@@ -545,8 +557,6 @@ func main() {
 		key := c.Params("*")
 		return c.Redirect(st.PublicURL(key), fiber.StatusFound)
 	})
-	// Simple health endpoint for uptime checks (not logged)
-	app.Get("/healthz", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
 	api := app.Group("/api")
 	// Build auth middleware once to reuse its small cache
@@ -582,6 +592,8 @@ func main() {
 			}
 			existingToken = csrfProtection.GetCSRFToken(c)
 		}
+		c.Set("Cache-Control", "no-store")
+		c.Set("Pragma", "no-cache")
 		return c.JSON(fiber.Map{
 			"csrf_token": existingToken,
 		})

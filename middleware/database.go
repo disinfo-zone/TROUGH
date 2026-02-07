@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -13,21 +14,51 @@ import (
 // DBPing middleware checks the database connection before proceeding.
 // If the connection is lost, it attempts to reconnect.
 func DBPing() fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		// Create a context with a short timeout for the ping.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	const checkInterval = 5 * time.Second
+	var state struct {
+		mu        sync.Mutex
+		lastCheck time.Time
+		healthy   bool
+	}
+	state.healthy = true
 
-		if err := db.Ping(ctx); err != nil {
-			log.Printf("Database ping failed or timed out: %v. Attempting to reconnect...", err)
+	return func(c *fiber.Ctx) error {
+		state.mu.Lock()
+		due := !state.healthy || time.Since(state.lastCheck) >= checkInterval
+		if due {
+			// Set this first so concurrent requests do not all probe at once.
+			state.lastCheck = time.Now()
+		}
+		state.mu.Unlock()
+
+		if !due {
+			return c.Next()
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		pingErr := db.Ping(ctx)
+		cancel()
+
+		healthy := true
+		if pingErr != nil {
+			log.Printf("Database ping failed or timed out: %v. Attempting to reconnect...", pingErr)
 			if reconErr := db.Reconnect(); reconErr != nil {
 				log.Printf("Failed to reconnect to database: %v", reconErr)
-				return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{
-					"error": "Database connection is down",
-				})
+				healthy = false
+			} else {
+				log.Println("Successfully reconnected to the database.")
 			}
-			log.Println("Successfully reconnected to the database.")
 		}
+
+		state.mu.Lock()
+		state.healthy = healthy
+		state.mu.Unlock()
+		if !healthy {
+			return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{
+				"error": "Database connection is down",
+			})
+		}
+
 		return c.Next()
 	}
 }

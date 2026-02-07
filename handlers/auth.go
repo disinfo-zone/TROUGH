@@ -153,11 +153,17 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start transaction"})
 	}
-	defer tx.Rollback()
+	hasTx := tx != nil
+	if hasTx {
+		defer tx.Rollback()
+	}
+	if mustHaveInvite && !hasTx {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Registration service unavailable"})
+	}
 
-	// If an invite is required, validate and consume it within the transaction
+	// If an invite is required, validate and consume it within the transaction.
 	var consumedInviteID *uuid.UUID
-	if mustHaveInvite {
+	if mustHaveInvite && hasTx {
 		// Attempt to consume the invite code atomically.
 		// This single operation should implicitly validate existence, expiry, and usage limits.
 		inv, err := h.inviteRepo.ConsumeWithTx(tx, inviteCode)
@@ -174,15 +180,20 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	if err := user.HashPassword(req.Password); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to process password"})
 	}
-	if err := h.userRepo.CreateWithTx(tx, user); err != nil {
-		if consumedInviteID != nil && h.inviteRepo != nil {
-			_ = h.inviteRepo.RevertConsumeWithTx(tx, *consumedInviteID)
+	if hasTx {
+		if err := h.userRepo.CreateWithTx(tx, user); err != nil {
+			if consumedInviteID != nil && h.inviteRepo != nil {
+				_ = h.inviteRepo.RevertConsumeWithTx(tx, *consumedInviteID)
+			}
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
-	}
-
-	if err := tx.Commit(); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit transaction"})
+		if err := tx.Commit(); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit transaction"})
+		}
+	} else {
+		if err := h.userRepo.Create(user); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
+		}
 	}
 
 	set, _ := h.settingsRepo.Get()
@@ -376,7 +387,7 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{"error": "Please wait before requesting again"})
 	}
 
-token := uuid.New().String()
+	token := uuid.New().String()
 	// Hash token before storing for at-rest protection
 	hashed := services.HashToken(token)
 	expires := time.Now().Add(1 * time.Hour)

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"log"
 	"os"
@@ -64,30 +65,18 @@ func Protected() fiber.Handler {
 			return e.t
 		}
 		pwMu.RUnlock()
-		
-		// Add timeout for database query
+
+		// Query synchronously with a bounded timeout to avoid goroutine churn.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		var changedAt time.Time
-		changedAtChan := make(chan time.Time, 1)
-		go func() {
-			var dbChangedAt time.Time
-			_ = models.DB().QueryRowx(`SELECT COALESCE(password_changed_at, to_timestamp(0)) FROM users WHERE id = $1`, userID).Scan(&dbChangedAt)
-			// Check if channel is still open before sending
-			select {
-			case changedAtChan <- dbChangedAt:
-			default:
-				// Channel was closed by timeout, don't block
+		if err := models.DB().QueryRowxContext(ctx, `SELECT COALESCE(password_changed_at, to_timestamp(0)) FROM users WHERE id = $1`, userID).Scan(&changedAt); err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				log.Printf("Auth middleware: password_changed_at query timeout for user: %s", userID)
 			}
-		}()
-		
-		select {
-		case dbChangedAt := <-changedAtChan:
-			changedAt = dbChangedAt
-		case <-time.After(5 * time.Second):
-			// If DB query times out, use default value to prevent hanging
-			log.Printf("Auth middleware: password_changed_at query timeout for user: %s", userID)
 			changedAt = time.Time{}
 		}
-		
+
 		pwMu.Lock()
 		if len(pwCache) >= pwCap {
 			// Simple bound: reset map when capacity reached
