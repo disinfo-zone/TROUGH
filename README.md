@@ -67,6 +67,8 @@ For local development, you'll use `docker-compose.dev.yml` to build the applicat
 
 - Register, then log in. Admins can disable public registration and issue invites.
 - Upload an image via UI or `POST /api/upload` with form field `image`. Uploads without acceptable AI metadata are rejected.
+  - Acceptance requires verifiable provenance from EXIF/XMP/C2PA detection.
+  - Weak single-word metadata (for example camera `Model` values) is intentionally not enough.
 - Toggle NSFW visibility in account settings; feed respects preferences.
 - Configure site title/URL, analytics, SMTP, and storage (local or S3) in the admin panel.
 
@@ -155,6 +157,22 @@ rate_limiting:
 
 These settings help balance memory usage, security, and performance for your specific deployment needs.
 
+### Proxy and Cloudflare Tunnel IP Handling
+
+Rate limiting and security controls use the client IP derived from proxy headers safely:
+
+- `CF-Connecting-IP` / `CF-Connecting-IPv6` / `True-Client-IP` are preferred when present.
+- Then `X-Forwarded-For`, then `X-Real-IP`.
+- Forwarded headers are only trusted when the immediate peer is trusted:
+  - Listed in `rate_limiting.trusted_proxies`, or
+  - Loopback (`127.0.0.1` / `::1`) for local `cloudflared` tunnel agents.
+
+Deployment guidance:
+
+- If `cloudflared` runs on the same host as the app, default settings work.
+- If `cloudflared` or your reverse proxy runs on another host/container, add that hop IP to `rate_limiting.trusted_proxies`.
+- Do not trust all proxy IPs globally; keep `trusted_proxies` minimal.
+
 ## Environment
 
 Set via `.env` or environment variables:
@@ -242,6 +260,7 @@ Notes:
   - Reset Password: 5 requests per minute per IP
   - Verify Email: 10 requests per minute per IP
 - Rate limiting includes LRU eviction, automatic cleanup, and IP validation to prevent spoofing.
+- Cloudflare client IP headers are supported and used safely when request hops are trusted.
 - Admin users can monitor rate limiting statistics via `/api/admin/rate-limiter-stats`.
 
 ## Screenshots
