@@ -230,6 +230,64 @@ func TestGetClientIPUsesForwardedHeadersFromTrustedProxy(t *testing.T) {
 	assert.Equal(t, "198.51.100.99", got)
 }
 
+// A client can prepend arbitrary values to X-Forwarded-For; the real client is the
+// right-most entry the nearest trusted proxy appended. Taking the left-most value
+// (the old behaviour) let an attacker forge any IP for rate-limit evasion or to
+// lock out a chosen victim.
+func TestGetClientIPUsesRightmostUntrustedXFF(t *testing.T) {
+	config := RateLimitConfig{
+		MaxEntries:      100,
+		CleanupInterval: 100 * time.Millisecond,
+		EntryTTL:        1 * time.Second,
+		TrustedProxies:  []string{"127.0.0.1", "::1", "0.0.0.0"},
+	}
+	limiter := NewRateLimiter(config)
+	defer limiter.Stop()
+
+	app := fiber.New()
+	var got string
+	app.Get("/ip", func(c *fiber.Ctx) error {
+		got = limiter.GetClientIPForTesting(c)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/ip", nil)
+	// Attacker prepends a spoofed victim IP; the proxy appends the true client on the right.
+	req.Header.Set("X-Forwarded-For", "9.9.9.9, 203.0.113.5")
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+	assert.Equal(t, "203.0.113.5", got)
+}
+
+// True-Client-IP is spoofable on non-Enterprise Cloudflare plans and must not be trusted.
+func TestGetClientIPIgnoresSpoofableTrueClientIP(t *testing.T) {
+	config := RateLimitConfig{
+		MaxEntries:      100,
+		CleanupInterval: 100 * time.Millisecond,
+		EntryTTL:        1 * time.Second,
+		TrustedProxies:  []string{"127.0.0.1", "::1", "0.0.0.0"},
+	}
+	limiter := NewRateLimiter(config)
+	defer limiter.Stop()
+
+	app := fiber.New()
+	var got string
+	app.Get("/ip", func(c *fiber.Ctx) error {
+		got = limiter.GetClientIPForTesting(c)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/ip", nil)
+	req.Header.Set("True-Client-IP", "1.2.3.4")
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+	// True-Client-IP ignored; falls through to the right-most XFF entry.
+	assert.Equal(t, "203.0.113.5", got)
+}
+
 func TestGetClientIPPrefersCloudflareHeaderWhenTrusted(t *testing.T) {
 	config := RateLimitConfig{
 		MaxEntries:      100,

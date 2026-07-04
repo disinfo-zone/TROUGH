@@ -8,8 +8,8 @@ import (
 	"image"
 	"image/draw"
 	"image/jpeg"
-	"io"
 	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -377,42 +377,42 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	}
 	// Use comprehensive file validation for avatars
 	fileValidator := services.NewFileValidator()
-	
+
 	// Set smaller size limit for avatars (5MB)
 	fileValidator.MaxFileSize = 5 * 1024 * 1024
-	
+
 	src, err := file.Open()
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
 	defer src.Close()
-	
+
 	// Read a small sample for validation
 	sample := make([]byte, 512)
 	n, err := src.Read(sample)
 	if err != nil && err != io.EOF {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
 	}
-	
+
 	// Validate file sample
 	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
 	}
-	
+
 	if !result.IsValid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
 	}
-	
+
 	// Seek back to beginning for further processing
 	src.Seek(0, 0)
-	
+
 	// Ensure directory
 	avatarDir := filepath.Join("uploads", "avatars")
 	if err := os.MkdirAll(avatarDir, 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create avatar directory"})
 	}
-	
+
 	// Fetch current user to know old avatar URL
 	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
 	defer cancel()
@@ -421,21 +421,38 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	if u != nil && u.AvatarURL != nil {
 		oldAvatar = *u.AvatarURL
 	}
-	
+
 	// Ensure file pointer is at beginning for image.Decode
 	if _, err := src.Seek(0, 0); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset file pointer"})
 	}
-	
-	// Debug: Check file size before decode
-	size, _ := src.Seek(0, 2) // End position
-	src.Seek(0, 0) // Reset to beginning
-	
+
+	// Enforce the avatar size limit (ValidateFile only saw a 512-byte sample) and
+	// buffer the file so we can gate dimensions before a full decode.
+	avatarBytes, err := io.ReadAll(io.LimitReader(src, fileValidator.MaxFileSize+1))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read avatar"})
+	}
+	if int64(len(avatarBytes)) > fileValidator.MaxFileSize {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Avatar exceeds maximum allowed size"})
+	}
+	size := int64(len(avatarBytes))
+	// Reject decompression bombs before decoding to RGBA.
+	if err := fileValidator.EnforceDecodeLimits(avatarBytes); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Avatar rejected: " + err.Error()})
+	}
+
 	// Attempt to decode and center-crop 95%
 	var fname, path string
 	var shouldProcess bool
-	
-	img, _, decErr := image.Decode(src)
+
+	// Bound concurrent full decodes so peak RGBA memory stays within limits under load.
+	decRelease, decOK := services.AcquireDecodeSlot(c.Context())
+	if !decOK {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Server busy, please retry"})
+	}
+	img, _, decErr := image.Decode(bytes.NewReader(avatarBytes))
+	decRelease()
 	if decErr != nil {
 		// For JPEG files that fail the final decode but passed validation,
 		// try to save them anyway without processing
@@ -454,7 +471,7 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 		fname = uuid.New().String() + ".jpg"
 		path = filepath.Join(avatarDir, fname)
 	}
-	
+
 	if shouldProcess {
 		b := img.Bounds()
 		w := b.Dx()

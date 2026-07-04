@@ -28,6 +28,19 @@ services:
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - STORAGE_PUBLIC_BASE_URL=${STORAGE_PUBLIC_BASE_URL:-}
       - UPLOADS_DIR=${UPLOADS_DIR:-uploads}
+      # Go runtime tuning. On a multi-core host Go otherwise sets GOMAXPROCS to the
+      # host core count, which inflates scheduler/GC/sysmon overhead and is the main
+      # cause of idle CPU burn. automaxprocs will derive GOMAXPROCS from the cpus
+      # limit below; GOMAXPROCS here is a belt-and-suspenders default if no quota is
+      # detected. GOMEMLIMIT gives the GC a soft ceiling; GOGC trades a little RAM
+      # for fewer GC cycles at idle.
+      - GOMAXPROCS=${GOMAXPROCS:-2}
+      - GOMEMLIMIT=${GOMEMLIMIT:-256MiB}
+      - GOGC=${GOGC:-150}
+    # CPU/memory bounds. automaxprocs reads the CPU quota to size GOMAXPROCS.
+    # Raise these if you run a busy instance.
+    cpus: ${APP_CPUS:-2}
+    mem_limit: ${APP_MEM_LIMIT:-384m}
     volumes:
       - ./uploads:/app/uploads
       - ./config.yaml:/app/config.yaml:ro

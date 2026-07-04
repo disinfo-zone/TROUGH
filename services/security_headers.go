@@ -3,15 +3,19 @@ package services
 import (
 	"crypto/rand"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+
+	"github.com/yourusername/trough/models"
 )
 
 // SecurityHeaders provides security headers middleware
 type SecurityHeaders struct {
-	config *SecurityConfig
+	config   *SecurityConfig
+	siteRepo models.SiteSettingsRepositoryInterface
 }
 
 // SecurityConfig contains security header configuration
@@ -55,12 +59,96 @@ func NewSecurityHeaders(config *SecurityConfig) *SecurityHeaders {
 	}
 }
 
+// WithSettings enables a dynamic Content-Security-Policy built from the configured
+// analytics provider. This lets script-src/connect-src drop the blanket "https:"
+// wildcard (which allowed loading scripts from any HTTPS origin — a major XSS gap)
+// while still permitting the specific analytics host the admin configured.
+func (sh *SecurityHeaders) WithSettings(repo models.SiteSettingsRepositoryInterface) *SecurityHeaders {
+	sh.siteRepo = repo
+	return sh
+}
+
+// buildCSP composes a tightened policy. Known-required hosts are hardcoded (the
+// self-hosted app, the jsDelivr libs index.html loads, and Google Fonts); the only
+// dynamic part is the analytics origin, added solely when analytics is enabled.
+func (sh *SecurityHeaders) buildCSP() string {
+	var set models.SiteSettings
+	if sh.siteRepo != nil {
+		set = GetCachedSettings(sh.siteRepo)
+	}
+	return buildCSPFromSettings(set)
+}
+
+func buildCSPFromSettings(set models.SiteSettings) string {
+	scriptSrc := []string{"'self'", "https://cdn.jsdelivr.net"}
+	connectSrc := []string{"'self'"}
+
+	if set.AnalyticsEnabled {
+		switch strings.ToLower(strings.TrimSpace(set.AnalyticsProvider)) {
+		case "ga4":
+			scriptSrc = append(scriptSrc, "https://www.googletagmanager.com")
+			connectSrc = append(connectSrc,
+				"https://www.googletagmanager.com",
+				"https://www.google-analytics.com",
+				"https://*.google-analytics.com",
+				"https://*.analytics.google.com",
+			)
+		case "umami":
+			if o := httpsOrigin(set.UmamiSrc); o != "" {
+				scriptSrc = append(scriptSrc, o)
+				connectSrc = append(connectSrc, o)
+			}
+		case "plausible":
+			if o := httpsOrigin(set.PlausibleSrc); o != "" {
+				scriptSrc = append(scriptSrc, o)
+				connectSrc = append(connectSrc, o)
+			}
+		}
+	}
+
+	return strings.Join([]string{
+		"default-src 'self'",
+		// Images stay permissive: uploads may be served from an arbitrary CDN/S3 host.
+		"img-src 'self' data: https:",
+		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+		"font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com",
+		"script-src " + strings.Join(scriptSrc, " "),
+		"connect-src " + strings.Join(connectSrc, " "),
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+		"frame-src 'none'",
+		"block-all-mixed-content",
+	}, "; ")
+}
+
+// httpsOrigin returns scheme://host for a valid https URL, or "" otherwise.
+func httpsOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // Middleware returns the security headers middleware
 func (sh *SecurityHeaders) Middleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Set Content Security Policy
-		if sh.config.CSPEnabled && sh.config.CSPPolicy != "" {
-			c.Set("Content-Security-Policy", sh.config.CSPPolicy)
+		// Set Content Security Policy. Prefer the tightened, analytics-aware policy
+		// when a settings repo is available; fall back to the static config policy.
+		if sh.config.CSPEnabled {
+			policy := sh.config.CSPPolicy
+			if sh.siteRepo != nil {
+				policy = sh.buildCSP()
+			}
+			if policy != "" {
+				c.Set("Content-Security-Policy", policy)
+			}
 		}
 
 		// Set HTTP Strict Transport Security

@@ -32,14 +32,14 @@ var (
 var checkAdmin = func(c *fiber.Ctx, repo models.UserRepositoryInterface) bool { return isAdmin(c, repo) }
 
 type AdminHandler struct {
-	settingsRepo        models.SiteSettingsRepositoryInterface
-	userRepo            models.UserRepositoryInterface
-	imageRepo           models.ImageRepositoryInterface
-	newMailSender       func(*models.SiteSettings) services.MailSender
-	storage             services.Storage
-	inviteRepo          models.InviteRepositoryInterface
-	pageRepo            models.PageRepositoryInterface
-	rateLimiter         *services.RateLimiter
+	settingsRepo           models.SiteSettingsRepositoryInterface
+	userRepo               models.UserRepositoryInterface
+	imageRepo              models.ImageRepositoryInterface
+	newMailSender          func(*models.SiteSettings) services.MailSender
+	storage                services.Storage
+	inviteRepo             models.InviteRepositoryInterface
+	pageRepo               models.PageRepositoryInterface
+	rateLimiter            *services.RateLimiter
 	progressiveRateLimiter *services.ProgressiveRateLimiter
 }
 
@@ -401,45 +401,51 @@ func (h *AdminHandler) UploadFavicon(c *fiber.Ctx) error {
 	}
 	// Use comprehensive file validation for favicon
 	fileValidator := services.NewFileValidator()
-	
+
 	// Set size limit for favicon (5MB)
 	fileValidator.MaxFileSize = 5 * 1024 * 1024
-	
+
+	// Stream validation only inspects a 512-byte sample, so enforce the byte limit
+	// against the declared upload size here.
+	if file.Size > fileValidator.MaxFileSize {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Favicon exceeds maximum allowed size"})
+	}
+
 	// Allow additional formats for favicon
 	fileValidator.AllowedExtensions = []string{".ico", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
 	fileValidator.AllowedMIMETypes = []string{"image/x-icon", "image/jpeg", "image/png", "image/webp", "image/gif"}
-	
+
 	src, err := file.Open()
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
 	defer src.Close()
-	
+
 	// Read a small sample for validation
 	sample := make([]byte, 512)
 	n, err := src.Read(sample)
 	if err != nil && err != io.EOF {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
 	}
-	
+
 	// Seek back to beginning for further processing
 	src.Seek(0, 0)
-	
+
 	// Validate file sample
 	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
 	}
-	
+
 	if !result.IsValid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
 	}
-	
+
 	// Ensure file pointer is at beginning for SaveFile
 	if _, err := src.Seek(0, 0); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset file pointer"})
 	}
-	
+
 	if err := os.MkdirAll(filepath.Join("uploads", "site"), 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to prepare upload directory"})
 	}
@@ -474,44 +480,50 @@ func (h *AdminHandler) UploadSocialImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No image provided"})
 	}
-	
+
 	// Use comprehensive file validation for social image
 	fileValidator := services.NewFileValidator()
-	
+
 	// Set size limit for social image (20MB)
 	fileValidator.MaxFileSize = 20 * 1024 * 1024
-	
+
+	// Stream validation only inspects a 512-byte sample, so enforce the byte limit
+	// against the declared upload size here (the global body limit is the real cap).
+	if file.Size > fileValidator.MaxFileSize {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Social image exceeds maximum allowed size"})
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open uploaded file"})
 	}
 	defer src.Close()
-	
+
 	// Read a small sample for validation
 	sample := make([]byte, 512)
 	n, err := src.Read(sample)
 	if err != nil && err != io.EOF {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file for validation"})
 	}
-	
+
 	// Seek back to beginning for further processing
 	src.Seek(0, 0)
-	
+
 	// Validate file sample
 	result, err := fileValidator.ValidateFile(file.Filename, bytes.NewReader(sample[:n]))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to validate file"})
 	}
-	
+
 	if !result.IsValid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": result.ErrorMessage})
 	}
-	
+
 	// Ensure file pointer is at beginning for SaveFile
 	if _, err := src.Seek(0, 0); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reset file pointer"})
 	}
-	
+
 	if err := os.MkdirAll(filepath.Join("uploads", "site"), 0755); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to prepare upload directory"})
 	}
@@ -856,11 +868,11 @@ func (h *AdminHandler) AdminRateLimiterStats(c *fiber.Ctx) error {
 	if !checkAdmin(c, h.userRepo) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
-	
+
 	if h.rateLimiter == nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Rate limiter not configured"})
 	}
-	
+
 	stats := h.rateLimiter.GetStats()
 	return c.JSON(stats)
 }
@@ -870,13 +882,13 @@ func (h *AdminHandler) AdminProgressiveRateLimiterStats(c *fiber.Ctx) error {
 	if !checkAdmin(c, h.userRepo) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
 	}
-	
+
 	if h.progressiveRateLimiter == nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Progressive rate limiter not configured"})
 	}
-	
+
 	stats := h.progressiveRateLimiter.GetProgressiveStats()
-	
+
 	// Get query parameters for security events
 	eventLimit := 50
 	if limitStr := c.Query("limit"); limitStr != "" {
@@ -884,12 +896,12 @@ func (h *AdminHandler) AdminProgressiveRateLimiterStats(c *fiber.Ctx) error {
 			eventLimit = limit
 		}
 	}
-	
+
 	securityEvents := h.progressiveRateLimiter.GetSecurityEvents(eventLimit)
-	
+
 	return c.JSON(fiber.Map{
-		"stats":            stats,
-		"security_events":  securityEvents,
+		"stats":           stats,
+		"security_events": securityEvents,
 	})
 }
 

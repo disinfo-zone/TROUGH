@@ -5,9 +5,11 @@ import (
 	"html"
 	"log"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	gjson "github.com/goccy/go-json"
@@ -16,6 +18,13 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/etag"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+
+	// automaxprocs sets GOMAXPROCS to match the container's CPU quota (cgroup) at
+	// startup. Without it, Go defaults GOMAXPROCS to the host core count, which
+	// inflates scheduler/GC/sysmon overhead and is the primary cause of idle CPU
+	// burn in a container on a multi-core host. When no CPU quota is set it leaves
+	// any explicit GOMAXPROCS env untouched.
+	_ "go.uber.org/automaxprocs"
 
 	// limiter intentionally omitted to avoid adding new dependencies in this change
 	"github.com/google/uuid"
@@ -266,31 +275,31 @@ func indexWithMetaHandler(
 		// Inject OG/Twitter tags just before </head>
 		var ogTags strings.Builder
 		ogTags.WriteString("\n    <!-- Server-side social/OG tags -->\n")
-		ogTags.WriteString(`    <meta property="og:site_name" content="` + html.EscapeString(set.SiteName) + `">\n`)
-		ogTags.WriteString(`    <meta property="og:title" content="` + html.EscapeString(title) + `">\n`)
+		ogTags.WriteString(`    <meta property="og:site_name" content="` + html.EscapeString(set.SiteName) + `">` + "\n")
+		ogTags.WriteString(`    <meta property="og:title" content="` + html.EscapeString(title) + `">` + "\n")
 		if description != "" {
-			ogTags.WriteString(`    <meta property="og:description" content="` + html.EscapeString(description) + `">\n`)
+			ogTags.WriteString(`    <meta property="og:description" content="` + html.EscapeString(description) + `">` + "\n")
 		}
-		ogTags.WriteString(`    <meta property="og:type" content="` + ogType + `">\n`)
-		ogTags.WriteString(`    <meta property="og:url" content="` + html.EscapeString(fullURL) + `">\n`)
+		ogTags.WriteString(`    <meta property="og:type" content="` + ogType + `">` + "\n")
+		ogTags.WriteString(`    <meta property="og:url" content="` + html.EscapeString(fullURL) + `">` + "\n")
 		if imageURL != "" {
-			ogTags.WriteString(`    <meta property="og:image" content="` + html.EscapeString(imageURL) + `">\n`)
-			ogTags.WriteString(`    <meta property="og:image:alt" content="` + html.EscapeString(title) + `">\n`)
+			ogTags.WriteString(`    <meta property="og:image" content="` + html.EscapeString(imageURL) + `">` + "\n")
+			ogTags.WriteString(`    <meta property="og:image:alt" content="` + html.EscapeString(title) + `">` + "\n")
 		}
 		// Twitter
 		card := "summary"
 		if imageURL != "" {
 			card = "summary_large_image"
 		}
-		ogTags.WriteString(`    <meta name="twitter:card" content="` + card + `">\n`)
-		ogTags.WriteString(`    <meta name="twitter:title" content="` + html.EscapeString(title) + `">\n`)
+		ogTags.WriteString(`    <meta name="twitter:card" content="` + card + `">` + "\n")
+		ogTags.WriteString(`    <meta name="twitter:title" content="` + html.EscapeString(title) + `">` + "\n")
 		if description != "" {
-			ogTags.WriteString(`    <meta name="twitter:description" content="` + html.EscapeString(description) + `">\n`)
+			ogTags.WriteString(`    <meta name="twitter:description" content="` + html.EscapeString(description) + `">` + "\n")
 		}
 		if imageURL != "" {
-			ogTags.WriteString(`    <meta name="twitter:image" content="` + html.EscapeString(imageURL) + `">\n`)
+			ogTags.WriteString(`    <meta name="twitter:image" content="` + html.EscapeString(imageURL) + `">` + "\n")
 			// Add alt text for accessibility using the title
-			ogTags.WriteString(`    <meta name="twitter:image:alt" content="` + html.EscapeString(title) + `">\n`)
+			ogTags.WriteString(`    <meta name="twitter:image:alt" content="` + html.EscapeString(title) + `">` + "\n")
 		}
 
 		// Build analytics snippet if configured and valid, and avoid tracking admins via cookie flag
@@ -407,7 +416,9 @@ func main() {
 
 	// Initialize security components
 	csrfProtection := middleware.NewCSRFProtection(os.Getenv("CSRF_SECRET"))
-	securityHeaders := services.NewSecurityHeaders(nil)
+	// Pass the settings repo so the CSP can be built dynamically (tightened
+	// script-src/connect-src plus the admin-configured analytics origin).
+	securityHeaders := services.NewSecurityHeaders(nil).WithSettings(siteRepo)
 
 	// Apply security headers globally
 	app.Use(securityHeaders.Middleware())
@@ -451,7 +462,12 @@ func main() {
 	app.Use(etag.New(etag.Config{
 		Weak: true,
 		Next: func(c *fiber.Ctx) bool {
-			return c.Path() == "/healthz"
+			// Skip the ETag body hash for the health probe and for dynamic API JSON:
+			// SPA clients don't send If-None-Match on these, so the per-response CRC
+			// is wasted CPU. ETags still apply to static assets and SSR HTML, where
+			// 304 revalidation actually saves bandwidth.
+			p := c.Path()
+			return p == "/healthz" || p == "/api" || strings.HasPrefix(p, "/api/")
 		},
 	}))
 	app.Use(compress.New(compress.Config{
@@ -603,7 +619,9 @@ func main() {
 
 	api.Get("/feed", imageHandler.GetFeed)
 	api.Get("/images/:id", imageHandler.GetImage)
-	api.Post("/upload", authMW, imageHandler.Upload)
+	// Uploads are CPU/memory heavy (validate → detect → decode → re-encode). Rate
+	// limit per IP so an authenticated client cannot hammer the endpoint.
+	api.Post("/upload", rateLimiter.Middleware(30, time.Minute), authMW, imageHandler.Upload)
 	// Likes are deprecated; route retained for compatibility but returns 410
 	api.Post("/images/:id/like", authMW, imageHandler.LikeImage)
 	api.Post("/images/:id/collect", authMW, imageHandler.CollectImage)
@@ -623,7 +641,7 @@ func main() {
 	api.Patch("/me/email", authMW, userHandler.UpdateEmail)
 	api.Patch("/me/password", authMW, userHandler.UpdatePassword)
 	api.Delete("/me", authMW, userHandler.DeleteMyAccount)
-	api.Post("/me/avatar", authMW, userHandler.UploadAvatar)
+	api.Post("/me/avatar", rateLimiter.Middleware(20, time.Minute), authMW, userHandler.UploadAvatar)
 
 	api.Get("/site", adminHandler.GetPublicSite)
 
@@ -675,8 +693,31 @@ func main() {
 		return c.SendStatus(fiber.StatusNotFound)
 	})
 
-	log.Printf("Server starting on port 8080")
-	log.Fatal(app.Listen(":8080"))
+	// Serve in the background so we can wait for a shutdown signal. Using log.Fatal on
+	// Listen would call os.Exit and skip every deferred cleanup (db.Close, limiter
+	// Stop), abruptly severing DB connections on each `docker restart`/SIGTERM.
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("Server starting on port 8080")
+		if err := app.Listen(":8080"); err != nil {
+			serverErr <- err
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErr:
+		log.Fatalf("Server failed: %v", err)
+	case sig := <-quit:
+		log.Printf("Received %s, shutting down gracefully...", sig)
+		// Let in-flight requests (e.g. uploads) finish before the deferred cleanups run.
+		if err := app.ShutdownWithTimeout(20 * time.Second); err != nil {
+			log.Printf("Graceful shutdown error: %v", err)
+		}
+		log.Printf("Shutdown complete")
+	}
 }
 
 // Create a few default pages if they do not yet exist. If deleted by admin, they will not be recreated

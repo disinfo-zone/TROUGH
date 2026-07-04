@@ -166,6 +166,12 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 		}
 	}
 
+	// Enforce dimension/pixel-count limits before any full decode to prevent
+	// decompression-bomb OOM (JPEG dimension checks are skipped in stream validation).
+	if err := fileValidator.EnforceDecodeLimits(originalBytes); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Image rejected: " + err.Error()})
+	}
+
 	// Full concurrent AI provenance detection (required for acceptance).
 	xmpOriginal = services.ExtractXMPXMLFromBytes(originalBytes)
 	aiOK, aiRes := services.DetectAIProvenanceConcurrent(originalBytes, xmpOriginal)
@@ -174,8 +180,14 @@ func (h *ImageHandler) Upload(c *fiber.Ctx) error {
 	}
 	aiSignature = aiRes.Details
 
+	// Bound concurrent full decodes so peak RGBA memory stays within limits under load.
+	release, ok := services.AcquireDecodeSlot(c.Context())
+	if !ok {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Server busy, please retry"})
+	}
 	// Now decode image for processing (only if AI validation passed)
 	img, format, err := image.Decode(bytes.NewReader(originalBytes))
+	release()
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to decode image"})
 	}

@@ -14,11 +14,11 @@ import (
 
 // FileValidator handles comprehensive file validation
 type FileValidator struct {
-	AllowedExtensions  []string
-	AllowedMIMETypes   []string
-	MaxFileSize        int64
-	MaxDimensions      struct{ Width, Height int }
-	MaxPixelCount      int64
+	AllowedExtensions []string
+	AllowedMIMETypes  []string
+	MaxFileSize       int64
+	MaxDimensions     struct{ Width, Height int }
+	MaxPixelCount     int64
 	ForbiddenPatterns []string
 }
 
@@ -28,8 +28,8 @@ func NewFileValidator() *FileValidator {
 		AllowedExtensions: []string{".jpg", ".jpeg", ".png", ".webp", ".gif"},
 		AllowedMIMETypes:  []string{"image/jpeg", "image/png", "image/webp", "image/gif"},
 		MaxFileSize:       10 * 1024 * 1024, // 10MB (reduced for security)
-		MaxDimensions:      struct{ Width, Height int }{Width: 4096, Height: 4096},
-		MaxPixelCount:      50 * 1024 * 1024, // 50 megapixels
+		MaxDimensions:     struct{ Width, Height int }{Width: 4096, Height: 4096},
+		MaxPixelCount:     50 * 1024 * 1024, // 50 megapixels
 		ForbiddenPatterns: []string{"script", "javascript", "eval", "function", "<script", "http://", "https://"},
 	}
 	return fv
@@ -44,71 +44,71 @@ type ValidationResult struct {
 	Width         int
 	Height        int
 	HasMetadata   bool
-	IsAIReady     bool  // Indicates if file is suitable for AI detection
+	IsAIReady     bool // Indicates if file is suitable for AI detection
 	ErrorMessage  string
-	SecurityLevel  string // "low", "medium", "high"
+	SecurityLevel string // "low", "medium", "high"
 }
 
 // ValidateFile performs comprehensive file validation
 func (fv *FileValidator) ValidateFile(filename string, file io.Reader) (*ValidationResult, error) {
 	result := &ValidationResult{
-		Extension: strings.ToLower(filepath.Ext(filename)),
-		Size:      0,
+		Extension:     strings.ToLower(filepath.Ext(filename)),
+		Size:          0,
 		SecurityLevel: "low",
 	}
-	
+
 	// Step 1: Basic filename validation
 	if !fv.isValidFilename(filename) {
 		result.ErrorMessage = "Invalid filename"
 		return result, nil
 	}
-	
+
 	// Step 2: Validate extension
 	if !fv.isValidExtension(result.Extension) {
 		result.ErrorMessage = fmt.Sprintf("Invalid file extension: %s", result.Extension)
 		return result, nil
 	}
-	
+
 	// Step 3: Read first 512 bytes for MIME type detection and magic byte validation
 	buffer := make([]byte, 512)
 	n, err := file.Read(buffer)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
-	
+
 	// Step 4: Detect MIME type
 	mimeType := http.DetectContentType(buffer[:n])
 	result.MIMEType = mimeType
-	
+
 	if !fv.isValidMIMEType(mimeType) {
 		result.ErrorMessage = fmt.Sprintf("Invalid MIME type: %s", mimeType)
 		return result, nil
 	}
-	
+
 	// Step 5: Validate magic bytes
 	if !fv.isValidMagicBytes(buffer[:n], result.Extension, mimeType) {
 		result.ErrorMessage = "File signature does not match declared type"
 		return result, nil
 	}
-	
+
 	// Step 6: Validate extension matches MIME type
 	if !fv.extensionMatchesMIME(result.Extension, mimeType) {
 		result.ErrorMessage = fmt.Sprintf("Extension %s does not match MIME type %s", result.Extension, mimeType)
 		return result, nil
 	}
-	
+
 	// Step 7: Check for embedded threats in file header
 	if fv.containsEmbeddedThreats(buffer[:n]) {
 		result.ErrorMessage = "File contains potentially harmful content"
 		return result, nil
 	}
-	
+
 	// Step 8: Create a reader for the full file for further validation
 	fullReader := io.MultiReader(bytes.NewReader(buffer[:n]), file)
-	
+
 	// Step 9: Validate image dimensions and decode
 	if err := fv.validateImageDimensions(fullReader, result); err != nil {
-		// For JPEG files that have valid magic bytes but fail config decoding, 
+		// For JPEG files that have valid magic bytes but fail config decoding,
 		// we'll allow them through but mark them as lower security level
 		if result.MIMEType == "image/jpeg" && result.IsValid {
 			// Basic validation passed, but config decoding failed
@@ -122,7 +122,7 @@ func (fv *FileValidator) ValidateFile(filename string, file io.Reader) (*Validat
 			return result, nil
 		}
 	}
-	
+
 	// Step 10: Check file size by reading the rest
 	if n == 512 {
 		// Create a new reader to get total size
@@ -136,17 +136,41 @@ func (fv *FileValidator) ValidateFile(filename string, file io.Reader) (*Validat
 	} else {
 		result.Size = int64(n)
 	}
-	
+
 	if result.Size > fv.MaxFileSize {
 		result.ErrorMessage = fmt.Sprintf("File size %d exceeds maximum allowed size %d", result.Size, fv.MaxFileSize)
 		return result, nil
 	}
-	
+
 	// Step 11: Assess security level and AI readiness
 	fv.assessSecurityLevel(result)
-	
+
 	result.IsValid = true
 	return result, nil
+}
+
+// EnforceDecodeLimits inspects the image header (without full decompression) and
+// rejects images whose dimensions or pixel count would make a subsequent
+// image.Decode a memory-exhaustion (decompression-bomb) risk. This MUST be called
+// on the full image bytes before any image.Decode, because ValidateImageStream only
+// sees the first 512 bytes and validateImageDimensions intentionally skips JPEG
+// (whose SOF marker often sits past 512 bytes behind large EXIF/XMP segments).
+func (fv *FileValidator) EnforceDecodeLimits(b []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		return fmt.Errorf("failed to read image dimensions: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return fmt.Errorf("invalid image dimensions")
+	}
+	if cfg.Width > fv.MaxDimensions.Width || cfg.Height > fv.MaxDimensions.Height {
+		return fmt.Errorf("image dimensions %dx%d exceed maximum allowed %dx%d",
+			cfg.Width, cfg.Height, fv.MaxDimensions.Width, fv.MaxDimensions.Height)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > fv.MaxPixelCount {
+		return fmt.Errorf("image pixel count exceeds maximum allowed")
+	}
+	return nil
 }
 
 // isValidExtension checks if the extension is allowed
@@ -250,7 +274,7 @@ func (fv *FileValidator) isValidFilename(filename string) bool {
 	if filename == "" {
 		return false
 	}
-	
+
 	// Check for suspicious patterns
 	lowerFilename := strings.ToLower(filename)
 	for _, pattern := range fv.ForbiddenPatterns {
@@ -258,12 +282,12 @@ func (fv *FileValidator) isValidFilename(filename string) bool {
 			return false
 		}
 	}
-	
+
 	// Basic path traversal prevention
 	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -271,20 +295,20 @@ func (fv *FileValidator) isValidFilename(filename string) bool {
 func (fv *FileValidator) containsEmbeddedThreats(data []byte) bool {
 	dataStr := string(data)
 	lowerData := strings.ToLower(dataStr)
-	
+
 	// Check for common threat patterns
 	threatPatterns := []string{
 		"<script", "javascript:", "eval(", "function()",
 		"document.", "window.", "alert(", "prompt(",
 		"http-equiv", "onload=", "onerror=", "onclick=",
 	}
-	
+
 	for _, pattern := range threatPatterns {
 		if strings.Contains(lowerData, pattern) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -308,22 +332,22 @@ func (fv *FileValidator) validateImageDimensions(reader io.Reader, result *Valid
 	if err != nil {
 		return fmt.Errorf("failed to decode image config: %w", err)
 	}
-	
+
 	result.Width = config.Width
 	result.Height = config.Height
-	
+
 	// Check maximum dimensions
 	if config.Width > fv.MaxDimensions.Width || config.Height > fv.MaxDimensions.Height {
-		return fmt.Errorf("image dimensions %dx%d exceed maximum allowed %dx%d", 
+		return fmt.Errorf("image dimensions %dx%d exceed maximum allowed %dx%d",
 			config.Width, config.Height, fv.MaxDimensions.Width, fv.MaxDimensions.Height)
 	}
-	
+
 	// Check for decompression bombs (too many pixels)
 	pixelCount := int64(config.Width) * int64(config.Height)
 	if pixelCount > fv.MaxPixelCount {
 		return fmt.Errorf("image pixel count %d exceeds maximum allowed %d", pixelCount, fv.MaxPixelCount)
 	}
-	
+
 	// Check for suspicious aspect ratios
 	if config.Width > 0 && config.Height > 0 {
 		aspectRatio := float64(config.Width) / float64(config.Height)
@@ -331,43 +355,43 @@ func (fv *FileValidator) validateImageDimensions(reader io.Reader, result *Valid
 			return fmt.Errorf("suspicious aspect ratio: %.2f", aspectRatio)
 		}
 	}
-	
+
 	// Determine if format is suitable for AI detection
 	result.IsAIReady = format == "jpeg" || format == "png" || format == "webp"
 	result.HasMetadata = format == "jpeg" // JPEG most likely to have EXIF/AI metadata
-	
+
 	return nil
 }
 
 // assessSecurityLevel assesses the security level of the validated file
 func (fv *FileValidator) assessSecurityLevel(result *ValidationResult) {
 	securityScore := 0
-	
+
 	// Base score for valid file
 	if result.IsValid {
 		securityScore += 30
 	}
-	
+
 	// Points for safe dimensions
 	if result.Width > 0 && result.Height > 0 && result.Width <= fv.MaxDimensions.Width/2 && result.Height <= fv.MaxDimensions.Height/2 {
 		securityScore += 20
 	}
-	
+
 	// Points for reasonable file size
 	if result.Size <= fv.MaxFileSize/2 {
 		securityScore += 20
 	}
-	
+
 	// Points for AI-ready format
 	if result.IsAIReady {
 		securityScore += 15
 	}
-	
+
 	// Points for metadata presence (good for AI detection)
 	if result.HasMetadata {
 		securityScore += 15
 	}
-	
+
 	// Determine security level
 	if securityScore >= 80 {
 		result.SecurityLevel = "high"
@@ -382,11 +406,11 @@ func (fv *FileValidator) assessSecurityLevel(result *ValidationResult) {
 func (fv *FileValidator) SafeFileName(original string) string {
 	// Remove path components
 	base := filepath.Base(original)
-	
+
 	// Remove extension
 	ext := filepath.Ext(base)
 	name := strings.TrimSuffix(base, ext)
-	
+
 	// Clean name - remove special characters
 	name = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -394,12 +418,12 @@ func (fv *FileValidator) SafeFileName(original string) string {
 		}
 		return '_'
 	}, name)
-	
+
 	// Ensure name is not empty
 	if name == "" {
 		name = "image"
 	}
-	
+
 	return name + ext
 }
 
@@ -412,20 +436,19 @@ func (fv *FileValidator) ValidateImageStream(filename string, stream io.Reader) 
 	if err != nil && err != io.EOF {
 		return nil, nil, fmt.Errorf("failed to read file header: %w", err)
 	}
-	
+
 	// Validate the file
 	result, err := fv.ValidateFile(filename, bytes.NewReader(buffer[:n]))
 	if err != nil {
 		return nil, nil, err
 	}
-	
+
 	if !result.IsValid {
 		return result, nil, nil
 	}
-	
+
 	// Return a new reader that combines the buffer with the rest of the stream
 	remainingStream := io.MultiReader(bytes.NewReader(buffer[:n]), stream)
-	
+
 	return result, remainingStream, nil
 }
-

@@ -222,21 +222,38 @@ func isLoopbackAddress(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
-func extractForwardedClientIP(getHeader func(string) string, isValid func(string) bool, normalize func(string) string) string {
-	// Cloudflare Tunnel / Cloudflare edge headers.
-	for _, headerName := range []string{"CF-Connecting-IP", "CF-Connecting-IPv6", "True-Client-IP"} {
+func extractForwardedClientIP(getHeader func(string) string, isValid func(string) bool, normalize func(string) string, isTrustedHop func(string) bool) string {
+	// Cloudflare edge headers are authoritative: when a request genuinely transits
+	// Cloudflare, CF-Connecting-IP is set by the edge and cannot be forged by the
+	// origin client. True-Client-IP is intentionally NOT trusted here because it is
+	// only stripped/rewritten on Enterprise plans and otherwise passes through
+	// unmodified, making it client-spoofable.
+	for _, headerName := range []string{"CF-Connecting-IP", "CF-Connecting-IPv6"} {
 		if value := strings.TrimSpace(getHeader(headerName)); value != "" && isValid(value) {
 			return normalize(value)
 		}
 	}
 
-	// Standard proxy chain; take the left-most valid address.
+	// Standard proxy chain. Conforming proxies APPEND the peer they received the
+	// connection from to the right of X-Forwarded-For, so the right-most entry that
+	// is not one of our own trusted hops is the real client. Anything the client
+	// prepends stays to the left and is ignored. Walking left-to-right (the previous
+	// behaviour) trusted the first value, which is fully attacker-controlled and
+	// allowed both rate-limit evasion and targeted lockout of a spoofed victim IP.
 	if forwarded := strings.TrimSpace(getHeader("X-Forwarded-For")); forwarded != "" {
-		for _, part := range strings.Split(forwarded, ",") {
-			candidate := strings.TrimSpace(part)
-			if candidate != "" && isValid(candidate) {
-				return normalize(candidate)
+		parts := strings.Split(forwarded, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			if candidate == "" || !isValid(candidate) {
+				continue
 			}
+			normalized := normalize(candidate)
+			// Skip our own trusted proxy hops; the first non-trusted address from
+			// the right is the client as seen by the nearest trusted proxy.
+			if isTrustedHop(normalized) {
+				continue
+			}
+			return normalized
 		}
 	}
 
@@ -258,7 +275,8 @@ func (rl *RateLimiter) getClientIP(c *fiber.Ctx) string {
 	// Only trust forwarding headers from known proxy hops.
 	// Loopback is always trusted to support local tunnel agents (e.g. cloudflared).
 	if rl.isTrustedProxy(remoteAddr) || isLoopbackAddress(remoteAddr) {
-		if clientIP := extractForwardedClientIP(func(key string) string { return c.Get(key) }, rl.isValidIP, rl.normalizeIP); clientIP != "" {
+		isTrustedHop := func(ip string) bool { return rl.isTrustedProxy(ip) || isLoopbackAddress(ip) }
+		if clientIP := extractForwardedClientIP(func(key string) string { return c.Get(key) }, rl.isValidIP, rl.normalizeIP, isTrustedHop); clientIP != "" {
 			return clientIP
 		}
 	}
@@ -686,7 +704,8 @@ func (prl *ProgressiveRateLimiter) getClientIP(c *fiber.Ctx) string {
 	// Only trust forwarding headers from known proxy hops.
 	// Loopback is always trusted to support local tunnel agents (e.g. cloudflared).
 	if prl.trustedProxyMap[remoteAddr] || isLoopbackAddress(remoteAddr) {
-		if clientIP := extractForwardedClientIP(func(key string) string { return c.Get(key) }, prl.isValidIP, prl.normalizeIP); clientIP != "" {
+		isTrustedHop := func(ip string) bool { return prl.trustedProxyMap[prl.normalizeIP(ip)] || isLoopbackAddress(ip) }
+		if clientIP := extractForwardedClientIP(func(key string) string { return c.Get(key) }, prl.isValidIP, prl.normalizeIP, isTrustedHop); clientIP != "" {
 			return clientIP
 		}
 	}

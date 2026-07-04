@@ -8,31 +8,11 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf16"
 
 	"github.com/dsoprea/go-exif/v3"
 )
-
-// Buffer pool for memory optimization
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 0, 1024*1024) // 1MB initial buffer
-	},
-}
-
-// getBuffer gets a buffer from the pool
-func getBuffer() []byte {
-	return bufferPool.Get().([]byte)
-}
-
-// putBuffer returns a buffer to the pool
-func putBuffer(buf []byte) {
-	if cap(buf) <= 2*1024*1024 { // Don't pool buffers larger than 2MB
-		bufferPool.Put(buf[:0])
-	}
-}
 
 // AIDetectionResult describes detected AI provenance for an image.
 type AIDetectionResult struct {
@@ -43,7 +23,6 @@ type AIDetectionResult struct {
 
 var (
 	guidRegex        = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
-	c2paSniffRegex   = regexp.MustCompile(`(?is)(c2pa|jumbf|contentcredentials)`)
 	iptcTrainedMedia = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
 
 	// Pre-compiled regex patterns for performance
@@ -92,14 +71,18 @@ var (
 // It returns ok=false when no acceptable provenance is found.
 // The xmpXML should be the raw XMP packet if available; pass nil if unknown.
 func DetectAIProvenance(imagePath string, xmpXML []byte) (ok bool, result AIDetectionResult) {
-	// 1) Heuristic presence of C2PA JUMBF/labels in file body
-	if sniffC2PA(imagePath) {
-		// Try to differentiate by XMP credit/creator if present
-		provider := classifyC2PAProvider(xmpXML)
-		if provider == "" {
-			provider = "Unknown C2PA"
+	// 1) Structural C2PA / Content Credentials manifest in file body.
+	if b, err := os.ReadFile(imagePath); err == nil {
+		if c2paOK, details := detectC2PA(b); c2paOK {
+			provider := classifyC2PAProvider(xmpXML)
+			if provider == "" {
+				provider = classifyC2PAProviderFromBytes(b)
+			}
+			if provider == "" {
+				provider = "Unknown C2PA"
+			}
+			return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: details}
 		}
-		return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA/JUMBF markers present"}
 	}
 
 	// 2) EXIF flat scan for common tells (Software, UserComment, custom fields)
@@ -122,32 +105,16 @@ func DetectAIProvenance(imagePath string, xmpXML []byte) (ok bool, result AIDete
 
 // DetectAIProvenanceFromBytes is the bytes-based variant avoiding disk I/O.
 func DetectAIProvenanceFromBytes(imageBytes []byte, xmpXML []byte) (ok bool, result AIDetectionResult) {
-	// 1) Heuristic presence of C2PA JUMBF/labels in file body
-	if c2paSniffRegex.Find(imageBytes) != nil {
+	// 1) Structural C2PA / Content Credentials manifest in the file body.
+	if c2paOK, details := detectC2PA(imageBytes); c2paOK {
 		provider := classifyC2PAProvider(xmpXML)
+		if provider == "" {
+			provider = classifyC2PAProviderFromBytes(imageBytes)
+		}
 		if provider == "" {
 			provider = "Unknown C2PA"
 		}
-		return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA/JUMBF markers present"}
-	}
-
-	// Enhanced C2PA detection for binary JUMBF chunks
-	// C2PA manifests are stored in PNG chunks as binary data
-	if bytes.Contains(imageBytes, []byte("jumb")) && bytes.Contains(imageBytes, []byte("c2pa")) {
-		provider := classifyC2PAProvider(xmpXML)
-		if provider == "" {
-			provider = "Unknown C2PA"
-		}
-		return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA JUMBF binary chunks detected"}
-	}
-
-	// Check for C2PA URN pattern (binary)
-	if bytes.Contains(imageBytes, []byte("urn:c2pa:")) {
-		provider := classifyC2PAProvider(xmpXML)
-		if provider == "" {
-			provider = "Unknown C2PA"
-		}
-		return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA URN detected"}
+		return true, AIDetectionResult{Provider: provider, Method: "c2pa", Details: details}
 	}
 	// 2) EXIF
 	if ok, res := detectFromEXIFBytes(imageBytes); ok {
@@ -166,15 +133,42 @@ func DetectAIProvenanceFromBytes(imageBytes []byte, xmpXML []byte) (ok bool, res
 
 func detectAISoftwareProvider(software string) (string, bool) {
 	low := strings.ToLower(strings.TrimSpace(software))
+	if low == "" {
+		return "", false
+	}
 	switch {
 	case strings.Contains(low, "midjourney"):
 		return "Midjourney", true
-	case strings.Contains(low, "dall-e") || strings.Contains(low, "dalle") || strings.Contains(low, "openai"):
+	case strings.Contains(low, "dall-e") || strings.Contains(low, "dalle") || strings.Contains(low, "gpt-image") || strings.Contains(low, "openai") || strings.Contains(low, "chatgpt"):
 		return "OpenAI", true
-	case strings.Contains(low, "stable diffusion") || strings.Contains(low, "sdxl"):
+	case strings.Contains(low, "stable diffusion") || strings.Contains(low, "sdxl") ||
+		strings.Contains(low, "automatic1111") || strings.Contains(low, "a1111") ||
+		strings.Contains(low, "stable-diffusion-webui") || strings.Contains(low, "comfyui") ||
+		strings.Contains(low, "invokeai") || strings.Contains(low, "fooocus") ||
+		strings.Contains(low, "novelai") || strings.Contains(low, "draw things"):
 		return "Stable Diffusion (SDXL)", true
 	case strings.Contains(low, "flux") || strings.Contains(low, "black forest labs") || strings.Contains(low, "bfl"):
 		return "FLUX", true
+	case strings.Contains(low, "firefly") || strings.Contains(low, "adobe firefly"):
+		return "Adobe Firefly", true
+	case strings.Contains(low, "imagen") || strings.Contains(low, "made with google ai") || strings.Contains(low, "gemini") || strings.Contains(low, "nano banana"):
+		return "Google Imagen", true
+	case strings.Contains(low, "grok"):
+		return "Grok", true
+	case strings.Contains(low, "ideogram"):
+		return "Ideogram", true
+	case strings.Contains(low, "leonardo"):
+		return "Leonardo.Ai", true
+	case strings.Contains(low, "recraft"):
+		return "Recraft", true
+	case strings.Contains(low, "playground"):
+		return "Playground AI", true
+	case strings.Contains(low, "nightcafe"):
+		return "NightCafe", true
+	case strings.Contains(low, "seaart") || strings.Contains(low, "tensor.art") || strings.Contains(low, "tensorart"):
+		return "Stable Diffusion (SDXL)", true
+	case strings.Contains(low, "krea"):
+		return "Krea", true
 	}
 	return "", false
 }
@@ -242,33 +236,49 @@ func detectAIBinaryMarkersFromText(text string) (bool, AIDetectionResult) {
 		return false, AIDetectionResult{}
 	}
 
-	if containsAnyFold(s, []string{"grok image prompt", "grok image upsampled prompt"}) {
+	// s is already lowercased above, so use the no-relower fast path with lowercase needles.
+	if containsAnyLower(s, []string{"grok image prompt", "grok image upsampled prompt"}) {
 		return true, AIDetectionResult{Provider: "Grok", Method: "binary", Details: "Grok prompt fields in metadata"}
 	}
 
-	if strings.Contains(s, "midjourney") && containsAnyFold(s, []string{"--ar", "--chaos", "--stylize", "--seed", "job id:"}) {
+	if strings.Contains(s, "midjourney") && containsAnyLower(s, []string{"--ar", "--chaos", "--stylize", "--seed", "job id:"}) {
 		return true, AIDetectionResult{Provider: "Midjourney", Method: "binary", Details: "Midjourney generation params present"}
 	}
 
-	if containsAnyFold(s, []string{"sui_image_params", "negative_prompt", "positive_prompt", "textual_inversion"}) {
+	if containsAnyLower(s, []string{"sui_image_params", "negative_prompt", "positive_prompt", "textual_inversion"}) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SD generation params present"}
 	}
 
+	// Automatic1111 / SD WebUI / Forge / NovelAI parameter block. These tools write a
+	// very distinctive colon-delimited settings string ("Steps: 20, Sampler: Euler a,
+	// CFG scale: 7, Seed: 12345"). The combination is effectively impossible to hit by
+	// chance in camera metadata, so it is a strong, low-false-positive signal — and it
+	// does not contain the literal words "stable diffusion", which is why the older
+	// rules missed these images.
+	if strings.Contains(s, "steps:") && strings.Contains(s, "sampler:") &&
+		(strings.Contains(s, "cfg scale:") || strings.Contains(s, "seed:") || strings.Contains(s, "denoising strength")) {
+		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SD WebUI parameter block present"}
+	}
+	// A1111 also emits "Negative prompt:" (with a space) which the underscore rule above misses.
+	if strings.Contains(s, "negative prompt:") && (strings.Contains(s, "steps:") || strings.Contains(s, "sampler:") || strings.Contains(s, "cfg scale:")) {
+		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SD WebUI negative-prompt block present"}
+	}
+
 	if (strings.Contains(s, "\"prompt\"") || strings.Contains(s, " prompt")) &&
-		(strings.Contains(s, "\"workflow\"") || containsAnyFold(s, []string{"comfyui", "checkpoint_loader", "k_sampler", "vae_decode"})) {
+		(strings.Contains(s, "\"workflow\"") || containsAnyLower(s, []string{"comfyui", "checkpoint_loader", "k_sampler", "vae_decode"})) {
 		return true, AIDetectionResult{Provider: "ComfyUI", Method: "binary", Details: "Prompt/workflow metadata present"}
 	}
 
-	if strings.Contains(s, "stable diffusion") && containsAnyFold(s, []string{"sampler", "steps", "cfg", "seed", "checkpoint", "lora"}) {
+	if strings.Contains(s, "stable diffusion") && containsAnyLower(s, []string{"sampler", "steps", "cfg", "seed", "checkpoint", "lora"}) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "binary", Details: "SD metadata terms present"}
 	}
 
 	if (strings.Contains(s, "dall-e") || strings.Contains(s, "dalle") || strings.Contains(s, "openai")) &&
-		containsAnyFold(s, []string{"prompt", "image generation"}) {
+		containsAnyLower(s, []string{"prompt", "image generation"}) {
 		return true, AIDetectionResult{Provider: "OpenAI", Method: "binary", Details: "OpenAI generation metadata present"}
 	}
 
-	if strings.Contains(s, "flux") && containsAnyFold(s, []string{"black forest labs", "bfl", "prompt", "sampler", "steps", "cfg", "seed"}) {
+	if strings.Contains(s, "flux") && containsAnyLower(s, []string{"black forest labs", "bfl", "prompt", "sampler", "steps", "cfg", "seed"}) {
 		return true, AIDetectionResult{Provider: "FLUX", Method: "binary", Details: "FLUX generation metadata present"}
 	}
 
@@ -283,7 +293,7 @@ func detectFromEXIFBytes(b []byte) (bool, AIDetectionResult) {
 
 	// Quick raw scan for strong markers only.
 	rawLower := strings.ToLower(string(rawExif))
-	if containsAnyFold(rawLower, []string{"sui_image_params", "negative_prompt", "positive_prompt", "textual_inversion"}) {
+	if containsAnyLower(rawLower, []string{"sui_image_params", "negative_prompt", "positive_prompt", "textual_inversion"}) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "exif", Details: "strong SD markers in raw EXIF"}
 	}
 
@@ -340,8 +350,52 @@ func detectFromBinaryTextBytes(b []byte) (bool, AIDetectionResult) {
 		}
 	}
 
+	// PNG tEXt/zTXt/iTXt metadata, decompressing zTXt/iTXt which a raw byte scan
+	// cannot see. Common for ComfyUI/A1111/NovelAI PNG exports.
+	if pngText := extractPNGTextMetadata(b); pngText != "" {
+		if ok, res := detectAIBinaryMarkersFromText(pngText); ok {
+			return true, res
+		}
+	}
+
 	// Scan a bounded text window for performance and lower false positives.
 	return detectAIBinaryMarkersFromText(limitedLowerText(b, 768*1024))
+}
+
+// detectC2PA looks for a genuine C2PA / Content Credentials manifest embedded as a
+// JUMBF container rather than a bare "c2pa"/"jumbf" substring. The previous
+// substring sniff accepted any file that merely contained one of those words
+// anywhere (e.g. a photo with "jumbf" typed into an EXIF comment), which let
+// non-AI images through. This requires the JUMBF box marker to co-occur with a
+// C2PA-specific label or URN, or an explicit c2pa.* manifest assertion.
+//
+// Note: this is still a structural heuristic, not cryptographic verification of the
+// signing certificate chain. Full trust would require validating the C2PA claim
+// signature against known generators (out of scope without a C2PA library), but
+// requiring the manifest structure eliminates the single-token false positives.
+func detectC2PA(b []byte) (bool, string) {
+	if len(b) == 0 {
+		return false, ""
+	}
+	// Explicit C2PA URN is unambiguous.
+	if bytes.Contains(b, []byte("urn:c2pa:")) {
+		return true, "C2PA manifest URN present"
+	}
+	// C2PA manifest labels/assertions defined by the C2PA spec.
+	for _, label := range [][]byte{
+		[]byte("c2pa.assertions"), []byte("c2pa.claim"), []byte("c2pa.signature"),
+		[]byte("c2pa.manifest"), []byte("com.adobe.c2pa"), []byte("cai/c2pa"),
+	} {
+		if bytes.Contains(b, label) {
+			return true, "C2PA manifest assertions present"
+		}
+	}
+	// JUMBF container (box type "jumb" + description box "jumd") carrying a c2pa label.
+	if bytes.Contains(b, []byte("jumb")) && bytes.Contains(b, []byte("jumd")) &&
+		(bytes.Contains(b, []byte("c2pa")) || bytes.Contains(b, []byte("contentauth"))) {
+		return true, "C2PA JUMBF manifest present"
+	}
+	return false, ""
 }
 
 func sniffC2PA(imagePath string) bool {
@@ -349,7 +403,8 @@ func sniffC2PA(imagePath string) bool {
 	if err != nil {
 		return false
 	}
-	return c2paSniffRegex.Find(b) != nil
+	ok, _ := detectC2PA(b)
+	return ok
 }
 
 func classifyC2PAProvider(xmp []byte) string {
@@ -368,6 +423,32 @@ func classifyC2PAProvider(xmp []byte) string {
 	// Google Imagen (Gemini) may include credit "Made with Google AI"
 	if googleAIRegex.MatchString(s) {
 		return "Google Imagen"
+	}
+	return ""
+}
+
+// classifyC2PAProviderFromBytes inspects the C2PA manifest bytes (claim_generator,
+// software agent) to name the generating tool when XMP does not identify it.
+func classifyC2PAProviderFromBytes(b []byte) string {
+	// The claim_generator string lives near the manifest; scan a bounded window.
+	s := limitedLowerText(b, 512*1024)
+	switch {
+	case strings.Contains(s, "firefly") || strings.Contains(s, "adobe"):
+		return "Adobe Firefly"
+	case strings.Contains(s, "openai") || strings.Contains(s, "dall-e") || strings.Contains(s, "gpt-image") || strings.Contains(s, "chatgpt"):
+		return "OpenAI"
+	case strings.Contains(s, "made with google ai") || strings.Contains(s, "imagen") || strings.Contains(s, "gemini") || strings.Contains(s, "google"):
+		return "Google Imagen"
+	case strings.Contains(s, "microsoft") || strings.Contains(s, "bing image") || strings.Contains(s, "designer"):
+		return "Microsoft Designer"
+	case strings.Contains(s, "leonardo"):
+		return "Leonardo.Ai"
+	case strings.Contains(s, "midjourney"):
+		return "Midjourney"
+	case strings.Contains(s, "stability") || strings.Contains(s, "stable diffusion"):
+		return "Stable Diffusion (SDXL)"
+	case strings.Contains(s, "black forest") || strings.Contains(s, "flux"):
+		return "FLUX"
 	}
 	return ""
 }
@@ -425,14 +506,39 @@ func detectFromXMP(xmp []byte) (bool, AIDetectionResult) {
 		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "xmp", Details: "Stable Diffusion params in XMP"}
 	}
 
+	// SD WebUI (A1111/Forge/NovelAI) parameter block embedded in XMP.
+	if strings.Contains(s, "steps:") && strings.Contains(s, "sampler:") &&
+		(strings.Contains(s, "cfg scale:") || strings.Contains(s, "seed:")) {
+		return true, AIDetectionResult{Provider: "Stable Diffusion (SDXL)", Method: "xmp", Details: "SD WebUI parameter block in XMP"}
+	}
+
 	// Flux in XMP: mentions of Flux or Black Forest Labs
 	if aiSoftwareRegex.MatchString(s) && strings.Contains(strings.ToLower(s), "flux") {
 		return true, AIDetectionResult{Provider: "FLUX", Method: "xmp", Details: "Flux terms in XMP"}
 	}
 
-	// Generic IPTC trained media marker
+	// Named generators that reliably identify themselves in XMP creator/software.
+	// XMP is a structured text field (unlike raw compressed pixel bytes), so a token
+	// match here is a deliberate provenance signal rather than a coincidence.
+	for token, provider := range map[string]string{
+		"ideogram": "Ideogram", "leonardo.ai": "Leonardo.Ai", "leonardo ai": "Leonardo.Ai",
+		"recraft": "Recraft", "playground ai": "Playground AI", "nightcafe": "NightCafe",
+		"invokeai": "Stable Diffusion (SDXL)", "fooocus": "Stable Diffusion (SDXL)",
+		"novelai": "Stable Diffusion (SDXL)", "krea.ai": "Krea", "getimg.ai": "Stable Diffusion (SDXL)",
+		"nano banana": "Google Imagen",
+	} {
+		if strings.Contains(s, token) {
+			return true, AIDetectionResult{Provider: provider, Method: "xmp", Details: "XMP mentions " + provider}
+		}
+	}
+
+	// Generic IPTC digital source type markers for synthetic/AI media.
 	if strings.Contains(s, strings.ToLower(iptcTrainedMedia)) {
 		return true, AIDetectionResult{Provider: "AI (IPTC Trained Media)", Method: "xmp", Details: iptcTrainedMedia}
+	}
+	if strings.Contains(s, "digitalsourcetype/compositewithtrainedalgorithmicmedia") ||
+		strings.Contains(s, "digitalsourcetype/algorithmicmedia") {
+		return true, AIDetectionResult{Provider: "AI (IPTC Synthetic Media)", Method: "xmp", Details: "IPTC synthetic/composite digital source type"}
 	}
 
 	// Midjourney parameters in XMP (very specific)
@@ -467,8 +573,16 @@ func looksLikePromptJSON(s string) bool {
 
 func containsAnyFold(haystack string, needles []string) bool {
 	hs := strings.ToLower(haystack)
-	for _, n := range needles {
-		if strings.Contains(hs, strings.ToLower(n)) {
+	return containsAnyLower(hs, needles)
+}
+
+// containsAnyLower is containsAnyFold's fast path for callers whose haystack is
+// already lowercased (and whose needles are lowercase literals). It avoids
+// re-allocating a lowercase copy of the — potentially very large — haystack on
+// every call, which the binary-text scanner does repeatedly per upload.
+func containsAnyLower(lowerHaystack string, lowerNeedles []string) bool {
+	for _, n := range lowerNeedles {
+		if strings.Contains(lowerHaystack, n) {
 			return true
 		}
 	}
@@ -568,126 +682,29 @@ func DetectAIFast(imageBytes []byte) (bool, AIDetectionResult) {
 	return detectFromBinaryTextBytes(imageBytes)
 }
 
-// DetectAIProvenanceConcurrent performs AI detection concurrently for maximum performance
+// DetectAIProvenanceConcurrent runs full provenance detection with a hard timeout
+// so a pathologically crafted image (e.g. one that makes the EXIF parser pathologically
+// slow) cannot stall an upload worker. It delegates to the ordered, short-circuiting
+// DetectAIProvenanceFromBytes (C2PA → EXIF → binary → XMP) which returns on the first
+// hit — far cheaper for the common case than fanning out four goroutines that each
+// re-scan the whole buffer and then waiting for all of them. The name is retained for
+// call-site compatibility.
 func DetectAIProvenanceConcurrent(imageBytes []byte, xmpXML []byte) (bool, AIDetectionResult) {
-	// Create channels for concurrent detection
-	c2paChan := make(chan AIDetectionResult, 1)
-	exifChan := make(chan AIDetectionResult, 1)
-	binaryChan := make(chan AIDetectionResult, 1)
-	xmpChan := make(chan AIDetectionResult, 1)
-
-	var wg sync.WaitGroup
-	wg.Add(4)
-
-	// Start C2PA detection
+	type detection struct {
+		ok  bool
+		res AIDetectionResult
+	}
+	ch := make(chan detection, 1)
 	go func() {
-		defer wg.Done()
-
-		if c2paSniffRegex.Find(imageBytes) != nil {
-			provider := classifyC2PAProvider(xmpXML)
-			if provider == "" {
-				provider = "Unknown C2PA"
-			}
-			c2paChan <- AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA/JUMBF markers present"}
-			return
-		}
-
-		// Enhanced C2PA detection for binary JUMBF chunks
-		if bytes.Contains(imageBytes, []byte("jumb")) && bytes.Contains(imageBytes, []byte("c2pa")) {
-			provider := classifyC2PAProvider(xmpXML)
-			if provider == "" {
-				provider = "Unknown C2PA"
-			}
-			c2paChan <- AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA JUMBF binary chunks detected"}
-			return
-		}
-
-		// Check for C2PA URN pattern (binary)
-		if bytes.Contains(imageBytes, []byte("urn:c2pa:")) {
-			provider := classifyC2PAProvider(xmpXML)
-			if provider == "" {
-				provider = "Unknown C2PA"
-			}
-			c2paChan <- AIDetectionResult{Provider: provider, Method: "c2pa", Details: "C2PA URN detected"}
-			return
-		}
-
-		c2paChan <- AIDetectionResult{}
+		ok, res := DetectAIProvenanceFromBytes(imageBytes, xmpXML)
+		ch <- detection{ok, res}
 	}()
-
-	// Start EXIF detection
-	go func() {
-		defer wg.Done()
-		if ok, result := detectFromEXIFBytes(imageBytes); ok {
-			exifChan <- result
-			return
-		} else {
-		}
-		exifChan <- AIDetectionResult{}
-	}()
-
-	// Start Binary detection
-	go func() {
-		defer wg.Done()
-		if ok, result := detectFromBinaryTextBytes(imageBytes); ok {
-			binaryChan <- result
-			return
-		} else {
-		}
-		binaryChan <- AIDetectionResult{}
-	}()
-
-	// Start XMP detection
-	go func() {
-		defer wg.Done()
-		if ok, result := detectFromXMP(xmpXML); ok {
-			xmpChan <- result
-			return
-		} else {
-		}
-		xmpChan <- AIDetectionResult{}
-	}()
-
-	// Wait for the first positive result or all to complete (with timeout)
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	// Add timeout to prevent hanging on edge cases
-	timeout := time.After(5 * time.Second) // 5 second timeout
 
 	select {
-	case <-done:
-		// All detections completed, collect all results
-		c2paResult := <-c2paChan
-		exifResult := <-exifChan
-		binaryResult := <-binaryChan
-		xmpResult := <-xmpChan
-
-		// Check if ANY detection method succeeded
-		if c2paResult.Provider != "" {
-			return true, c2paResult
-		}
-		if exifResult.Provider != "" {
-			return true, exifResult
-		}
-		if binaryResult.Provider != "" {
-			return true, binaryResult
-		}
-		if xmpResult.Provider != "" {
-			return true, xmpResult
-		}
-		return false, AIDetectionResult{}
-	case <-timeout:
-		// Timeout reached, assume no AI to prevent hanging
-		log.Printf("AI Detection: Concurrent detection timed out after 5 seconds")
+	case d := <-ch:
+		return d.ok, d.res
+	case <-time.After(5 * time.Second):
+		log.Printf("AI Detection: detection timed out after 5 seconds")
 		return false, AIDetectionResult{}
 	}
-}
-
-// detectFromEXIFBytesOptimized is an optimized version that exits early
-func detectFromEXIFBytesOptimized(b []byte) (bool, AIDetectionResult) {
-	return detectFromEXIFBytes(b)
 }

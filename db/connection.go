@@ -29,7 +29,9 @@ func Connect() error {
 	if err == nil {
 		// Connection successful, configure connection pool
 		DB.SetMaxOpenConns(25)
-		DB.SetMaxIdleConns(25)
+		// Keep a small idle pool rather than pinning 25 idle Postgres backends
+		// after a burst; MaxOpenConns still allows bursting to 25.
+		DB.SetMaxIdleConns(8)
 		DB.SetConnMaxLifetime(30 * time.Minute)
 		DB.SetConnMaxIdleTime(5 * time.Minute)
 		return nil
@@ -38,13 +40,15 @@ func Connect() error {
 	// If immediate connection fails, retry with shorter timeout for faster feedback
 	fmt.Printf("Database connection failed: %v\n", err)
 	fmt.Printf("Retrying with shorter timeout (10 retries, 2 seconds each)...\n")
-	
+
 	for i := 0; i < 10; i++ {
 		DB, err = sqlx.Connect("postgres", databaseURL)
 		if err == nil {
 			// Connection successful, configure connection pool
 			DB.SetMaxOpenConns(25)
-			DB.SetMaxIdleConns(25)
+			// Keep a small idle pool rather than pinning 25 idle Postgres backends
+			// after a burst; MaxOpenConns still allows bursting to 25.
+			DB.SetMaxIdleConns(8)
 			DB.SetConnMaxLifetime(30 * time.Minute)
 			DB.SetConnMaxIdleTime(5 * time.Minute)
 			return nil
